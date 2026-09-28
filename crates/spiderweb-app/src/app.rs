@@ -18,6 +18,7 @@ use spiderweb_io::project::{
 
 use crate::playback::{DEFAULT_DEVICE, Player};
 use crate::roll::{Drag, View};
+use crate::roll_velocity::VelocityState;
 
 #[allow(dead_code)] // 关于窗口待移植
 pub const VERSION: &str = "0.1.0";
@@ -150,6 +151,8 @@ pub struct App {
     pub redo_stack: Vec<String>,
     pub edit_key: Option<String>,
     pub view: View,
+    /// 力度面板状态（原版 app.vel_tool + VelocityPane 的现场）
+    pub vel: VelocityState,
     pub status: String,
     pub position: Option<String>,
     pub player: Player,
@@ -213,6 +216,7 @@ impl App {
             redo_stack: Vec::new(),
             edit_key: None,
             view: View::default(),
+            vel: VelocityState::default(),
             status: String::new(),
             position: None,
             player: Player::default(),
@@ -1076,7 +1080,7 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(170.0)
                 .show(ui, |ui| {
-                    ui.label("Velocity pane（待移植）");
+                    crate::roll_velocity::velocity_ui(self, ui);
                 });
         }
         egui::CentralPanel::default()

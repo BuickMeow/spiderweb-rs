@@ -1019,7 +1019,8 @@ pub fn note_name(p: i64) -> String {
 
 // ---------------------------------------------------------------- 绘制
 
-fn fade(c: Color32, amount: f32) -> Color32 {
+/// 把颜色往白色方向混（原版 roll_shared.fade），力度面板也用。
+pub(crate) fn fade(c: Color32, amount: f32) -> Color32 {
     let mix = |v: u8| -> u8 { (v as f32 + (255.0 - v as f32) * amount).round() as u8 };
     Color32::from_rgb(mix(c.r()), mix(c.g()), mix(c.b()))
 }
