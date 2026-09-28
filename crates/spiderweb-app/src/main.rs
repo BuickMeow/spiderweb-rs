@@ -7,6 +7,8 @@ mod panels;
 mod playback;
 mod roll;
 mod roll_curve;
+mod roll_custom;
+mod roll_live;
 mod roll_text;
 mod roll_velocity;
 mod text_dialog;

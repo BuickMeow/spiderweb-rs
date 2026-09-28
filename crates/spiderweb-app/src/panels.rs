@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use spiderweb_core::shape::{Kind, TextAlign, TextSettings, TextUnit};
+use spiderweb_core::shape::{Align, Fill, Kind, TextAlign, TextSettings, TextUnit};
 use spiderweb_core::text::{self, TextChange};
 use spiderweb_io::project::{ChannelMode, ChannelSplit};
 
@@ -140,12 +140,317 @@ impl App {
                 .cloned()
                 .unwrap_or_else(|| self.defaults.clone());
             self.vel_text = [fmt_num(t.vel0), fmt_num(t.vel1)];
+            self.refresh_custom_gate_text();
         }
         self.project_section(ui);
         self.shapes_section(ui);
         self.defaults_section(ui);
         self.text_section(ui);
+        self.custom_section(ui);
         self.points_section(ui);
+    }
+
+    // ------------------------------------------------------------ 自定义形状面板
+
+    /// 面板要改的自定义形状：选中的那些；没选中时是"新形状的默认设置"（原版 custom_targets）。
+    fn custom_targets(&self) -> Vec<usize> {
+        self.sels
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.shapes
+                    .get(i)
+                    .is_some_and(|s| s.kind == Kind::Custom && s.text.is_none())
+            })
+            .collect()
+    }
+
+    /// 选中变化时把 gate 文本刷成当前形状的 ticks（原版 sync_custom）。
+    fn refresh_custom_gate_text(&mut self) {
+        let gate = self
+            .custom_targets()
+            .first()
+            .and_then(|&i| self.shapes.get(i))
+            .map(|s| s.gate)
+            .unwrap_or(self.custom_defaults.gate);
+        self.custom_gate_text = fmt_num((gate * self.ppq as f64 * 1000.0).round() / 1000.0);
+    }
+
+    fn custom_section(&mut self, ui: &mut egui::Ui) {
+        let placed = self.custom_targets();
+        if !self.sels.is_empty() && placed.is_empty() {
+            return; // 选中的都不是自定义形状
+        }
+        let title = if placed.is_empty() {
+            "New custom shape".to_string()
+        } else if placed.len() > 1 {
+            format!("Custom shapes ({})", placed.len())
+        } else {
+            "Custom shape".to_string()
+        };
+        egui::CollapsingHeader::new(title)
+            .default_open(true)
+            .show(ui, |ui| self.custom_body_ui(ui, &placed));
+    }
+
+    fn custom_body_ui(&mut self, ui: &mut egui::Ui, placed: &[usize]) {
+        let placed_mode = !placed.is_empty();
+        let (fill, align, name) = if placed_mode {
+            match self.shapes.get(placed[0]) {
+                Some(sh) => (sh.fill, sh.align, sh.name.clone()),
+                None => return,
+            }
+        } else {
+            (
+                self.custom_defaults.fill,
+                self.custom_defaults.align,
+                self.custom_defaults.shape.clone(),
+            )
+        };
+        let pasted = placed_mode
+            && placed
+                .iter()
+                .any(|&i| self.shapes.get(i).is_some_and(|s| s.notes.is_some()));
+        let gaps = if placed_mode {
+            placed
+                .iter()
+                .filter_map(|&i| self.shapes.get(i))
+                .map(|s| spiderweb_core::custom::open_paths(&s.strokes).len())
+                .max()
+                .unwrap_or(0)
+        } else {
+            crate::roll_live::builtin_template(&name)
+                .map(|(st, _)| spiderweb_core::custom::open_paths(&st).len())
+                .unwrap_or(2)
+        };
+        let fillable = gaps <= 1;
+        let spam = matches!(fill, Fill::Spam | Fill::OutlineSpam)
+            && (fillable || fill == Fill::OutlineSpam);
+        // 缺口太多时面板显示 Empty（原版 fill_var.set 的兜底）
+        let shown_fill = if fillable || fill == Fill::OutlineSpam {
+            fill
+        } else {
+            Fill::Empty
+        };
+
+        let mut pick: Option<String> = None;
+        let mut new_fill: Option<Fill> = None;
+        let mut new_align: Option<Align> = None;
+        let mut apply_gate = false;
+
+        ui.horizontal(|ui| {
+            ui.label("Shape");
+            egui::ComboBox::from_id_salt("custom_shape")
+                .selected_text(name.clone())
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for n in ["Circle", "Square", "Triangle"] {
+                        if ui.selectable_label(name == n, n).clicked() && name != n {
+                            pick = Some(n.to_string());
+                        }
+                    }
+                });
+            if ui.button("Drawer…").clicked() {
+                self.status =
+                    "Drawer 抽屉窗口待移植：先用内置 Circle / Square / Triangle".to_string();
+            }
+        });
+        if pasted {
+            let total: i64 = placed
+                .iter()
+                .filter_map(|&i| self.shapes.get(i))
+                .map(|s| self.note_count(s))
+                .sum();
+            ui.label(format!(
+                "{total} 个粘贴的音符。拖角点 / 边缩放，角外旋转，边中外斜切。"
+            ));
+        } else {
+            ui.label("Inside");
+            for (label, value) in [
+                ("Empty (outline only)", Fill::Empty),
+                ("Fill (one long note per key)", Fill::Fill),
+                ("Spam (notes of one gate)", Fill::Spam),
+                (
+                    "Outline spam (the outline in notes of one gate)",
+                    Fill::OutlineSpam,
+                ),
+            ] {
+                let enabled = fillable || matches!(value, Fill::Empty | Fill::OutlineSpam);
+                if ui
+                    .add_enabled(enabled, egui::RadioButton::new(shown_fill == value, label))
+                    .clicked()
+                {
+                    new_fill = Some(value);
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(spam, |ui| {
+                    ui.label("gate");
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.custom_gate_text).desired_width(70.0),
+                    );
+                    if resp.lost_focus() {
+                        apply_gate = true; // Enter 或点到别处都应用（原版 Return / FocusOut）
+                    }
+                    ui.label("ticks (Enter to apply)");
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(spam, |ui| {
+                    ui.label("start");
+                    if ui
+                        .add_enabled(
+                            align != Align::Auto,
+                            egui::RadioButton::new(align == Align::Auto, "Auto"),
+                        )
+                        .clicked()
+                    {
+                        new_align = Some(Align::Auto);
+                    }
+                    if ui
+                        .add_enabled(
+                            align != Align::Aligned,
+                            egui::RadioButton::new(align == Align::Aligned, "Aligned"),
+                        )
+                        .clicked()
+                    {
+                        new_align = Some(Align::Aligned);
+                    }
+                });
+            });
+        }
+
+        let info = if pasted {
+            String::new()
+        } else if placed_mode {
+            let total: i64 = placed
+                .iter()
+                .filter_map(|&i| self.shapes.get(i))
+                .map(|s| self.note_count(s))
+                .sum();
+            let mut info = format!("{total} 个音符。");
+            if gaps == 1 && matches!(fill, Fill::Fill | Fill::Spam) {
+                info += "  轮廓有一个缺口：按虚线补直接上。";
+            } else if gaps > 1 {
+                info += &format!("  轮廓有 {gaps} 个缺口：只能 Empty / Outline spam。");
+            }
+            if let Some(k) = self.stroke
+                && placed.len() == 1
+                && let Some(sh) = self.shapes.get(placed[0])
+            {
+                info += &format!(
+                    "  已拾取第 {} / {} 条笔画（Del 删除，Esc 取消拾取）。",
+                    k + 1,
+                    sh.strokes.len()
+                );
+            }
+            info
+        } else if self.live && crate::roll_live::is_stroke_tool(self.tool) {
+            "Live shape：画下的东西进同一个自定义形状（没有选中的就新建一个）。轮廓要填就先闭合。"
+                .to_string()
+        } else if crate::roll_live::builtin_template(&name).is_none() {
+            "选一个形状，或用 Drawer… 画一个。".to_string()
+        } else if self.tool.is_box() {
+            format!(
+                "在卷帘上拖一个框，或点两个角（Ctrl = 屏幕上正的 {}）。",
+                self.tool.label()
+            )
+        } else {
+            "在卷帘上拖一个框，或点两个角放置（Ctrl = 保持比例）。".to_string()
+        };
+        if !info.is_empty() {
+            ui.label(
+                egui::RichText::new(info)
+                    .small()
+                    .color(egui::Color32::from_gray(120)),
+            );
+        }
+
+        if let Some(pick) = pick {
+            self.pick_custom_template(&pick, placed);
+        }
+        if let Some(fill) = new_fill {
+            self.set_custom_fill(fill, placed);
+        }
+        if let Some(align) = new_align {
+            self.set_custom_align(align, placed);
+        }
+        if apply_gate {
+            self.apply_custom_gate(placed);
+        }
+    }
+
+    /// 面板里选了一个内置模板：新形状用它，选中的自定义形状也换成它。
+    fn pick_custom_template(&mut self, name: &str, placed: &[usize]) {
+        let Some((strokes, _)) = crate::roll_live::builtin_template(name) else {
+            return;
+        };
+        self.custom_defaults.shape = name.to_string();
+        if placed.is_empty() {
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.name = name.to_string();
+                sh.strokes = strokes.clone();
+            }
+        }
+        self.shapes_changed();
+    }
+
+    fn set_custom_fill(&mut self, fill: Fill, placed: &[usize]) {
+        if placed.is_empty() {
+            self.custom_defaults.fill = fill;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.fill = fill;
+            }
+        }
+        self.shapes_changed();
+    }
+
+    fn set_custom_align(&mut self, align: Align, placed: &[usize]) {
+        if placed.is_empty() {
+            self.custom_defaults.align = align;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.align = align;
+            }
+        }
+        self.shapes_changed();
+    }
+
+    /// gate 文本框（ticks，mathexpr 表达式）应用成形状的拍数（原版 on_gate）。
+    fn apply_custom_gate(&mut self, placed: &[usize]) {
+        let Ok(ticks) =
+            spiderweb_io::mathexpr::calc_int(&self.custom_gate_text, Some(1), Some(10_000_000))
+        else {
+            self.status = "gate 要是 1..10000000 ticks 的表达式".to_string();
+            return;
+        };
+        let gate = ticks as f64 / self.ppq as f64;
+        if placed.is_empty() {
+            self.custom_defaults.gate = gate;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.gate = gate;
+            }
+        }
+        self.shapes_changed();
     }
 
     fn project_section(&mut self, ui: &mut egui::Ui) {

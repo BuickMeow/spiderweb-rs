@@ -247,12 +247,53 @@ pub enum Drag {
         orig: Vec<(usize, Vec<Pt>)>,
         one: Option<usize>,
         moved: bool,
+        /// 点的是唯一选中的自定义形状：松开时拾取它下面的笔画（None = 取消拾取）
+        part: Option<Option<usize>>,
     },
     Handle {
         i: usize,
     },
     /// 文本工具点下后拖动：选到鼠标（原版 ("textsel",)）
     TextSel,
+    /// 拖自定义形状的笔画把手（原版 drag 的 handle + 元组 hid）
+    StrokeHandle(crate::roll_live::StrokeHandleId),
+    /// 方 / 圆 / 三角拖出来的框（原版 create + draft["draw"]）
+    BoxCreate {
+        start: Pt,
+        screen: Pos2,
+        tool: Tool,
+    },
+    /// 放置面板里选中的自定义形状（原版 place）
+    Place {
+        start: Pt,
+        screen: Pos2,
+        aspect: Option<f64>,
+    },
+    /// 拖角点 / 边中缩放（原版 resize）
+    Resize {
+        k: usize,
+        orig: Vec<Pt>,
+        side: bool,
+        start: Pt,
+    },
+    /// 边中外面斜切（原版 skew）
+    Skew {
+        k: usize,
+        orig: Vec<Pt>,
+        start: Pt,
+    },
+    /// 角点外面旋转（原版 turn）
+    Turn {
+        orig: Vec<Pt>,
+        a0: f64,
+    },
+}
+
+/// 命中的把手：普通形状的点号，或自定义形状的笔画把手。
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum HandleId {
+    Point(usize),
+    Stroke(crate::roll_live::StrokeHandleId),
 }
 
 struct Inputs {
@@ -274,10 +315,13 @@ struct Inputs {
     scroll: Vec2,
 }
 
+/// 把指针位置换算到卷帘自己的坐标（绘制都带 rect.min，命中都在局部坐标里算）。
 fn inputs(ui: &egui::Ui) -> Inputs {
+    let origin = ui.max_rect().min.to_vec2();
+    let local = move |p: Option<Pos2>| p.map(|p| p - origin);
     ui.input(|i| Inputs {
-        pos: i.pointer.hover_pos(),
-        interact: i.pointer.interact_pos(),
+        pos: local(i.pointer.hover_pos()),
+        interact: local(i.pointer.interact_pos()),
         primary_pressed: i.pointer.primary_pressed(),
         primary_released: i.pointer.primary_released(),
         primary_down: i.pointer.primary_down(),
@@ -309,12 +353,23 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let input = inputs(ui);
-    handle_input(app, &input, rect);
+    handle_input(app, &input, Rect::from_min_size(Pos2::ZERO, rect.size()));
     let _ = response;
-    paint(app, &painter, rect);
-    if app.position.is_some() {
-        // 位置文本在下一帧由输入处理清除
+    if app.drag.is_none()
+        && let Some(pos) = input.pos
+        && pos.x >= app.view.kb_w
+        && pos.y >= app.view.ruler_h
+        && pos.x <= app.view.w
+        && pos.y <= app.view.h
+    {
+        let icon = if app.draft.is_none() && hit_handle(app, pos).is_some() {
+            egui::CursorIcon::Move // 抓住把手（原版 fleur）
+        } else {
+            crate::roll_custom::custom_cursor(app, crate::roll_custom::custom_hit(app, pos))
+        };
+        ui.ctx().set_cursor_icon(icon);
     }
+    paint(app, &painter, rect);
 }
 
 // ---------------------------------------------------------------- 坐标与命中
@@ -335,13 +390,13 @@ pub(crate) fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
     [b.max(0.0), q.clamp(0.0, 127.0)]
 }
 
-/// 选中形状的可拖点 (beat, pitch, 序号)；曲线用 roll_curve 的钢笔把手。
+/// 选中形状的可拖点 (beat, pitch, 序号)；曲线 / 自定义形状用各自的把手。
 fn handles(app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
     if sh.kind == Kind::Curve {
         return app.curve_handle_indices(sh);
     }
     if sh.kind == Kind::Custom {
-        return Vec::new(); // 自定义形状的把手待移植
+        return Vec::new();
     }
     if sh.kind == Kind::Free || sh.pts.len() > 300 {
         return Vec::new();
@@ -354,18 +409,25 @@ fn handles(app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
         .collect()
 }
 
-fn hit_handle(app: &App, p: Pos2) -> Option<usize> {
+fn hit_handle(app: &App, p: Pos2) -> Option<HandleId> {
     let sh = app.selected()?;
     if sh.kind == Kind::Curve {
         // 曲线：锚点 / 拉出的手柄任何工具都能抓，两端留给 Select（原版 curve_handles 的 free）
-        return app.curve_hit_handle(sh, p, app.tool == Tool::Select);
+        return app
+            .curve_hit_handle(sh, p, app.tool == Tool::Select)
+            .map(HandleId::Point);
+    }
+    if sh.kind == Kind::Custom {
+        // 被拾取曲线笔画的锚点 / 手柄任何工具都能抓；笔画点只有 Select 工具
+        return crate::roll_live::hit_stroke_handle(app, sh, p, app.tool == Tool::Select)
+            .map(HandleId::Stroke);
     }
     let near = 7.0_f32.max(8.0 * app.scale());
     for (pt, i) in handles(app, sh).into_iter().rev() {
         let x = app.view.x_of(pt[0]);
         let y = app.view.y_of(pt[1]);
         if (x - p.x).abs() <= near && (y - p.y).abs() <= near {
-            return Some(i);
+            return Some(HandleId::Point(i));
         }
     }
     None
@@ -404,6 +466,7 @@ fn stroke_hit(app: &App, strokes: &[Vec<Pt>], p: Pos2) -> bool {
 }
 
 fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
+    let (b, q) = (app.view.b_of(p.x), app.view.p_of(p.y));
     for i in (0..app.shapes.len()).rev() {
         let sh = &app.shapes[i];
         let mut strokes = engine::shape_strokes(sh);
@@ -414,6 +477,28 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
         }
         if stroke_hit(app, &strokes, p) {
             return Some(i);
+        }
+        // 粘贴的音符：框里任何地方都算命中
+        if sh.notes.is_some()
+            && crate::roll_live::inside_strokes(&spiderweb_core::custom::custom_strokes(sh), b, q)
+        {
+            return Some(i);
+        }
+        // Fill / Spam 的形状：轮廓里（一个缺口用直线补上）都算命中
+        if sh.kind == Kind::Custom
+            && matches!(
+                sh.fill,
+                spiderweb_core::shape::Fill::Fill | spiderweb_core::shape::Fill::Spam
+            )
+            && spiderweb_core::custom::fillable(&sh.strokes)
+        {
+            let mut polys = spiderweb_core::custom::custom_strokes(sh);
+            if let Some(gap) = spiderweb_core::custom::gap_line(sh) {
+                polys.push(gap.to_vec());
+            }
+            if crate::roll_live::inside_strokes(&polys, b, q) {
+                return Some(i);
+            }
         }
     }
     None
@@ -451,7 +536,7 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
     if input.primary_released
         && let Some(pos) = input.interact.or(input.pos)
     {
-        on_release(app, pos, input);
+        on_release(app, pos, input, false);
     }
     if input.double
         && let Some(pos) = input.pos
@@ -501,7 +586,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
     if let Some(follow) = app.follow.take() {
         app.drag = Some(follow);
         on_drag(app, pos, input);
-        on_release(app, pos, input);
+        on_release(app, pos, input, true);
         return;
     }
     if pos.x < app.view.kb_w || !app.view.ready {
@@ -516,19 +601,40 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
         });
         return;
     }
-    let pt = event_pt(app, pos, true, input.shift);
+    let pt = crate::roll_live::draw_pt(app, pos, true, input.shift);
 
     if app.draft.is_none()
-        && let Some(i) = hit_handle(app, pos)
+        && let Some(h) = hit_handle(app, pos)
     {
         app.push_undo();
-        app.drag = Some(Drag::Handle { i });
+        app.drag = Some(match h {
+            HandleId::Point(i) => Drag::Handle { i },
+            HandleId::Stroke(id) => Drag::StrokeHandle(id),
+        });
+        return;
+    }
+
+    // 选中自定义形状的盒子：角点 / 边缩放，角外旋转，边中外斜切
+    let custom_hit = crate::roll_custom::custom_hit(app, pos);
+    if let Some(hit) = custom_hit
+        && let Some(drag) = custom_box_drag(app, hit, pos, input.shift)
+    {
+        app.push_undo();
+        app.drag = Some(drag);
         return;
     }
 
     match app.tool {
         Tool::Select => {
-            let i = hit_shape(app, pos);
+            let mut i = hit_shape(app, pos);
+            if i.is_none()
+                && matches!(custom_hit, Some(crate::roll_custom::CustomHit::Inside))
+                && !input.ctrl
+            {
+                i = app.sel; // 选中的自定义形状框里任何地方都算移动
+            }
+            // 点的是“已经唯一选中”的自定义形状：松开时拾取它下面的笔画（原版在这里先判定）
+            let was_only_selected = i.is_some() && app.sel == i && app.sels.len() == 1;
             if input.ctrl {
                 if let Some(i) = i {
                     app.select(Some(i), true);
@@ -547,6 +653,8 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             } else if let Some(i) = i {
                 if !app.sels.contains(&i) {
                     app.select(Some(i), false);
+                } else if app.sel != Some(i) {
+                    app.select_many(app.sels.clone(), Some(i));
                 }
             } else {
                 app.select(None, false);
@@ -557,6 +665,18 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                     moved: false,
                 });
                 return;
+            }
+            // 唯一选中的自定义形状：拾取鼠标下的笔画（离轮廓 6px 内），否则取消拾取
+            let mut part: Option<Option<usize>> = None;
+            if was_only_selected
+                && !input.ctrl
+                && let Some(i) = i
+                && let Some(sh) = app.shapes.get(i)
+                && sh.kind == Kind::Custom
+                && sh.text.is_none()
+                && sh.notes.is_none()
+            {
+                part = Some(crate::roll_live::stroke_at(app, sh, pos, 6.0));
             }
             app.push_undo();
             let orig: Vec<(usize, Vec<Pt>)> = app
@@ -570,18 +690,17 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 orig,
                 one,
                 moved: false,
+                part,
             });
         }
         Tool::Poly => {
             if app.draft.is_none() {
                 let defaults = app.defaults.clone();
                 app.draft = Some(engine::make_shape(Kind::Poly, &[pt, pt], &defaults));
-            } else if let Some(d) = app.draft.as_mut() {
-                d.pts.pop();
-                d.pts.push(pt);
-                d.pts.push(pt);
+                app.drag = Some(Drag::Segment { screen: pos });
+            } else if !poly_point(app, pt) {
+                app.drag = Some(Drag::Segment { screen: pos });
             }
-            app.drag = Some(Drag::Segment { screen: pos });
         }
         Tool::Arc => {
             if app.draft.is_none() {
@@ -640,12 +759,92 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 screen: pos,
             });
         }
+        Tool::Square | Tool::Circle | Tool::Triangle => {
+            let tool = app.tool;
+            app.draft_draw = Some(tool);
+            let sh = crate::roll_live::box_draft(app, tool, pt, pt);
+            app.draft = Some(sh);
+            app.drag = Some(Drag::BoxCreate {
+                start: pt,
+                screen: pos,
+                tool,
+            });
+        }
+        Tool::Custom => {
+            let name = app.custom_defaults.shape.clone();
+            if let Some((strokes, aspect)) = crate::roll_live::builtin_template(&name) {
+                let defaults = app.defaults.clone();
+                let cd = crate::roll_live::core_custom_defaults(app);
+                let sh =
+                    crate::roll_live::new_custom_parts(&defaults, &cd, &name, &strokes, pt, pt);
+                app.draft = Some(sh);
+                app.drag = Some(Drag::Place {
+                    start: pt,
+                    screen: pos,
+                    aspect: Some(aspect),
+                });
+            } else {
+                app.status = format!(
+                    "图形库里的 “{name}” 没移植（Drawer… 未做）：请在面板里选 Circle / Square / Triangle"
+                );
+            }
+        }
         Tool::Text => {
             crate::roll_text::text_press_shift(app, pos, pt, input.shift);
         }
-        Tool::Square | Tool::Circle | Tool::Triangle | Tool::Custom | Tool::Funnel => {
+        Tool::Funnel => {
             app.status = format!("{} 工具待移植", app.tool.label());
         }
+    }
+}
+
+/// 选中自定义形状的盒子被点中 -> 对应的拖动（盒内返回 None）。
+fn custom_box_drag(
+    app: &App,
+    hit: crate::roll_custom::CustomHit,
+    pos: Pos2,
+    shift: bool,
+) -> Option<Drag> {
+    use crate::roll_custom::CustomHit;
+    let orig = app.selected().map(|sh| sh.pts.clone()).unwrap_or_default();
+    Some(match hit {
+        CustomHit::Turn(_) => Drag::Turn {
+            a0: crate::roll_custom::screen_angle(app, &orig, pos),
+            orig,
+        },
+        CustomHit::Skew(k) => Drag::Skew {
+            k,
+            orig,
+            start: event_pt(app, pos, false, shift),
+        },
+        CustomHit::Corner(k) | CustomHit::Side(k) => Drag::Resize {
+            k,
+            orig,
+            side: matches!(hit, CustomHit::Side(_)),
+            start: event_pt(app, pos, false, shift),
+        },
+        CustomHit::Inside => return None,
+    })
+}
+
+/// 折线的下一个点放在 pt（后面再跟一个随鼠标的点）。true = 画完了
+/// （Live 绘制：回到第一个点 = 闭合）（原版 poly_point）。
+fn poly_point(app: &mut App, pt: Pt) -> bool {
+    let closed = {
+        let Some(d) = app.draft.as_mut() else {
+            return false;
+        };
+        if let Some(last) = d.pts.last_mut() {
+            *last = pt;
+        }
+        d.pts.push(pt);
+        d.pts.len() >= 4 && d.pts[0] == pt
+    };
+    if closed && crate::roll_live::live_drawing(app) {
+        finish_poly(app);
+        true
+    } else {
+        false
     }
 }
 
@@ -708,11 +907,17 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
             }
             app.shapes_changed();
         }
+        Drag::StrokeHandle(h) => {
+            let h = crate::roll_live::drag_stroke_handle(app, h, pos, input.shift, input.alt);
+            app.drag = Some(Drag::StrokeHandle(h));
+            app.shapes_changed();
+        }
         Drag::Move {
             start,
             orig,
             one,
             moved,
+            part,
         } => {
             let pt = event_pt(app, pos, true, input.shift);
             let (db, dp) = (pt[0] - start[0], pt[1] - start[1]);
@@ -724,6 +929,7 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
                 orig: orig.clone(),
                 one,
                 moved: true,
+                part,
             });
             for (j, pts) in &orig {
                 if let Some(sh) = app.shapes.get_mut(*j) {
@@ -735,7 +941,7 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
         Drag::Free { last } => {
             let dist = (pos - last).length();
             if dist >= 3.0 {
-                let pt = event_pt(app, pos, false, input.shift);
+                let pt = crate::roll_live::draw_pt(app, pos, false, input.shift);
                 if let Some(d) = app.draft.as_mut() {
                     d.pts.push(pt);
                 }
@@ -743,7 +949,7 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
             }
         }
         Drag::Segment { .. } => {
-            let pt = event_pt(app, pos, true, input.shift);
+            let pt = crate::roll_live::draw_pt(app, pos, true, input.shift);
             if let Some(d) = app.draft.as_mut()
                 && let Some(last) = d.pts.last_mut()
             {
@@ -779,10 +985,70 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
             }
             app.draft = Some(sh);
         }
+        Drag::BoxCreate { start, tool, .. } => {
+            let mut pt = crate::roll_live::draw_pt(app, pos, true, input.shift);
+            if input.ctrl {
+                pt = crate::roll_live::keep_aspect(
+                    app,
+                    start,
+                    pt,
+                    crate::roll_live::box_aspect(tool),
+                );
+            }
+            app.draft = Some(crate::roll_live::box_draft(app, tool, start, pt));
+        }
+        Drag::Place { start, aspect, .. } => {
+            let mut pt = crate::roll_live::draw_pt(app, pos, true, input.shift);
+            if input.ctrl
+                && let Some(asp) = aspect
+            {
+                pt = crate::roll_live::keep_aspect(app, start, pt, asp);
+            }
+            if let Some(d) = app.draft.as_mut() {
+                d.pts =
+                    spiderweb_core::custom::box_frame(start[0], start[1], pt[0], pt[1]).to_vec();
+            }
+        }
+        Drag::Resize {
+            k,
+            orig,
+            side,
+            start,
+        } => {
+            let pt = crate::roll_custom::resize_point(app, &orig, k, side, start, pos, input.shift);
+            let new_pts = crate::roll_custom::resize_custom(app, &orig, k, pt, input.ctrl, side);
+            if let Some(sh) = app.selected_mut() {
+                sh.pts = new_pts;
+            }
+            app.shapes_changed();
+        }
+        Drag::Skew { k, orig, start } => {
+            let (db, dp) = crate::roll_custom::drag_steps(app, start, pos, input.shift);
+            let new_pts = crate::roll_custom::skew_custom(app, &orig, k, db, dp);
+            if let Some(sh) = app.selected_mut() {
+                sh.pts = new_pts;
+            }
+            app.shapes_changed();
+        }
+        Drag::Turn { orig, a0 } => {
+            let mut angle = crate::roll_custom::screen_angle(app, &orig, pos) - a0;
+            angle = (angle + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+                - std::f64::consts::PI;
+            if !input.shift {
+                let step = 15.0_f64.to_radians();
+                angle = (angle / step).round() * step;
+            }
+            let new_pts = crate::roll_custom::turn_custom(app, &orig, angle);
+            if let Some(sh) = app.selected_mut() {
+                sh.pts = new_pts;
+            }
+            app.shapes_changed();
+            app.position = Some(format!("已转 {:+.1}°", angle.to_degrees()));
+        }
     }
 }
 
-fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
+fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
     let Some(drag) = app.drag.take() else {
         return;
     };
@@ -804,35 +1070,77 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
                 }
             }
         }
-        Drag::Move { moved, one, .. } => {
-            if !moved
-                && let Some(one) = one
-                && app.sels.len() > 1
-            {
-                app.select(Some(one), false);
+        Drag::Move {
+            moved, one, part, ..
+        } => {
+            if !moved {
+                if let Some(one) = one
+                    && app.sels.len() > 1
+                {
+                    app.select(Some(one), false);
+                } else if let Some(stroke) = part {
+                    app.set_stroke(stroke); // 点一下自定义形状：拾取 / 取消拾取笔画
+                }
             }
         }
         Drag::Create { screen, .. } => {
             let still = (pos - screen).length() < 4.0;
-            if still {
+            if still && !second {
                 app.follow = Some(Drag::Create {
                     start: event_pt(app, pos, true, input.shift),
                     screen: pos,
                 });
+            } else if still {
+                app.cancel_draft();
             } else if app.confirm_big_draft() {
                 app.commit_draft();
+            }
+        }
+        Drag::BoxCreate {
+            start,
+            screen,
+            tool,
+        } => {
+            let still = (pos - screen).length() < 4.0;
+            if still && !second {
+                app.follow = Some(Drag::BoxCreate {
+                    start,
+                    screen: pos,
+                    tool,
+                });
+            } else if still {
+                app.cancel_draft();
+            } else if app.confirm_big_draft() {
+                app.commit_draft();
+            } else {
+                app.cancel_draft();
+            }
+        }
+        Drag::Place {
+            start,
+            screen,
+            aspect,
+        } => {
+            let still = (pos - screen).length() < 4.0;
+            if still && !second {
+                app.follow = Some(Drag::Place {
+                    start,
+                    screen: pos,
+                    aspect,
+                });
+            } else if still {
+                app.cancel_draft();
+            } else if app.confirm_big_draft() {
+                app.commit_draft();
+            } else {
+                app.cancel_draft();
             }
         }
         Drag::Segment { screen } => {
             let still = (pos - screen).length() < 4.0;
             if !still {
-                let pt = event_pt(app, pos, true, input.shift);
-                if let Some(d) = app.draft.as_mut() {
-                    if let Some(last) = d.pts.last_mut() {
-                        *last = pt;
-                    }
-                    d.pts.push(pt);
-                }
+                let pt = crate::roll_live::draw_pt(app, pos, true, input.shift);
+                poly_point(app, pt);
             }
         }
         Drag::Arc { screen } => {
@@ -851,6 +1159,24 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
             }
         }
         Drag::Free { .. } => {
+            // Live 绘制：在起点附近松手 = 闭合
+            if crate::roll_live::live_drawing(app) {
+                let close = app
+                    .draft
+                    .as_ref()
+                    .filter(|d| d.pts.len() >= 3)
+                    .map(|d| {
+                        let first = d.pts[0];
+                        let sx = app.view.x_of(first[0]);
+                        let sy = app.view.y_of(first[1]);
+                        ((pos.x - sx).powi(2) + (pos.y - sy).powi(2)).sqrt() < 12.0 * app.scale()
+                    })
+                    .unwrap_or(false);
+                if close && let Some(d) = app.draft.as_mut() {
+                    let first = d.pts[0];
+                    d.pts.push(first);
+                }
+            }
             let n = app.draft.as_ref().map(|d| d.pts.len()).unwrap_or(0);
             if n >= 2 {
                 if let Some(d) = app.draft.as_mut() {
@@ -864,7 +1190,11 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
                 app.cancel_draft();
             }
         }
-        Drag::Handle { .. } => {
+        Drag::Handle { .. } | Drag::StrokeHandle(_) => {
+            app.shapes_changed();
+        }
+        Drag::Resize { .. } | Drag::Skew { .. } | Drag::Turn { .. } => {
+            // 框已经改好；面板的缺口 / 音符数下一帧自己算
             app.shapes_changed();
         }
         Drag::TextSel => {}
@@ -936,6 +1266,17 @@ fn on_middle_release(app: &mut App, pos: Pos2, shift: bool) {
     }
     if app
         .selected()
+        .map(|sh| sh.kind == Kind::Custom)
+        .unwrap_or(false)
+    {
+        // 被拾取的曲线笔画：点上加锚点
+        let near = Some((12.0 * app.scale()) as f64);
+        if crate::roll_live::stroke_click(app, pos, near, shift) {
+            return;
+        }
+    }
+    if app
+        .selected()
         .map(|sh| sh.kind == Kind::Curve)
         .unwrap_or(false)
     {
@@ -970,6 +1311,23 @@ fn on_right(app: &mut App, pos: Pos2) {
         && let Some(i) = app.curve_hit_handle(sh, pos, true)
         && app.curve_delete_handle(i)
     {
+        app.right_done = true;
+        return;
+    }
+    // 右键被拾取曲线笔画的锚点 = 删掉，手柄 = 收回（笔画点不特殊处理）
+    let custom_hid = if app.draft.is_none() {
+        app.selected().and_then(|sh| {
+            (sh.kind == Kind::Custom)
+                .then(|| crate::roll_live::hit_stroke_handle(app, sh, pos, true))
+                .flatten()
+        })
+    } else {
+        None
+    };
+    if let Some(h) = custom_hid
+        && matches!(h, crate::roll_live::StrokeHandleId::Curve { .. })
+    {
+        crate::roll_live::delete_stroke_handle(app, h);
         app.right_done = true;
     }
 }
@@ -1196,6 +1554,12 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
         }
     }
     if let Some(sel) = app.selected() {
+        if sel.kind == Kind::Custom {
+            crate::roll_live::paint_picked_stroke(app, painter, rect, sel);
+            if app.tool != Tool::Text {
+                crate::roll_custom::paint_custom_box(app, painter, rect, sel);
+            }
+        }
         paint_handles(app, painter, rect, sel);
     }
     if let Some(d) = &app.draft {
@@ -1303,6 +1667,11 @@ fn paint_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
         paint_curve_handles(app, painter, rect, sh);
         return;
     }
+    if sh.kind == Kind::Custom {
+        // 盒子的角点 / 边中在 paint_custom_box 里；这里是笔画点与被拾取曲线笔画的锚点 / 手柄
+        crate::roll_live::paint_custom_handles(app, painter, rect, sh);
+        return;
+    }
     let r = 4.0 * app.scale();
     for (p, i) in handles(app, sh) {
         let x = rect.min.x + app.view.x_of(p[0]);
@@ -1333,6 +1702,15 @@ fn paint_draft_points(app: &App, painter: &egui::Painter, rect: Rect, d: &Shape)
     }
     let pts: Vec<Pt> = match kind {
         Kind::Curve => vec![d.pts[0], *d.pts.last().unwrap_or(&d.pts[0])],
+        Kind::Custom => {
+            // 方 / 圆 / 三角 / 自定义形状的草稿：盒子的四个角
+            match (d.pts.first(), d.pts.get(1), d.pts.get(2)) {
+                (Some(a), Some(b), Some(c)) => {
+                    vec![*a, *b, [b[0] + c[0] - a[0], b[1] + c[1] - a[1]], *c]
+                }
+                _ => Vec::new(),
+            }
+        }
         _ => d.pts.clone(),
     };
     let r = 4.0 * app.scale();
