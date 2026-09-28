@@ -847,7 +847,9 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
         }
         Tool::Custom => {
             let name = app.custom_defaults.shape.clone();
-            if let Some((strokes, aspect)) = crate::roll_live::builtin_template(&name) {
+            if let Some((strokes, aspect)) =
+                crate::roll_live::builtin_template(&app.library_dir, &name)
+            {
                 let defaults = app.defaults.clone();
                 let cd = crate::roll_live::core_custom_defaults(app);
                 let sh =
@@ -859,9 +861,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                     aspect: Some(aspect),
                 });
             } else {
-                app.status = format!(
-                    "图形库里的 “{name}” 没移植（Drawer… 未做）：请在面板里选 Circle / Square / Triangle"
-                );
+                app.status = format!("图形库里没有 “{name}”：在面板里选一个，或用 Drawer… 画一个");
             }
         }
         Tool::Text => {

@@ -3,6 +3,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod drawer;
+mod drawer_tools;
 mod errors;
 mod help;
 mod help_texts;

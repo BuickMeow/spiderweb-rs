@@ -16,6 +16,7 @@ use spiderweb_io::project::{
     Project,
 };
 
+use crate::drawer::Drawer;
 use crate::help::{HelpState, Tips};
 use crate::playback::{DEFAULT_DEVICE, Player};
 use crate::roll::{Drag, RightDrag, View};
@@ -207,6 +208,10 @@ pub struct App {
     pub tips: Tips,
     /// 帮助窗口状态（help.rs）
     pub help: HelpState,
+    /// 抽屉窗口（原版 app.drawer）
+    pub drawer: Option<Drawer>,
+    /// 图形库目录（可执行文件旁的 shapes/，原版 drawer.LIBRARY）
+    pub library_dir: PathBuf,
 }
 
 impl App {
@@ -218,6 +223,7 @@ impl App {
         let autosave_path = base.join("autosave.json");
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
         crate::errors::install(base.clone());
+        let library_dir = base.join("shapes");
         let mut app = Self {
             shapes: Vec::new(),
             sels: BTreeSet::new(),
@@ -287,6 +293,8 @@ impl App {
             custom_gate_text: "60".into(),
             tips: Tips::new(&base),
             help: HelpState::default(),
+            drawer: None,
+            library_dir,
         };
         app.tips.welcome_at = Some(Instant::now());
         cc.egui_ctx
@@ -1081,6 +1089,10 @@ impl App {
     // ------------------------------------------------------------ eframe
 
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // 抽屉有键盘焦点：按键归抽屉（原版 in_drawer），卷帘快捷键让路
+        if self.drawer.as_ref().is_some_and(|d| d.focus) {
+            return;
+        }
         // 正在打字：按键都归文本（原版 on_key 的 typing 优先级），快捷键让路
         if self.typing.is_some() || ctx.egui_wants_keyboard_input() {
             return;
@@ -1305,6 +1317,8 @@ impl eframe::App for App {
         // 帮助窗口与首次使用 tip（help.rs）
         crate::help::help_ui(self, &ctx);
         crate::help::tips_ui(self, &ctx);
+
+        crate::drawer::drawer_ui(self, &ctx);
 
         if let Some(pending) = self.pending_big.take() {
             let mut go = false;

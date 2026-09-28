@@ -875,7 +875,7 @@ impl App {
                 .max()
                 .unwrap_or(0)
         } else {
-            crate::roll_live::builtin_template(&name)
+            crate::roll_live::builtin_template(&self.library_dir, &name)
                 .map(|(st, _)| spiderweb_core::custom::open_paths(&st).len())
                 .unwrap_or(2)
         };
@@ -893,6 +893,7 @@ impl App {
         let mut new_fill: Option<Fill> = None;
         let mut new_align: Option<Align> = None;
         let mut apply_gate = false;
+        let lib_names = crate::drawer::library_names(&self.library_dir);
 
         ui.horizontal(|ui| {
             ui.label("Shape");
@@ -900,15 +901,14 @@ impl App {
                 .selected_text(name.clone())
                 .width(100.0)
                 .show_ui(ui, |ui| {
-                    for n in ["Circle", "Square", "Triangle"] {
-                        if ui.selectable_label(name == n, n).clicked() && name != n {
-                            pick = Some(n.to_string());
+                    for n in &lib_names {
+                        if ui.selectable_label(name == *n, n).clicked() && name != *n {
+                            pick = Some(n.clone());
                         }
                     }
                 });
             if ui.button("Drawer…").clicked() {
-                self.status =
-                    "Drawer 抽屉窗口待移植：先用内置 Circle / Square / Triangle".to_string();
+                self.open_drawer();
             }
         });
         if pasted {
@@ -1004,7 +1004,7 @@ impl App {
         } else if self.live && crate::roll_live::is_stroke_tool(self.tool) {
             "Live shape：画下的东西进同一个自定义形状（没有选中的就新建一个）。轮廓要填就先闭合。"
                 .to_string()
-        } else if crate::roll_live::builtin_template(&name).is_none() {
+        } else if crate::roll_live::builtin_template(&self.library_dir, &name).is_none() {
             "选一个形状，或用 Drawer… 画一个。".to_string()
         } else if self.tool.is_box() {
             format!(
@@ -1036,9 +1036,10 @@ impl App {
         }
     }
 
-    /// 面板里选了一个内置模板：新形状用它，选中的自定义形状也换成它。
+    /// 面板里选了一个模板（内置或图形库里的）：新形状用它，选中的自定义形状也换成它。
     fn pick_custom_template(&mut self, name: &str, placed: &[usize]) {
-        let Some((strokes, _)) = crate::roll_live::builtin_template(name) else {
+        let Some((strokes, _)) = crate::roll_live::builtin_template(&self.library_dir, name) else {
+            self.status = format!("读不了形状 “{name}”");
             return;
         };
         self.custom_defaults.shape = name.to_string();
