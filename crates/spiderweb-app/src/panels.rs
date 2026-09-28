@@ -78,6 +78,11 @@ fn parse_int(text: &str, lo: i64, hi: i64) -> Option<i64> {
     spiderweb_io::mathexpr::calc_int(text, Some(lo), Some(hi)).ok()
 }
 
+/// 主题的 tip 文案（工具栏按钮的悬浮提示；找不到就是空）。
+fn tip_of(topic: &str) -> &'static str {
+    crate::help_texts::by_id(topic).map(|t| t.tip).unwrap_or("")
+}
+
 impl App {
     pub fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
@@ -88,16 +93,32 @@ impl App {
                 }
                 let selected = self.tool == tool;
                 let text = format!("{} ({})", tool.label(), tool.hotkey().to_uppercase());
-                if ui.selectable_label(selected, text).clicked() && self.tool != tool {
+                // 按钮上显示这个工具的 tip（原版 widgets.Tooltip）
+                let tip = tip_of(crate::help::tool_topic(tool));
+                if ui
+                    .selectable_label(selected, text)
+                    .on_hover_text(tip)
+                    .clicked()
+                    && self.tool != tool
+                {
                     if tool != Tool::Select {
                         self.draw_tool = tool;
                     }
                     self.tool = tool;
                     self.cancel_draft();
+                    // 换工具时弹这个工具的 tip（看过的不会再弹）
+                    self.tips.show(crate::help::tool_topic(tool));
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.live, "Live shape (G)");
+            if ui
+                .checkbox(&mut self.live, "Live shape (G)")
+                .on_hover_text(tip_of("live"))
+                .changed()
+                && self.live
+            {
+                self.tips.show("live");
+            }
         });
         ui.horizontal_wrapped(|ui| {
             ui.label("Snap");
@@ -113,7 +134,13 @@ impl App {
                 });
             ui.checkbox(&mut self.show_lines, "Show lines").changed();
             ui.checkbox(&mut self.show_notes, "Show notes");
-            ui.checkbox(&mut self.show_velocity, "Velocity pane");
+            if ui
+                .checkbox(&mut self.show_velocity, "Velocity pane")
+                .changed()
+                && self.show_velocity
+            {
+                self.tips.show("velocity");
+            }
             if ui.button("Fit view").clicked() {
                 self.view.fit_shapes(&self.shapes, self.beats);
             }
@@ -131,8 +158,12 @@ impl App {
             if ui.button(play_label).clicked() {
                 self.toggle_play();
             }
-            if ui.button("Help (F1)").clicked() {
-                self.status = "帮助窗口待移植".to_string();
+            if ui
+                .button("Help (F1)")
+                .on_hover_text("Every tip, searchable. Opens at the tool you're using.")
+                .clicked()
+            {
+                crate::help::open_help(self, None);
             }
         });
     }
@@ -147,6 +178,8 @@ impl App {
             self.vel_text = [fmt_num(t.vel0), fmt_num(t.vel1)];
             self.refresh_custom_gate_text();
             self.sync_funnel_text();
+            // 第一次选中某种形状：显示怎么编辑它（原版 sync_panel）
+            self.show_kind_tip();
         }
         self.project_section(ui);
         self.shapes_section(ui);
@@ -155,6 +188,27 @@ impl App {
         self.custom_section(ui);
         self.points_section(ui);
         self.funnel_section(ui);
+        // 侧栏底部：当前工具的帮助
+        crate::help::side_help_ui(self, ui);
+    }
+
+    /// 选中形状的种类对应的 tip（custom / funnel / free 各一个）。
+    fn show_kind_tip(&mut self) {
+        let kinds: Vec<Kind> = self
+            .sels
+            .iter()
+            .filter_map(|&i| self.shapes.get(i).map(|sh| sh.kind))
+            .collect();
+        for (kind, topic) in [
+            (Kind::Custom, "custom_edit"),
+            (Kind::Funnel, "funnel_curves"),
+            (Kind::Free, "straighten"),
+        ] {
+            if kinds.contains(&kind) {
+                self.tips.show(topic);
+                return;
+            }
+        }
     }
 
     // ------------------------------------------------------------ 自定义形状面板
