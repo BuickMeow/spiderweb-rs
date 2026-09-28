@@ -212,6 +212,10 @@ pub struct App {
     pub drawer: Option<Drawer>,
     /// 图形库目录（可执行文件旁的 shapes/，原版 drawer.LIBRARY）
     pub library_dir: PathBuf,
+    /// 自定义 wgpu 实例化音符渲染器（没有 wgpu render state 时为 None，走 painter 回退）
+    pub note_gpu: Option<crate::note_gpu::NoteGpu>,
+    /// 音符 / 选择的修订号：变化时 note_gpu 才重建 instance buffer
+    pub notes_revision: u64,
 }
 
 impl App {
@@ -224,6 +228,11 @@ impl App {
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
         crate::errors::install(base.clone());
         let library_dir = base.join("shapes");
+        // eframe 用 wgpu 后端时拿到渲染状态，建立音符 GPU 渲染器
+        let note_gpu = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|rs| crate::note_gpu::NoteGpu::new(std::sync::Arc::new(rs.clone())));
         let mut app = Self {
             shapes: Vec::new(),
             sels: BTreeSet::new(),
@@ -295,6 +304,8 @@ impl App {
             help: HelpState::default(),
             drawer: None,
             library_dir,
+            note_gpu,
+            notes_revision: 0,
         };
         app.tips.welcome_at = Some(Instant::now());
         cc.egui_ctx
@@ -532,6 +543,8 @@ impl App {
             }
         }
         self.note_counts = counts;
+        // 音符变了：note_gpu 下一帧重建 instance buffer
+        self.notes_revision = self.notes_revision.wrapping_add(1);
         self.schedule_autosave();
     }
 
@@ -596,6 +609,8 @@ impl App {
         self.edit_key = None;
         self.parts.clear();
         self.part_main = None;
+        // 选择变了：选中音符要换 layer 颜色，note_gpu 下一帧重建 instance buffer
+        self.notes_revision = self.notes_revision.wrapping_add(1);
     }
 
     /// 拾取选中自定义形状的笔画 k（None = 取消拾取）（原版 set_stroke）。

@@ -8,6 +8,7 @@ mod drawer_tools;
 mod errors;
 mod help;
 mod help_texts;
+mod note_gpu;
 mod panels;
 mod playback;
 mod roll;

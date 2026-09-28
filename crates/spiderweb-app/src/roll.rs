@@ -398,6 +398,10 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     let _ = response;
+    // GPU 音符：revision 脏了才重建 CPU instances（全部音符，不 cull；平移 / 缩放不动）
+    if let Some(gpu) = &app.note_gpu {
+        gpu.sync(&app.rendered, &app.sels, app.notes_revision);
+    }
     paint(app, &painter, rect);
     crate::roll_menu::menu_ui(app, ui);
 }
@@ -1707,7 +1711,13 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
 
     // 音符
     if app.show_notes {
-        paint_notes(app, painter, rect, area);
+        if let Some(gpu) = &app.note_gpu {
+            // GPU 路径：一次 instanced draw（普通一段 + 选中一段），无抽稀
+            let globals = crate::note_gpu::globals_for(&app.view, app.ppq, rect.min);
+            painter.add(gpu.callback(globals, rect));
+        } else {
+            paint_notes(app, painter, rect, area);
+        }
     }
 
     // 形状线：肿瘤的淡虚线，然后未选中 / 选中
@@ -1779,6 +1789,8 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
     crate::roll_text::paint_text_caret(app, painter, rect);
 }
 
+/// painter 回退路径（没有 wgpu render state 时）：可见性过滤 + 超量抽稀。
+/// GPU 路径在 note_gpu.rs，不做抽稀。
 fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
     let v = &app.view;
     let ppq = app.ppq as f64;

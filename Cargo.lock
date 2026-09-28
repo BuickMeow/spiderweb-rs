@@ -3170,6 +3170,7 @@ dependencies = [
 name = "spiderweb-app"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "eframe",
  "egui",
  "midir",
