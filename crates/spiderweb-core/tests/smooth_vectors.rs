@@ -1,0 +1,38 @@
+//! smooth.py 对照测试（向量由 tools/gen_smooth_vectors.py 生成）。
+
+mod common;
+
+use common::*;
+use spiderweb_core::smooth as S;
+
+#[test]
+fn smooth_vectors() {
+    let mut checked = 0;
+    for (idx, case) in cases("smooth").iter().enumerate() {
+        let fname = case["fn"].as_str().unwrap();
+        let args = case["args"].as_array().unwrap();
+        let out = &case["out"];
+        let ctx = format!("#{idx} {fname}");
+        match fname {
+            "tolerance" => {
+                let got = S::tolerance(f(&args[0]), f(&args[1]));
+                let want = f(out);
+                let d = (got - want).abs();
+                assert!(
+                    d <= 1e-9 || d <= 1e-9 * got.abs().max(want.abs()),
+                    "{ctx}: got {got} want {want}"
+                );
+            }
+            "clean_level" => {
+                assert_eq!(S::clean_level(f(&args[0])), i(out), "{ctx}");
+            }
+            "smooth_path" => {
+                let got = S::smooth_path(&pts(&args[0]), f(&args[1]), f(&args[2]));
+                assert_pts_eq(&got, out, &ctx);
+            }
+            other => panic!("未知用例 {other}"),
+        }
+        checked += 1;
+    }
+    assert!(checked > 150, "用例太少：{checked}");
+}
