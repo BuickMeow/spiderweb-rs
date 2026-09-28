@@ -1,0 +1,293 @@
+//! bezier.py 对照测试（向量由 tools/gen_bezier_vectors.py 生成）。
+
+mod common;
+
+use common::*;
+use serde_json::Value;
+use spiderweb_core::bezier as B;
+use spiderweb_core::shape::Sym;
+
+fn close(a: f64, b: f64) -> bool {
+    let d = (a - b).abs();
+    d <= 1e-9 || d <= 1e-9 * a.abs().max(b.abs())
+}
+
+fn ints(v: &Value) -> Vec<usize> {
+    v.as_array()
+        .expect("不是数组")
+        .iter()
+        .map(|x| x.as_u64().expect("不是整数") as usize)
+        .collect()
+}
+
+fn one(v: &Value) -> [f64; 2] {
+    let a = v.as_array().expect("不是点");
+    [f(&a[0]), f(&a[1])]
+}
+
+fn axis(v: &Value) -> Option<u8> {
+    if v.is_null() {
+        None
+    } else {
+        Some(v.as_u64().expect("不是 0/1") as u8)
+    }
+}
+
+fn sym_of(v: &Value) -> Option<Sym> {
+    match v.as_str() {
+        Some("mirror") => Some(Sym::Mirror),
+        Some("turn") => Some(Sym::Turn),
+        _ => None,
+    }
+}
+
+fn curve_arg(v: &Value) -> B::Curve {
+    let sharp = if v["sharp"].is_null() {
+        Vec::new()
+    } else {
+        ints(&v["sharp"])
+    };
+    B::Curve {
+        pts: pts(&v["pts"]),
+        sharp,
+        sym: sym_of(&v["sym"]),
+    }
+}
+
+fn assert_curve_eq(got: &B::Curve, want: &Value, ctx: &str) {
+    assert_pts_eq(&got.pts, &want["pts"], &format!("{ctx} pts"));
+    assert_eq!(got.sharp, ints(&want["sharp"]), "{ctx} sharp");
+    assert_eq!(got.sym, sym_of(&want["sym"]), "{ctx} sym");
+}
+
+type ToScreen = Box<dyn Fn([f64; 2]) -> [f64; 2]>;
+type FromScreen = Box<dyn Fn(f64, f64) -> [f64; 2]>;
+
+fn screen(sx: f64, sy: f64) -> (ToScreen, FromScreen) {
+    (
+        Box::new(move |p| [p[0] * sx, p[1] * sy]),
+        Box::new(move |x, y| [x / sx, y / sy]),
+    )
+}
+
+fn screen_pair(v: &Value) -> (f64, f64) {
+    (f(&v[0]), f(&v[1]))
+}
+
+#[test]
+fn bezier_vectors() {
+    let mut checked = 0;
+    for (idx, case) in cases("bezier").iter().enumerate() {
+        let fname = case["fn"].as_str().unwrap();
+        let args = case["args"].as_array().unwrap();
+        let out = &case["out"];
+        let ctx = format!("#{idx} {fname}");
+        match fname {
+            "anchor_count" => {
+                assert_eq!(B::anchor_count(&pts(&args[0])) as i64, i(out), "{ctx}");
+            }
+            "seg_point" => {
+                let g = B::seg_point(
+                    one(&args[0]),
+                    one(&args[1]),
+                    one(&args[2]),
+                    one(&args[3]),
+                    f(&args[4]),
+                );
+                let w = one(out);
+                assert!(
+                    close(g[0], w[0]) && close(g[1], w[1]),
+                    "{ctx}: got {g:?} want {w:?}"
+                );
+            }
+            "segments" => {
+                let g = B::segments(&pts(&args[0]));
+                let w = out.as_array().unwrap();
+                assert_eq!(g.len(), w.len(), "{ctx}: 段数不同");
+                for (k, seg) in g.iter().enumerate() {
+                    assert_pts_eq(seg, &w[k], &format!("{ctx} 段{k}"));
+                }
+            }
+            "sample" => {
+                let n = args[1].as_u64().unwrap() as usize;
+                let g = B::sample(&pts(&args[0]), n);
+                assert_pts_eq(&g, out, &ctx);
+            }
+            "split" => {
+                let s = args[1].as_u64().unwrap() as usize;
+                let g = B::split(&pts(&args[0]), s, f(&args[2]));
+                assert_pts_eq(&g, out, &ctx);
+            }
+            "remove_anchor" => {
+                let a = args[1].as_u64().unwrap() as usize;
+                let g = B::remove_anchor(&pts(&args[0]), a);
+                assert_pts_eq(&g, out, &ctx);
+            }
+            "handle_anchor" => {
+                let n = args[0].as_u64().unwrap() as usize;
+                assert_eq!(B::handle_anchor(n) as i64, i(out), "{ctx}");
+            }
+            "symmetric" | "make_symmetric" => {
+                let p = pts(&args[0]);
+                let sharp = ints(&args[1]);
+                let mode = sym_of(&args[2]).expect("缺 mode");
+                let (g_pts, g_sharp) = if fname == "symmetric" {
+                    B::symmetric(
+                        &p,
+                        &sharp,
+                        mode,
+                        axis(&args[3]),
+                        args[4].as_u64().unwrap() as u8,
+                    )
+                } else {
+                    B::make_symmetric(
+                        &p,
+                        &sharp,
+                        mode,
+                        axis(&args[3]),
+                        args[4].as_u64().unwrap() as u8,
+                    )
+                };
+                assert_pts_eq(&g_pts, &out[0], &format!("{ctx} pts"));
+                assert_eq!(g_sharp, ints(&out[1]), "{ctx} sharp");
+            }
+            "set_sharp" => {
+                let mut c = curve_arg(&args[0]);
+                c.set_sharp(&ints(&args[1]));
+                assert_curve_eq(&c, out, &ctx);
+            }
+            "sym_axis" => {
+                let (sx, sy) = screen_pair(&args[1]);
+                let (ts, _) = screen(sx, sy);
+                assert_eq!(
+                    B::sym_axis(&pts(&args[0]), &ts, b(&args[2])),
+                    axis(out),
+                    "{ctx}"
+                );
+            }
+            "half_at" => {
+                let (sx, sy) = screen_pair(&args[1]);
+                let (ts, _) = screen(sx, sy);
+                let g = B::half_at(&pts(&args[0]), &ts, f(&args[2]), f(&args[3]));
+                assert_eq!(g as i64, i(out), "{ctx}");
+            }
+            "pen_handles" => {
+                let g = B::pen_handles(&pts(&args[0]), b(&args[1]));
+                let w = out.as_array().unwrap();
+                assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
+                for (k, (gi, gk)) in g.iter().enumerate() {
+                    let kind = match gk {
+                        B::HandleKind::Ctrl => "ctrl",
+                        B::HandleKind::Anchor => "anchor",
+                        B::HandleKind::End => "end",
+                    };
+                    assert_eq!(*gi as i64, i(&w[k][0]), "{ctx} #{k} 点号");
+                    assert_eq!(kind, w[k][1].as_str().unwrap(), "{ctx} #{k} 种类");
+                }
+            }
+            "handle_lines" => {
+                let g = B::handle_lines(&pts(&args[0]));
+                let w = out.as_array().unwrap();
+                assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
+                for (k, (a, h)) in g.iter().enumerate() {
+                    let wa = one(&w[k][0]);
+                    let wh = one(&w[k][1]);
+                    assert!(
+                        close(a[0], wa[0])
+                            && close(a[1], wa[1])
+                            && close(h[0], wh[0])
+                            && close(h[1], wh[1]),
+                        "{ctx} #{k}: got ({a:?}, {h:?}) want ({wa:?}, {wh:?})"
+                    );
+                }
+            }
+            "nearest" => {
+                let (sx, sy) = screen_pair(&args[1]);
+                let (ts, _) = screen(sx, sy);
+                let n = args[4].as_u64().unwrap() as usize;
+                let g = B::nearest(&pts(&args[0]), &ts, f(&args[2]), f(&args[3]), n);
+                if out.is_null() {
+                    assert!(g.is_none(), "{ctx}: 应为 None");
+                } else {
+                    let (gs, gt, gd) = g.expect("应有最近点");
+                    assert_eq!(gs as i64, i(&out[0]), "{ctx} 段号");
+                    assert!(close(gt, f(&out[1])), "{ctx} t");
+                    assert!(close(gd, f(&out[2])), "{ctx} 距离");
+                }
+            }
+            "keep_symmetric" => {
+                let mut c = curve_arg(&args[0]);
+                let n = args[1].as_u64().unwrap() as usize;
+                let (sx, sy) = screen_pair(&args[2]);
+                let (ts, _) = screen(sx, sy);
+                let ret = B::keep_symmetric(&mut c, n, &ts, b(&args[3]));
+                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx} 返回值");
+                assert_curve_eq(&c, &out["curve"], &ctx);
+            }
+            "drag_point" => {
+                let mut c = curve_arg(&args[0]);
+                let n = args[1].as_u64().unwrap() as usize;
+                let new = one(&args[2]);
+                let alt = b(&args[3]);
+                let (sx, sy) = screen_pair(&args[4]);
+                let (ts, fs) = screen(sx, sy);
+                B::drag_point(&mut c, n, new, alt, &ts, &fs, b(&args[5]));
+                assert_curve_eq(&c, out, &ctx);
+            }
+            "add_anchor" => {
+                let mut c = curve_arg(&args[0]);
+                let seg = args[1].as_u64().unwrap() as usize;
+                let t = f(&args[2]);
+                let new = one(&args[3]);
+                let (sx, sy) = screen_pair(&args[4]);
+                let (ts, _) = screen(sx, sy);
+                let ret = B::add_anchor(&mut c, seg, t, new, &ts, b(&args[5]));
+                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx} 返回值");
+                assert_curve_eq(&c, &out["curve"], &ctx);
+            }
+            "can_delete" => {
+                let c = curve_arg(&args[0]);
+                let n = args[1].as_u64().unwrap() as usize;
+                let want = match out.as_str() {
+                    Some("anchor") => Some(B::CanDelete::Anchor),
+                    Some("handle") => Some(B::CanDelete::Handle),
+                    Some("middle") => Some(B::CanDelete::Middle),
+                    _ => None,
+                };
+                assert_eq!(B::can_delete(&c, n), want, "{ctx}");
+            }
+            "delete_point" => {
+                let mut c = curve_arg(&args[0]);
+                let n = args[1].as_u64().unwrap() as usize;
+                let (sx, sy) = screen_pair(&args[2]);
+                let (ts, _) = screen(sx, sy);
+                B::delete_point(&mut c, n, &ts, b(&args[3]));
+                assert_curve_eq(&c, out, &ctx);
+            }
+            "set_symmetry" => {
+                let mut c = curve_arg(&args[0]);
+                let source = args[2].as_u64().unwrap() as u8;
+                let (sx, sy) = screen_pair(&args[3]);
+                let (ts, _) = screen(sx, sy);
+                B::set_symmetry(&mut c, sym_of(&args[1]), source, &ts, b(&args[4]));
+                assert_curve_eq(&c, out, &ctx);
+            }
+            "resample" => {
+                let n = args[1].as_u64().unwrap() as usize;
+                let g = B::resample(&pts(&args[0]), n);
+                assert_pts_eq(&g, out, &ctx);
+            }
+            "difference" => {
+                let g = B::difference(&pts(&args[0]), &pts(&args[1]));
+                assert!(close(g, f(out)), "{ctx}: got {g} want {out}");
+            }
+            "fit" => {
+                let g = B::fit(&pts(&args[0]), f(&args[1]));
+                assert_pts_eq(&g, out, &ctx);
+            }
+            other => panic!("未知用例 {other}"),
+        }
+        checked += 1;
+    }
+    assert!(checked >= 190, "用例太少：{checked}");
+}
