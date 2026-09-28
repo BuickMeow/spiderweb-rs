@@ -120,6 +120,8 @@ pub struct App {
     pub drag: Option<Drag>,
     pub follow: Option<Drag>,
     pub arc_bend: bool,
+    /// 右键按下时已处理（曲线删点 / 收手柄）：松开时不再取消选择。
+    pub right_done: bool,
     pub tool: Tool,
     pub draw_tool: Tool,
     pub live: bool,
@@ -178,6 +180,7 @@ impl App {
             drag: None,
             follow: None,
             arc_bend: false,
+            right_done: false,
             tool: Tool::Select,
             draw_tool: Tool::Line,
             live: false,

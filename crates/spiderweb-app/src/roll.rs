@@ -8,6 +8,7 @@ use spiderweb_core::engine;
 use spiderweb_core::shape::{Kind, Shape};
 
 use crate::app::{App, Tool};
+use crate::roll_curve::paint_curve_handles;
 
 pub const BLACK: [i64; 5] = [1, 3, 6, 8, 10];
 pub const NOTE_NAMES: [&str; 12] = [
@@ -332,10 +333,13 @@ fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
     [b.max(0.0), q.clamp(0.0, 127.0)]
 }
 
-/// 选中形状的可拖点 (beat, pitch, 序号)。
-fn handles(_app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
-    if sh.kind == Kind::Custom || sh.kind == Kind::Curve {
-        return Vec::new(); // 曲线 / 自定义形状的把手待移植
+/// 选中形状的可拖点 (beat, pitch, 序号)；曲线用 roll_curve 的钢笔把手。
+fn handles(app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
+    if sh.kind == Kind::Curve {
+        return app.curve_handle_indices(sh);
+    }
+    if sh.kind == Kind::Custom {
+        return Vec::new(); // 自定义形状的把手待移植
     }
     if sh.kind == Kind::Free || sh.pts.len() > 300 {
         return Vec::new();
@@ -350,6 +354,10 @@ fn handles(_app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
 
 fn hit_handle(app: &App, p: Pos2) -> Option<usize> {
     let sh = app.selected()?;
+    if sh.kind == Kind::Curve {
+        // 曲线：锚点 / 拉出的手柄任何工具都能抓，两端留给 Select（原版 curve_handles 的 free）
+        return app.curve_hit_handle(sh, p, app.tool == Tool::Select);
+    }
     let near = 7.0_f32.max(8.0 * app.scale());
     for (pt, i) in handles(app, sh).into_iter().rev() {
         let x = app.view.x_of(pt[0]);
@@ -447,13 +455,13 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
-        on_double(app, pos);
+        on_double(app, pos, input.shift);
     }
     if input.secondary_pressed
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
-        on_right(app);
+        on_right(app, pos);
     }
     if input.secondary_released
         && let Some(pos) = input.pos
@@ -473,6 +481,9 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
         });
     }
     if input.middle_released {
+        if let Some(pos) = input.interact.or(input.pos) {
+            on_middle_release(app, pos, input.shift);
+        }
         app.drag = None;
     }
     if input.scroll != Vec2::ZERO
@@ -619,15 +630,9 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             });
         }
         Tool::Curve => {
+            // 拖拽创建 S 曲线，松手提交（拖出两端；手柄编辑在形状选中后）
             let defaults = app.defaults.clone();
-            let mut sh = engine::make_shape(Kind::Curve, &[pt, pt], &defaults);
-            sh.pts = vec![
-                pt,
-                [(pt[0] + pt[0]) / 2.0, pt[1]],
-                [(pt[0] + pt[0]) / 2.0, pt[1]],
-                pt,
-            ];
-            app.draft = Some(sh);
+            app.draft = Some(engine::make_shape(Kind::Curve, &[pt, pt], &defaults));
             app.drag = Some(Drag::Create {
                 start: pt,
                 screen: pos,
@@ -685,7 +690,13 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
         }
         Drag::Handle { i } => {
             let pt = event_pt(app, pos, true, input.shift);
-            if let Some(sh) = app.selected_mut()
+            if app
+                .selected()
+                .map(|sh| sh.kind == Kind::Curve)
+                .unwrap_or(false)
+            {
+                app.curve_drag(i, pt, input.alt);
+            } else if let Some(sh) = app.selected_mut()
                 && i < sh.pts.len()
             {
                 sh.pts[i] = pt;
@@ -854,7 +865,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
     }
 }
 
-fn on_double(app: &mut App, _pos: Pos2) {
+fn on_double(app: &mut App, pos: Pos2, shift: bool) {
     let is_poly = app
         .draft
         .as_ref()
@@ -862,6 +873,19 @@ fn on_double(app: &mut App, _pos: Pos2) {
         .unwrap_or(false);
     if is_poly {
         finish_poly(app);
+        return;
+    }
+    // 双击选中的曲线：在曲线上离鼠标最近的地方加锚点（中键同理，见 on_middle_release）
+    if app.draft.is_none()
+        && app.tool == Tool::Select
+        && app
+            .selected()
+            .map(|sh| sh.kind == Kind::Curve)
+            .unwrap_or(false)
+        && hit_handle(app, pos).is_none()
+    {
+        let pt = event_pt(app, pos, true, shift);
+        app.curve_click(pos, pt, Some((12.0 * app.scale()) as f64));
     }
 }
 
@@ -883,7 +907,27 @@ fn finish_poly(app: &mut App) {
     }
 }
 
-fn on_right(app: &mut App) {
+/// 中键单击（没有拖动，原版 on_middle_release）在选中的曲线上加锚点。
+fn on_middle_release(app: &mut App, pos: Pos2, shift: bool) {
+    let clicked = matches!(
+        &app.drag,
+        Some(Drag::Pan { start, .. }) if (pos - *start).length() <= 3.0
+    );
+    if !clicked || app.draft.is_some() || pos.x < app.view.kb_w || pos.y < app.view.ruler_h {
+        return;
+    }
+    if app
+        .selected()
+        .map(|sh| sh.kind == Kind::Curve)
+        .unwrap_or(false)
+    {
+        let pt = event_pt(app, pos, true, shift);
+        app.curve_click(pos, pt, Some((12.0 * app.scale()) as f64));
+    }
+}
+
+fn on_right(app: &mut App, pos: Pos2) {
+    app.right_done = false;
     let is_poly = app
         .draft
         .as_ref()
@@ -901,9 +945,21 @@ fn on_right(app: &mut App) {
     } else if is_arc {
         app.cancel_draft();
     }
+    // 右键曲线锚点 = 删掉，手柄 = 收回锚点（端点不动，松开时走取消选择）
+    if app.draft.is_none()
+        && let Some(sh) = app.selected()
+        && sh.kind == Kind::Curve
+        && let Some(i) = app.curve_hit_handle(sh, pos, true)
+        && app.curve_delete_handle(i)
+    {
+        app.right_done = true;
+    }
 }
 
 fn on_right_release(app: &mut App, pos: Pos2) {
+    if std::mem::take(&mut app.right_done) {
+        return; // 按下时已处理（曲线删点 / 收手柄）
+    }
     if app.draft.is_none() && !app.sels.is_empty() {
         let i = hit_shape(app, pos);
         if i.is_none() {
@@ -1223,6 +1279,10 @@ fn paint_path(
 }
 
 fn paint_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
+    if sh.kind == Kind::Curve {
+        paint_curve_handles(app, painter, rect, sh);
+        return;
+    }
     let r = 4.0 * app.scale();
     for (p, i) in handles(app, sh) {
         let x = rect.min.x + app.view.x_of(p[0]);
