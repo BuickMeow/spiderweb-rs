@@ -639,6 +639,10 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
     if pos.x < app.view.kb_w || !app.view.ready {
         return;
     }
+    if app.tool == Tool::Select {
+        // Select 是启动工具，它的 tip 在卷帘上第一次点击时弹（原版 pianoroll.on_press）
+        app.tips.show_waiting("select");
+    }
     if pos.y < app.view.ruler_h {
         let playing = app.player.running();
         app.stop_play();

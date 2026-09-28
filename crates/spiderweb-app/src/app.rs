@@ -16,6 +16,7 @@ use spiderweb_io::project::{
     Project,
 };
 
+use crate::help::{HelpState, Tips};
 use crate::playback::{DEFAULT_DEVICE, Player};
 use crate::roll::{Drag, RightDrag, View};
 use crate::roll_menu::MenuState;
@@ -23,8 +24,8 @@ use crate::roll_text::Typing;
 use crate::roll_velocity::VelocityState;
 use crate::text_dialog::FontDialog;
 
-#[allow(dead_code)] // 关于窗口待移植
-pub const VERSION: &str = "0.1.0";
+/// 程序版本（原版 files/about.py 的 VERSION；帮助窗口标题与 about 文案用）。
+pub const VERSION: &str = "1.1.0";
 
 /// 每个形状的音符与（粘贴音符的）track 列。
 type NotesAndTracks = (Vec<[i64; 4]>, Option<Vec<i64>>);
@@ -202,6 +203,10 @@ pub struct App {
     pub font_families: Vec<String>,
     /// 自定义形状面板的 gate 文本框（ticks）
     pub custom_gate_text: String,
+    /// 首次使用的 tip（help.rs）
+    pub tips: Tips,
+    /// 帮助窗口状态（help.rs）
+    pub help: HelpState,
 }
 
 impl App {
@@ -212,6 +217,7 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("."));
         let autosave_path = base.join("autosave.json");
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
+        crate::errors::install(base.clone());
         let mut app = Self {
             shapes: Vec::new(),
             sels: BTreeSet::new(),
@@ -279,7 +285,10 @@ impl App {
             font_dialog: None,
             font_families: Vec::new(),
             custom_gate_text: "60".into(),
+            tips: Tips::new(&base),
+            help: HelpState::default(),
         };
+        app.tips.welcome_at = Some(Instant::now());
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
         app.load_autosave();
@@ -1126,11 +1135,17 @@ impl App {
                 self.toggle_play();
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Escape)) {
-                self.cancel_draft();
-                self.set_stroke(None);
-                self.select(None, false);
-                self.parts.clear();
-                self.part_main = None;
+                if self.help.open {
+                    self.help.open = false; // Esc 先关帮助窗口（原版 HelpWindow 的 Escape）
+                } else if self.tips.popup.is_some() {
+                    self.tips.got_it(); // Esc = Got it
+                } else {
+                    self.cancel_draft();
+                    self.set_stroke(None);
+                    self.select(None, false);
+                    self.parts.clear();
+                    self.part_main = None;
+                }
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Delete)) {
                 // 高亮的漏斗线与曲线优先（原版 delete_parts）
@@ -1140,6 +1155,12 @@ impl App {
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::G)) {
                 self.live = !self.live;
+                if self.live {
+                    self.tips.show("live");
+                }
+            }
+            if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F1)) {
+                crate::help::open_help(self, None);
             }
             // 工具热键
             for tool in Tool::ALL {
@@ -1165,6 +1186,8 @@ impl App {
                     if self.tool != tool {
                         self.tool = tool;
                         self.cancel_draft();
+                        // 换工具时弹这个工具的 tip（看过的不会再弹）
+                        self.tips.show(crate::help::tool_topic(tool));
                     }
                 }
             }
@@ -1239,6 +1262,10 @@ pub fn scrub_hits(rendered: &[[i64; 6]], t_from: f64, t_to: f64) -> BTreeMap<(u8
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // panic 等错误写进 errors.log 后，在状态栏提示一次（errors.rs）
+        if let Some(msg) = crate::errors::take_pending() {
+            self.status = msg;
+        }
         // 文字输入优先：Event::Text / 编辑键先给正在输入的文本，剩下的才轮到快捷键
         crate::roll_text::text_keyboard(self, &ctx);
         self.handle_shortcuts(&ctx);
@@ -1275,6 +1302,9 @@ impl eframe::App for App {
             });
 
         crate::text_dialog::font_dialog_ui(self, &ctx);
+        // 帮助窗口与首次使用 tip（help.rs）
+        crate::help::help_ui(self, &ctx);
+        crate::help::tips_ui(self, &ctx);
 
         if let Some(pending) = self.pending_big.take() {
             let mut go = false;
