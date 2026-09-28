@@ -1,0 +1,80 @@
+//! 对照测试的公共部分：读取 tools/gen_*_vectors.py 生成的向量。
+
+#![allow(dead_code)]
+
+use serde_json::Value;
+
+pub fn cases(module: &str) -> Vec<Value> {
+    let path = format!("{}/tests/vectors/{module}.json", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("缺少向量文件 {path}（先运行 tools/gen_{module}_vectors.py）：{e}"));
+    let data: Value = serde_json::from_str(&text).expect("向量 JSON 解析失败");
+    data["cases"].as_array().expect("cases 不是数组").clone()
+}
+
+pub fn f(v: &Value) -> f64 {
+    v.as_f64().unwrap_or_else(|| panic!("不是数字: {v}"))
+}
+
+pub fn i(v: &Value) -> i64 {
+    v.as_i64().unwrap_or_else(|| panic!("不是整数: {v}"))
+}
+
+pub fn b(v: &Value) -> bool {
+    v.as_bool().unwrap_or_else(|| panic!("不是布尔: {v}"))
+}
+
+pub fn pts(v: &Value) -> Vec<[f64; 2]> {
+    v.as_array()
+        .expect("不是数组")
+        .iter()
+        .map(|p| {
+            let a = p.as_array().expect("点不是数组");
+            [f(&a[0]), f(&a[1])]
+        })
+        .collect()
+}
+
+pub fn rows3(v: &Value) -> Vec<[i64; 3]> {
+    v.as_array()
+        .expect("不是数组")
+        .iter()
+        .map(|p| {
+            let a = p.as_array().expect("行不是数组");
+            [i(&a[0]), i(&a[1]), i(&a[2])]
+        })
+        .collect()
+}
+
+pub fn rows_i64(v: &Value) -> Vec<Vec<i64>> {
+    v.as_array()
+        .expect("不是数组")
+        .iter()
+        .map(|r| r.as_array().expect("行不是数组").iter().map(i).collect())
+        .collect()
+}
+
+pub fn floats(v: &Value) -> Vec<f64> {
+    v.as_array().expect("不是数组").iter().map(f).collect()
+}
+
+fn close(a: f64, b: f64) -> bool {
+    let d = (a - b).abs();
+    d <= 1e-9 || d <= 1e-9 * a.abs().max(b.abs())
+}
+
+pub fn assert_pts_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
+    let w = pts(want);
+    assert_eq!(got.len(), w.len(), "{ctx}: 点数不同 got={got:?} want={w:?}");
+    for (k, (g, x)) in got.iter().zip(w.iter()).enumerate() {
+        assert!(
+            close(g[0], x[0]) && close(g[1], x[1]),
+            "{ctx}: 第 {k} 点不同 got={g:?} want={x:?}"
+        );
+    }
+}
+
+pub fn assert_rows3_eq(got: &[[i64; 3]], want: &Value, ctx: &str) {
+    let w = rows3(want);
+    assert_eq!(got, w.as_slice(), "{ctx}");
+}

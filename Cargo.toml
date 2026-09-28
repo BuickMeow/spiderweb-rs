@@ -1,0 +1,33 @@
+[workspace]
+members = [
+    "crates/spiderweb-core",
+    "crates/spiderweb-domino",
+    "crates/spiderweb-app",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+flate2 = "1"
+base64 = "0.22"
+midly = "0.5.3"
+midir = "0.11"
+fontdb = "0.22"
+ttf-parser = "0.25"
+eframe = { version = "0.36", features = ["wgpu"] }
+egui = "0.36"
+egui_extras = "0.36"
+rfd = "0.17.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+panic = "unwind"

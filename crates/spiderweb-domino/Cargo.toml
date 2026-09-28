@@ -1,0 +1,9 @@
+[package]
+name = "spiderweb-domino"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flate2 = { workspace = true }
+serde = { workspace = true }

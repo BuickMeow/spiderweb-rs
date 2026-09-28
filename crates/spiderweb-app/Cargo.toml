@@ -1,0 +1,19 @@
+[package]
+name = "spiderweb-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spiderweb-core = { path = "../spiderweb-core" }
+spiderweb-domino = { path = "../spiderweb-domino" }
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+midly = { workspace = true }
+midir = { workspace = true }
+rfd = { workspace = true }
+
+[features]
+default = []
