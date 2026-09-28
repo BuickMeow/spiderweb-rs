@@ -73,8 +73,8 @@ pub fn core_custom_defaults(app: &App) -> CoreCustomDefaults {
     }
 }
 
-/// 内置模板（Drawer 未移植）：Circle / Square / Triangle 的归一化笔画与宽 / 高。
-pub fn builtin_template(name: &str) -> Option<(Vec<PathStroke>, f64)> {
+/// 内置模板（Circle / Square / Triangle）的笔画与宽 / 高。
+pub fn builtin_shape(name: &str) -> Option<(Vec<PathStroke>, f64)> {
     let poly = |pts: &[Pt]| PathStroke::Poly {
         pts: pts.to_vec(),
         free: false,
@@ -92,6 +92,11 @@ pub fn builtin_template(name: &str) -> Option<(Vec<PathStroke>, f64)> {
         "Triangle" => Some((vec![poly(&TRIANGLE)], 1.0)),
         _ => None,
     }
+}
+
+/// 形状模板：先查图形库 `shapes/*.json` 里的同名形状（归一化），没有就退回内置模板（原版 custom_template）。
+pub fn builtin_template(dir: &std::path::Path, name: &str) -> Option<(Vec<PathStroke>, f64)> {
+    crate::drawer::library_template(dir, name).or_else(|| builtin_shape(name))
 }
 
 /// 方 / 圆 / 三角拖出来的自定义形状（roll_live.box_draft 的纯逻辑）。
@@ -1034,10 +1039,13 @@ mod tests {
 
     #[test]
     fn builtin_templates_are_known() {
-        assert!(builtin_template("Circle").is_some());
-        assert!(builtin_template("Square").is_some());
-        assert!(builtin_template("Triangle").is_some());
-        assert!(builtin_template("Spider").is_none());
+        let dir = std::path::Path::new("/nonexistent-spiderweb-shapes");
+        assert!(builtin_template(dir, "Circle").is_some());
+        assert!(builtin_template(dir, "Square").is_some());
+        assert!(builtin_template(dir, "Triangle").is_some());
+        assert!(builtin_template(dir, "Spider").is_none());
+        assert!(builtin_shape("Circle").is_some());
+        assert!(builtin_shape("Spider").is_none());
     }
 
     #[test]
