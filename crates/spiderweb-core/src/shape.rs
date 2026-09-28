@@ -146,7 +146,7 @@ impl Default for Tumour {
 }
 
 /// 文本设置（text.py TEXT_DEFAULTS + bbox/cap/k/holes）。
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextSettings {
     pub text: String,
     pub font: String,
@@ -163,6 +163,30 @@ pub struct TextSettings {
     pub cap: f64,
     pub k: f64,
     pub holes: Vec<usize>,
+}
+
+impl Default for TextSettings {
+    /// text.TEXT_DEFAULTS 的值（bbox 用 project.py 对文本默认设置的 `[0, 0, 1, 1]`，
+    /// cap / k 用 `or 0.7` / `or 1.0` 的兜底值）。
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font: "Arial".to_string(),
+            size: 24.0,
+            unit: TextUnit::Font,
+            weight: 400,
+            italic: false,
+            tracking: 0.0,
+            leading: 100.0,
+            align: TextAlign::Left,
+            threshold: 50.0,
+            grow: 0.0,
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            cap: 0.7,
+            k: 1.0,
+            holes: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

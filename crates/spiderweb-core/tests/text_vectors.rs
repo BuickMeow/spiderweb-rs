@@ -1,0 +1,565 @@
+//! text.py 对照测试（向量由 tools/gen_text_vectors.py 生成）+ 依赖系统字体的冒烟测试。
+//!
+//! 字体轮廓依赖 Windows GDI，macOS 上没法生成 Python 对照向量，所以 layout / build /
+//! text_font 只做宽松的冒烟断言；用到字体 cap 的分支用生成脚本里的桩字体固定成向量。
+
+mod common;
+
+use std::sync::Arc;
+
+use common::*;
+use serde_json::Value;
+use spiderweb_core::fonts::{Font, font_families, get_font};
+use spiderweb_core::shape::{Kind, Shape, Stroke, TextAlign, TextSettings, TextUnit};
+use spiderweb_core::text as T;
+
+// ---------------------------------------------------------------- 向量测试的辅助
+
+fn close(a: f64, b: f64) -> bool {
+    let d = (a - b).abs();
+    d <= 1e-9 || d <= 1e-9 * a.abs().max(b.abs())
+}
+
+fn close_f(a: f64, b: f64, ctx: &str) {
+    assert!(close(a, b), "{ctx}: {a} != {b}");
+}
+
+fn assert_pt_close(g: [f64; 2], w: &Value, ctx: &str) {
+    let a = w.as_array().expect("点不是数组");
+    close_f(g[0], f(&a[0]), &format!("{ctx}.x"));
+    close_f(g[1], f(&a[1]), &format!("{ctx}.y"));
+}
+
+fn assert_axes_eq(got: T::Axes, want: &Value, ctx: &str) {
+    let w = want.as_array().expect("axes 不是数组");
+    assert_eq!(w.len(), 3, "{ctx}: axes 应有 3 个点");
+    for (i, g) in [got.0, got.1, got.2].iter().enumerate() {
+        assert_pt_close(*g, &w[i], &format!("{ctx}[{i}]"));
+    }
+}
+
+fn assert_edges_eq(got: &[[[f64; 2]; 2]], want: &Value, ctx: &str) {
+    let w = want.as_array().expect("边不是数组");
+    assert_eq!(got.len(), w.len(), "{ctx}: 边数不同");
+    for (i, (g, e)) in got.iter().zip(w).enumerate() {
+        assert_pt_close(g[0], &e[0], &format!("{ctx}[{i}].a"));
+        assert_pt_close(g[1], &e[1], &format!("{ctx}[{i}].b"));
+    }
+}
+
+fn assert_spans_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
+    let w = want.as_array().expect("span 不是数组");
+    assert_eq!(
+        got.len(),
+        w.len(),
+        "{ctx}: span 数不同 got={got:?} want={w:?}"
+    );
+    for (i, (g, s)) in got.iter().zip(w).enumerate() {
+        let a = s.as_array().expect("span 不是数组");
+        close_f(g[0], f(&a[0]), &format!("{ctx}[{i}].x0"));
+        close_f(g[1], f(&a[1]), &format!("{ctx}[{i}].x1"));
+    }
+}
+
+fn assert_polys_eq(got: &[Vec<[f64; 2]>], want: &Value, ctx: &str) {
+    let w = want.as_array().expect("polys 不是数组");
+    assert_eq!(got.len(), w.len(), "{ctx}: 轮廓数不同");
+    for (i, (g, p)) in got.iter().zip(w).enumerate() {
+        assert_pts_eq(g, p, &format!("{ctx}[{i}]"));
+    }
+}
+
+/// 从向量反序列化出一份文本设置（缺的键用 Python 的取值习惯：cap 没给就是 0）。
+fn tx(v: &Value) -> TextSettings {
+    TextSettings {
+        text: v
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        font: v
+            .get("font")
+            .and_then(Value::as_str)
+            .unwrap_or("Arial")
+            .to_string(),
+        size: v.get("size").map_or(24.0, f),
+        unit: if v.get("unit").and_then(Value::as_str) == Some("rows") {
+            TextUnit::Rows
+        } else {
+            TextUnit::Font
+        },
+        weight: v.get("weight").map_or(400, |x| i(x) as i32),
+        italic: v.get("italic").is_some_and(b),
+        tracking: v.get("tracking").map_or(0.0, f),
+        leading: v.get("leading").map_or(100.0, f),
+        align: match v.get("align").and_then(Value::as_str) {
+            Some("center") => TextAlign::Center,
+            Some("right") => TextAlign::Right,
+            _ => TextAlign::Left,
+        },
+        threshold: v.get("threshold").map_or(50.0, f),
+        grow: v.get("grow").map_or(0.0, f),
+        bbox: v
+            .get("bbox")
+            .and_then(Value::as_array)
+            .map_or([0.0, 0.0, 1.0, 1.0], |b| {
+                [f(&b[0]), f(&b[1]), f(&b[2]), f(&b[3])]
+            }),
+        cap: v.get("cap").map_or(0.0, f),
+        k: v.get("k").map_or(1.0, f),
+        holes: v
+            .get("holes")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|x| i(x) as usize).collect())
+            .unwrap_or_default(),
+    }
+}
+
+fn shape(v: &Value) -> Shape {
+    let strokes = v
+        .get("strokes")
+        .and_then(Value::as_array)
+        .map(|ss| {
+            ss.iter()
+                .map(|s| Stroke::Curve {
+                    pts: pts(&s["pts"]),
+                    sharp: Vec::new(),
+                    sym: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Shape {
+        kind: Kind::Custom,
+        pts: pts(&v["pts"]),
+        strokes,
+        text: v.get("text").map(tx),
+        ..Shape::default()
+    }
+}
+
+fn axes(v: &Value) -> T::Axes {
+    let a = v.as_array().expect("axes 不是数组");
+    (
+        [f(&a[0][0]), f(&a[0][1])],
+        [f(&a[1][0]), f(&a[1][1])],
+        [f(&a[2][0]), f(&a[2][1])],
+    )
+}
+
+fn change(v: &Value) -> T::TextChange {
+    T::TextChange {
+        text: v.get("text").and_then(Value::as_str).map(str::to_string),
+        font: v.get("font").and_then(Value::as_str).map(str::to_string),
+        size: v.get("size").and_then(Value::as_f64),
+        unit: v.get("unit").and_then(Value::as_str).map(|s| {
+            if s == "rows" {
+                TextUnit::Rows
+            } else {
+                TextUnit::Font
+            }
+        }),
+        weight: v.get("weight").and_then(Value::as_i64).map(|x| x as i32),
+        italic: v.get("italic").and_then(Value::as_bool),
+        tracking: v.get("tracking").and_then(Value::as_f64),
+        leading: v.get("leading").and_then(Value::as_f64),
+        align: v.get("align").and_then(Value::as_str).map(|s| match s {
+            "center" => TextAlign::Center,
+            "right" => TextAlign::Right,
+            _ => TextAlign::Left,
+        }),
+        threshold: v.get("threshold").and_then(Value::as_f64),
+        grow: v.get("grow").and_then(Value::as_f64),
+    }
+}
+
+fn assert_tx_eq(got: &TextSettings, want: &Value, ctx: &str) {
+    assert_eq!(got.text, want["text"].as_str().unwrap(), "{ctx}: text");
+    assert_eq!(got.font, want["font"].as_str().unwrap(), "{ctx}: font");
+    close_f(got.size, f(&want["size"]), &format!("{ctx}: size"));
+    let want_unit = match want["unit"].as_str().unwrap() {
+        "rows" => TextUnit::Rows,
+        _ => TextUnit::Font,
+    };
+    assert_eq!(got.unit, want_unit, "{ctx}: unit");
+    assert_eq!(got.weight, i(&want["weight"]) as i32, "{ctx}: weight");
+    assert_eq!(got.italic, b(&want["italic"]), "{ctx}: italic");
+    close_f(
+        got.tracking,
+        f(&want["tracking"]),
+        &format!("{ctx}: tracking"),
+    );
+    close_f(got.leading, f(&want["leading"]), &format!("{ctx}: leading"));
+    let want_align = match want["align"].as_str().unwrap() {
+        "center" => TextAlign::Center,
+        "right" => TextAlign::Right,
+        _ => TextAlign::Left,
+    };
+    assert_eq!(got.align, want_align, "{ctx}: align");
+    close_f(
+        got.threshold,
+        f(&want["threshold"]),
+        &format!("{ctx}: threshold"),
+    );
+    close_f(got.grow, f(&want["grow"]), &format!("{ctx}: grow"));
+    let bbox = &want["bbox"];
+    for (i, k) in (0..4).enumerate() {
+        close_f(got.bbox[i], f(&bbox[i]), &format!("{ctx}: bbox[{k}]"));
+    }
+    close_f(got.cap, f(&want["cap"]), &format!("{ctx}: cap"));
+    close_f(got.k, f(&want["k"]), &format!("{ctx}: k"));
+    let holes: Vec<usize> = want["holes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| i(x) as usize)
+        .collect();
+    assert_eq!(got.holes, holes, "{ctx}: holes");
+}
+
+// ---------------------------------------------------------------- 向量主测试
+
+#[test]
+fn text_vectors() {
+    let mut checked = 0;
+    for (idx, case) in cases("text").iter().enumerate() {
+        let fname = case["fn"].as_str().unwrap();
+        let args = case["args"].as_array().unwrap();
+        let out = &case["out"];
+        let ctx = format!("#{idx} {fname}");
+        match fname {
+            "flatten" => {
+                let got = T::flatten(&pts(&args[0]), f(&args[1]));
+                assert_pts_eq(&got, out, &ctx);
+            }
+            "area" => close_f(T::area(&pts(&args[0])), f(out), &ctx),
+            "winding" => {
+                let got = T::winding(&pts(&args[0]), f(&args[1]), f(&args[2]));
+                assert_eq!(got, i(out), "{ctx}");
+            }
+            "offset" => {
+                let got = T::offset(&pts(&args[0]), f(&args[1]));
+                assert_pts_eq(&got, out, &ctx);
+            }
+            "row_edges" => {
+                let polys: Vec<Vec<[f64; 2]>> =
+                    args[0].as_array().unwrap().iter().map(pts).collect();
+                let got = T::row_edges(&polys, f(&args[1]), f(&args[2]));
+                assert_edges_eq(&got, out, &ctx);
+            }
+            "line_spans" => {
+                let edges: Vec<[[f64; 2]; 2]> = args[0]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| [[f(&e[0][0]), f(&e[0][1])], [f(&e[1][0]), f(&e[1][1])]])
+                    .collect();
+                let got = T::line_spans(&edges, f(&args[1]));
+                assert_spans_eq(&got, out, &ctx);
+            }
+            "threshold_spans" => {
+                let polys: Vec<Vec<[f64; 2]>> =
+                    args[0].as_array().unwrap().iter().map(pts).collect();
+                let got = T::threshold_spans(&polys, f(&args[1]), f(&args[2]));
+                assert_spans_eq(&got, out, &ctx);
+            }
+            "find_holes" => {
+                let contours: Vec<T::Contour> = args[0]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| T::Contour {
+                        glyph: i(&c[0]) as usize,
+                        pts: pts(&c[1]),
+                    })
+                    .collect();
+                let got = T::find_holes(&contours);
+                let want: Vec<usize> = out
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| i(x) as usize)
+                    .collect();
+                assert_eq!(got, want, "{ctx}");
+            }
+            "clean_text" => {
+                let got = T::clean_text(&args[0]);
+                if out.is_null() {
+                    assert!(got.is_none(), "{ctx}: 应为 None，得到 {got:?}");
+                } else {
+                    assert_tx_eq(&got.expect(&ctx), out, &ctx);
+                }
+            }
+            "text_name" => {
+                let got = T::text_name(args[0].as_str().unwrap());
+                assert_eq!(got, out.as_str().unwrap(), "{ctx}");
+            }
+            "text_axes" => {
+                let got = T::text_axes(&shape(&args[0]));
+                assert_axes_eq(
+                    got.unwrap_or_else(|| panic!("{ctx}: 应当能算轴")),
+                    out,
+                    &ctx,
+                );
+            }
+            "to_roll" => {
+                let got = T::to_roll(axes(&args[0]), f(&args[1]), f(&args[2]));
+                let a = out.as_array().unwrap();
+                close_f(got[0], f(&a[0]), &format!("{ctx}.x"));
+                close_f(got[1], f(&a[1]), &format!("{ctx}.y"));
+            }
+            "from_roll" => {
+                let got = T::from_roll(axes(&args[0]), f(&args[1]), f(&args[2]));
+                if out.is_null() {
+                    assert!(got.is_none(), "{ctx}: 平轴应为 None");
+                } else {
+                    let a = out.as_array().unwrap();
+                    let got = got.expect(&ctx);
+                    close_f(got[0], f(&a[0]), &format!("{ctx}.x"));
+                    close_f(got[1], f(&a[1]), &format!("{ctx}.y"));
+                }
+            }
+            "axes_em" => close_f(T::axes_em(axes(&args[0]), f(&args[1])), f(out), &ctx),
+            "scale_axes" => assert_axes_eq(T::scale_axes(axes(&args[0]), f(&args[1])), out, &ctx),
+            "em_keys" => {
+                let got = T::em_keys(&tx(&args[0]), args[1].as_f64(), f(&case["font_cap"]));
+                close_f(got, f(out), &ctx);
+            }
+            "new_axes" => {
+                let got = T::new_axes(
+                    &tx(&args[0]),
+                    f(&args[1]),
+                    f(&args[2]),
+                    f(&args[3]),
+                    f(&case["font_cap"]),
+                );
+                assert_axes_eq(got, out, &ctx);
+            }
+            "shown_size" => {
+                let got = T::shown_size(&tx(&args[0]), axes(&args[1]), f(&case["font_cap"]));
+                close_f(got, f(out), &ctx);
+            }
+            "restyle" => {
+                let (new, got_axes) = T::restyle(
+                    &tx(&args[0]),
+                    axes(&args[1]),
+                    &change(&args[2]),
+                    f(&case["font_cap"]),
+                    f(&case["new_cap"]),
+                );
+                assert_tx_eq(&new, &out[0], &format!("{ctx} tx"));
+                assert_axes_eq(got_axes, &out[1], &format!("{ctx} axes"));
+            }
+            "text_polys" => {
+                let got = T::text_polys(&shape(&args[0]));
+                assert_polys_eq(&got, out, &ctx);
+            }
+            other => panic!("未知用例 {other}"),
+        }
+        checked += 1;
+    }
+    assert!(checked >= 150, "用例太少：{checked}");
+}
+
+// ---------------------------------------------------------------- 字体冒烟测试
+
+/// 常见家族优先，保证各平台都能找到带 'A' 轮廓的字体。
+const PREFERRED: &[&str] = &[
+    "Helvetica",
+    "Arial",
+    "Segoe UI",
+    "Verdana",
+    "DejaVu Sans",
+    "Noto Sans",
+    "Liberation Sans",
+    "Tahoma",
+    "Geneva",
+    "Times New Roman",
+];
+
+/// 找一个装了、能读出 'A' 轮廓的字体；一个都没有返回 None。
+fn usable_font() -> Option<Arc<Font>> {
+    let families = font_families();
+    let mut candidates: Vec<&String> = Vec::new();
+    for name in PREFERRED {
+        if let Some(f) = families.iter().find(|f| f.eq_ignore_ascii_case(name)) {
+            candidates.push(f);
+        }
+    }
+    for f in families.iter().take(20) {
+        if !candidates.contains(&f) {
+            candidates.push(f);
+        }
+    }
+    for name in candidates {
+        let font = get_font(name, 400, false);
+        let g = font.glyph('A');
+        if font.found() && g.advance > 0.0 && !g.contours.is_empty() {
+            return Some(font);
+        }
+    }
+    None
+}
+
+#[test]
+fn layout_smoke() {
+    let Some(font) = usable_font() else {
+        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        return;
+    };
+    let tx = TextSettings {
+        text: "AB\nC".to_string(),
+        size: 10.0,
+        ..TextSettings::default()
+    };
+    let (contours, carets) = T::layout(&tx, &font);
+    assert!(!contours.is_empty(), "应当有字母轮廓");
+    assert_eq!(carets.len(), 5, "AB 行 3 个光标 + C 行 2 个");
+    assert!(contours.iter().all(|c| c.glyph < 3), "字符序号 0..2");
+    assert!(contours.iter().any(|c| c.glyph == 2), "C 也要有轮廓");
+
+    let step = font.line_height * tx.leading / 100.0;
+    close_f(carets[3][0], 0.0, "第二行行首");
+    close_f(carets[3][1], -step, "第二行基线");
+    let w = font.glyph('A').advance
+        + font.kerning.get(&('A', 'B')).copied().unwrap_or(0.0)
+        + font.glyph('B').advance;
+    close_f(carets[2][0], w, "第一行行尾");
+    assert!(font.glyph('A').advance > 0.0 && font.glyph('B').advance > 0.0);
+
+    // 居中：整行往左挪一半
+    let tx = TextSettings {
+        align: TextAlign::Center,
+        ..tx
+    };
+    let (_, carets) = T::layout(&tx, &font);
+    close_f(carets[0][0], -w / 2.0, "居中行首");
+    close_f(carets[2][0], w / 2.0, "居中行尾");
+
+    // 空行只有行尾一个光标
+    let tx = TextSettings {
+        text: "\n".to_string(),
+        ..TextSettings::default()
+    };
+    let (contours, carets) = T::layout(&tx, &font);
+    assert!(contours.is_empty());
+    assert_eq!(carets.len(), 2);
+}
+
+#[test]
+fn build_smoke() {
+    let Some(font) = usable_font() else {
+        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        return;
+    };
+    let tx = TextSettings {
+        text: "Hi".to_string(),
+        size: 12.0,
+        ..TextSettings::default()
+    };
+    let (contours, _) = T::layout(&tx, &font);
+    let mut sh = Shape {
+        kind: Kind::Custom,
+        ..Shape::default()
+    };
+    let axes = T::new_axes(&tx, 10.0, 60.0, 1.0, font.cap);
+    assert!(T::build(&mut sh, &tx, &font, axes), "有字母就应当建出形状");
+    assert_eq!(sh.strokes.len(), contours.len(), "每条轮廓一条笔画");
+    assert_eq!(sh.pts.len(), 3, "框是 3 个点");
+    assert_eq!(sh.name, "“Hi”");
+
+    for st in &sh.strokes {
+        let Stroke::Curve { pts, sharp, sym } = st else {
+            panic!("文本笔画应当是曲线");
+        };
+        assert!(sharp.is_empty() && sym.is_none());
+        assert!(!pts.is_empty());
+        for p in pts {
+            // 归一化到 [0, 1]，round(x, 7) 的误差范围内
+            assert!(
+                (-1e-6..=1.0 + 1e-6).contains(&p[0]) && (-1e-6..=1.0 + 1e-6).contains(&p[1]),
+                "归一化点 {p:?}"
+            );
+        }
+    }
+
+    let settings = sh.text.as_ref().expect("应当写入设置");
+    assert_eq!(settings.cap, font.cap);
+    assert!(settings.bbox[2] > settings.bbox[0] && settings.bbox[3] > settings.bbox[1]);
+
+    // 没东西可看：空白 / 只空格
+    let spaces = TextSettings {
+        text: "   ".to_string(),
+        ..tx.clone()
+    };
+    let mut blank = Shape {
+        kind: Kind::Custom,
+        ..Shape::default()
+    };
+    assert!(!T::build(&mut blank, &spaces, &font, axes), "空格不建形状");
+    assert!(blank.strokes.is_empty() && blank.text.is_none());
+    let mut empty = Shape {
+        kind: Kind::Custom,
+        ..Shape::default()
+    };
+    let none = TextSettings {
+        text: String::new(),
+        ..tx
+    };
+    assert!(!T::build(&mut empty, &none, &font, axes));
+}
+
+#[test]
+fn text_font_and_cap_smoke() {
+    let Some(font) = usable_font() else {
+        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        return;
+    };
+    let tx = TextSettings {
+        font: font.family.clone(),
+        weight: 400,
+        italic: false,
+        ..TextSettings::default()
+    };
+    let got = T::text_font(&tx);
+    assert!(Arc::ptr_eq(&got, &get_font(&font.family, 400, false)));
+
+    // cap 为 0：rows 单位用字体的 cap 折算
+    let rows = TextSettings {
+        unit: TextUnit::Rows,
+        cap: 0.0,
+        ..tx
+    };
+    close_f(
+        T::em_keys(&rows, None, font.cap),
+        rows.size / font.cap,
+        "cap 兜底",
+    );
+    close_f(
+        T::em_keys(&rows, Some(10.0), font.cap),
+        10.0 / font.cap,
+        "cap 兜底（显式 size）",
+    );
+}
+
+#[test]
+fn find_holes_on_o_smoke() {
+    let Some(font) = usable_font() else {
+        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        return;
+    };
+    let tx = TextSettings {
+        text: "O".to_string(),
+        ..TextSettings::default()
+    };
+    let (contours, _) = T::layout(&tx, &font);
+    if font.glyph('O').contours.len() == 2 {
+        assert_eq!(T::find_holes(&contours), vec![1], "O 的内轮廓是洞");
+    }
+    // 空轮廓不 panic 也不算洞（Python 原版这里会崩）
+    let empty = vec![T::Contour {
+        glyph: 0,
+        pts: Vec::new(),
+    }];
+    assert!(T::find_holes(&empty).is_empty());
+}
