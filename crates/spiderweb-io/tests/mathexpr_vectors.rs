@@ -1,0 +1,128 @@
+//! files/mathexpr.py 对照测试（向量由 tools/gen_io_vectors.py 生成）。
+
+mod common;
+
+use common::*;
+use serde_json::Value;
+use spiderweb_io::mathexpr::{CalcValue, calc, calc_int, fmt, formula};
+
+fn close(a: f64, b: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    let d = (a - b).abs();
+    d <= 1e-9 || d <= 1e-9 * a.abs().max(b.abs())
+}
+
+#[test]
+fn calc_vectors() {
+    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    for case in data["calc"].as_array().expect("calc") {
+        let expr = s(&case["expr"]);
+        let got = calc(expr);
+        if !case["ok"].as_bool().expect("ok") {
+            let want = s(&case["error"]);
+            let e = match got {
+                Err(e) => e,
+                Ok(v) => panic!("{expr:?}: Python 报 {want}，Rust 得到 {v:?}"),
+            };
+            assert_eq!(e.to_string(), want, "表达式 {expr:?}");
+            continue;
+        }
+        let got = got.unwrap_or_else(|e| panic!("{expr:?}: Rust 报错 {e}"));
+        match case["kind"].as_str().expect("kind") {
+            "int" => match got {
+                CalcValue::Int(v) => assert_eq!(v, i(&case["value"]) as i128, "表达式 {expr:?}"),
+                other => panic!("{expr:?}: 想要整数，得到 {other:?}"),
+            },
+            "float" => match got {
+                CalcValue::Float(v) => {
+                    assert!(
+                        close(v, f(&case["value"])),
+                        "{expr:?}: {v} != {}",
+                        f(&case["value"])
+                    )
+                }
+                other => panic!("{expr:?}: 想要浮点，得到 {other:?}"),
+            },
+            "complex" => match got {
+                CalcValue::Complex(re, im) => {
+                    assert!(
+                        close(re, f(&case["re"])) && close(im, f(&case["im"])),
+                        "{expr:?}: ({re}, {im}) != ({}, {})",
+                        f(&case["re"]),
+                        f(&case["im"])
+                    );
+                }
+                other => panic!("{expr:?}: 想要复数，得到 {other:?}"),
+            },
+            other => panic!("未知 kind {other}"),
+        }
+    }
+}
+
+#[test]
+fn calc_int_vectors() {
+    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    for case in data["calc_int"].as_array().expect("calc_int") {
+        let expr = s(&case["expr"]);
+        let lo = case["lo"].as_i64();
+        let hi = case["hi"].as_i64();
+        let got = calc_int(expr, lo, hi);
+        if case["ok"].as_bool().expect("ok") {
+            let want = i(&case["value"]);
+            assert_eq!(
+                got.unwrap_or_else(|e| panic!("{expr:?}: Rust 报错 {e}")),
+                want
+            );
+        } else {
+            let want = s(&case["error"]);
+            assert_eq!(
+                got.expect_err("应当报错").to_string(),
+                want,
+                "表达式 {expr:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn formula_vectors() {
+    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    for case in data["formula"].as_array().expect("formula") {
+        let text = s(&case["text"]);
+        if let Some(want) = case.get("compile_error").and_then(Value::as_str) {
+            let e = formula(text).expect_err("应当编译失败");
+            assert_eq!(e.to_string(), want, "公式 {text:?}");
+            continue;
+        }
+        let fn_ = formula(text).unwrap_or_else(|e| panic!("{text:?}: 编译失败 {e}"));
+        for ev in case["evals"].as_array().expect("evals") {
+            let x = f(&ev["x"]);
+            let got = fn_.eval(x);
+            if ev["ok"].as_bool().expect("ok") {
+                let want = f(&ev["value"]);
+                let got = got.unwrap_or_else(|e| panic!("{text:?}({x}): Rust 报错 {e}"));
+                assert!(close(got, want), "{text:?}({x}): {got} != {want}");
+            } else {
+                let want = s(&ev["error"]);
+                let e = match got {
+                    Err(e) => e,
+                    Ok(v) => panic!("{text:?}({x}): Python 报 {want}，Rust 得到 {v}"),
+                };
+                if want == "type" {
+                    continue; // Python TypeError 的消息与 Rust 不同，只要求报错
+                }
+                assert_eq!(e.to_string(), want, "公式 {text:?}({x})");
+            }
+        }
+    }
+}
+
+#[test]
+fn fmt_vectors() {
+    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    for case in data["fmt"].as_array().expect("fmt") {
+        assert_eq!(fmt(f(&case["x"])), s(&case["text"]));
+    }
+}
