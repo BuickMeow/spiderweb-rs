@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 spiderweb-core = { path = "../spiderweb-core" }
 spiderweb-domino = { path = "../spiderweb-domino" }
+spiderweb-io = { path = "../spiderweb-io" }
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
