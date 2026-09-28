@@ -9,4 +9,7 @@ spiderweb-core = { path = "../spiderweb-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
 midly = { workspace = true }
+tempfile = "3"

@@ -3211,6 +3211,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spiderweb-core",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
