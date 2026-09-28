@@ -1,7 +1,7 @@
 //! 主窗口状态：工具栏、侧栏、形状编辑、撤销、自动保存、播放与文件操作。
 //! 钢琴卷帘的绘制与交互在 roll.rs，侧栏在 panels.rs。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,8 @@ use spiderweb_io::project::{
 };
 
 use crate::playback::{DEFAULT_DEVICE, Player};
-use crate::roll::{Drag, View};
+use crate::roll::{Drag, RightDrag, View};
+use crate::roll_menu::MenuState;
 use crate::roll_text::Typing;
 use crate::roll_velocity::VelocityState;
 use crate::text_dialog::FontDialog;
@@ -137,6 +138,12 @@ pub struct App {
     pub arc_bend: bool,
     /// 右键按下时已处理（曲线删点 / 收手柄）：松开时不再取消选择。
     pub right_done: bool,
+    /// 右拖试听的现场（原版 self._scrub）：还没拖够 4px 时 tick 为 None。
+    pub right_drag: Option<RightDrag>,
+    /// 右拖试听正在响的 (通道, 音高) -> 最新音符起点（原版 self._scrub_held）。
+    pub scrub_held: BTreeMap<(u8, i64), i64>,
+    /// 打开着的右键菜单（原版 roll_menu.show_menu）。
+    pub shape_menu: Option<MenuState>,
     pub tool: Tool,
     pub draw_tool: Tool,
     pub live: bool,
@@ -216,6 +223,9 @@ impl App {
             follow: None,
             arc_bend: false,
             right_done: false,
+            right_drag: None,
+            scrub_held: BTreeMap::new(),
+            shape_menu: None,
             tool: Tool::Select,
             draw_tool: Tool::Line,
             live: false,
@@ -323,6 +333,9 @@ impl App {
     }
 
     pub fn apply_project(&mut self, p: Project) {
+        self.scrub_end();
+        self.right_drag = None;
+        self.shape_menu = None;
         self.shapes = p.shapes;
         self.ppq = p.ppq.parse().unwrap_or(960);
         self.beats = p.beats.parse().unwrap_or(4);
@@ -933,6 +946,7 @@ impl App {
     }
 
     pub fn start_play(&mut self) {
+        self.scrub_end();
         let Ok((ppq, bpm, beats)) = self.read_project() else {
             return;
         };
@@ -960,7 +974,57 @@ impl App {
         self.schedule_autosave();
     }
 
+    /// 右拖试听：把鼠标下（tick `t_to`）与刚扫过的音符发声（原版 app.scrub）。
+    /// false = MIDI 打不开，右拖作废、状态栏写错误。
+    pub fn scrub(&mut self, t_from: f64, t_to: f64) -> bool {
+        let device = self.midi_device.clone();
+        if let Err(e) = self.player.open(&device) {
+            self.status = e;
+            return false;
+        }
+        let now = scrub_hits(&self.rendered, t_from, t_to);
+        let gone: Vec<(u8, i64)> = self
+            .scrub_held
+            .keys()
+            .filter(|k| !now.contains_key(*k))
+            .copied()
+            .collect();
+        for k in gone {
+            self.player.note(k.0, k.1.clamp(0, 127) as u8, 0);
+            self.scrub_held.remove(&k);
+        }
+        for (k, (s, v)) in &now {
+            if self.scrub_held.get(k) != Some(s) {
+                if self.scrub_held.contains_key(k) {
+                    self.player.note(k.0, k.1.clamp(0, 127) as u8, 0);
+                }
+                self.player.note(k.0, k.1.clamp(0, 127) as u8, *v);
+                self.scrub_held.insert(*k, *s);
+            }
+        }
+        let ppq = self.ppq.max(1) as f64;
+        self.set_playhead(t_to / ppq);
+        true
+    }
+
+    /// 右拖松开：全部 note off（原版 app.scrub_end）。
+    pub fn scrub_end(&mut self) {
+        for ((ch, p), _) in std::mem::take(&mut self.scrub_held) {
+            self.player.note(ch, p.clamp(0, 127) as u8, 0);
+        }
+    }
+
     // ------------------------------------------------------------ 工具
+
+    /// 双击右键：Select <-> 上次的绘图工具（原版 toggle_select_tool）。
+    pub fn toggle_select_tool(&mut self) {
+        self.tool = if self.tool == Tool::Select {
+            self.draw_tool
+        } else {
+            Tool::Select
+        };
+        self.cancel_draft();
+    }
 
     pub fn cancel_draft(&mut self) {
         crate::roll_text::end_typing(self);
@@ -1010,6 +1074,10 @@ impl App {
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         // 正在打字：按键都归文本（原版 on_key 的 typing 优先级），快捷键让路
         if self.typing.is_some() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        // 右键菜单开着：Esc / 点击由菜单自己处理，快捷键让路
+        if self.shape_menu.is_some() {
             return;
         }
         use egui::{Key, KeyboardShortcut, Modifiers};
@@ -1145,6 +1213,29 @@ impl App {
     }
 }
 
+/// 右拖扫过 tick `t_from..t_to` 时该响的音符（原版 app.scrub 的 `now`）：
+/// 每个 (通道, 音高) 只留起点最新的那个，值 = (起点 tick, 力度)。
+/// 命中条件同原版：起点落在扫过的区间里，或正被扫过（`s <= t_to < e`）。
+pub fn scrub_hits(rendered: &[[i64; 6]], t_from: f64, t_to: f64) -> BTreeMap<(u8, i64), (i64, u8)> {
+    let lo = t_from.min(t_to);
+    let hi = t_from.max(t_to);
+    let mut now: BTreeMap<(u8, i64), (i64, u8)> = BTreeMap::new();
+    for n in rendered {
+        let s = n[0] as f64;
+        let e = n[1] as f64;
+        if !((lo <= s && s <= hi) || (s <= t_to && t_to < e)) {
+            continue;
+        }
+        let (_, ch) = spiderweb_io::midi::slot_track_channel(n[4]);
+        let vel = n[3].clamp(0, 127) as u8;
+        let entry = now.entry((ch, n[2])).or_insert((n[0], vel));
+        if n[0] > entry.0 {
+            *entry = (n[0], vel);
+        }
+    }
+    now
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1219,5 +1310,54 @@ impl eframe::App for App {
         self.stop_play();
         self.autosave_now();
         self.player.close();
+    }
+}
+
+/// 一个渲染音符行 (start, end, pitch, velocity, slot, owner)。
+#[cfg(test)]
+fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> [i64; 6] {
+    [s, e, p, v, slot, 0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_hits_takes_notes_under_and_swept() {
+        let rendered = vec![
+            test_note(0, 100, 60, 64, 0),   // 扫之前就结束了
+            test_note(0, 400, 61, 70, 0),   // 还在响（第二个条件）
+            test_note(200, 300, 62, 80, 0), // 起点在扫过的区间里
+        ];
+        let got = scrub_hits(&rendered, 150.0, 250.0);
+        assert_eq!(got.get(&(0, 61)), Some(&(0, 70)));
+        assert_eq!(got.get(&(0, 62)), Some(&(200, 80)));
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn scrub_hits_keeps_latest_start_per_key() {
+        let rendered = vec![
+            test_note(200, 300, 62, 80, 0),
+            test_note(220, 260, 62, 90, 0), // 同键更晚：背靠背连击响最新的
+            test_note(100, 400, 62, 50, 9), // slot 9 = 鼓通道后的通道 10，另一路
+        ];
+        let got = scrub_hits(&rendered, 150.0, 250.0);
+        assert_eq!(got.get(&(0, 62)), Some(&(220, 90)));
+        assert_eq!(got.get(&(10, 62)), Some(&(100, 50)));
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn scrub_hits_sweeps_either_direction() {
+        let rendered = vec![test_note(300, 400, 61, 64, 0)];
+        let right = scrub_hits(&rendered, 150.0, 350.0);
+        let left = scrub_hits(&rendered, 350.0, 150.0);
+        assert_eq!(right.get(&(0, 61)), Some(&(300, 64)));
+        assert_eq!(left.get(&(0, 61)), Some(&(300, 64)));
+        // 区间不相交就不响
+        let missed = scrub_hits(&rendered, 500.0, 600.0);
+        assert!(missed.is_empty());
     }
 }

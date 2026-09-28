@@ -305,6 +305,19 @@ pub(crate) enum HandleId {
     Stroke(crate::roll_live::StrokeHandleId),
 }
 
+/// 右键拖动的现场（原版 pianoroll 的 self._scrub）：还没拖够 4px 时 `tick` 为 None。
+#[derive(Clone, Debug)]
+pub struct RightDrag {
+    /// 按下时的位置（卷帘局部坐标）：松开时在这里找形状开菜单
+    pub start: Pos2,
+    /// 开始试听后的当前 tick；None = 还没开始
+    pub tick: Option<f64>,
+    /// 松开时没拖动也没命中形状：取消选择（原版 deselect）
+    pub deselect: bool,
+    /// 按下时有没有按住 Shift（菜单里"就地加锚点"用）
+    pub shift: bool,
+}
+
 struct Inputs {
     pos: Option<Pos2>,
     interact: Option<Pos2>,
@@ -313,8 +326,8 @@ struct Inputs {
     primary_down: bool,
     secondary_pressed: bool,
     secondary_released: bool,
-    #[allow(dead_code)] // 右拖试听待移植
     secondary_down: bool,
+    secondary_double: bool,
     middle_pressed: bool,
     middle_released: bool,
     double: bool,
@@ -339,6 +352,9 @@ fn inputs(ui: &egui::Ui) -> Inputs {
         secondary_down: i.pointer.secondary_down(),
         middle_pressed: i.pointer.button_pressed(egui::PointerButton::Middle),
         middle_released: i.pointer.button_released(egui::PointerButton::Middle),
+        secondary_double: i
+            .pointer
+            .button_double_clicked(egui::PointerButton::Secondary),
         double: i
             .pointer
             .button_double_clicked(egui::PointerButton::Primary),
@@ -359,26 +375,31 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         app.view.fit_shapes(&app.shapes, app.beats);
     }
     if !app.view.ready {
+        crate::roll_menu::menu_ui(app, ui);
         return;
     }
-    let input = inputs(ui);
-    handle_input(app, &input, Rect::from_min_size(Pos2::ZERO, rect.size()));
-    let _ = response;
-    if app.drag.is_none()
-        && let Some(pos) = input.pos
-        && pos.x >= app.view.kb_w
-        && pos.y >= app.view.ruler_h
-        && pos.x <= app.view.w
-        && pos.y <= app.view.h
-    {
-        let icon = if app.draft.is_none() && hit_handle(app, pos).is_some() {
-            egui::CursorIcon::Move // 抓住把手（原版 fleur）
-        } else {
-            crate::roll_custom::custom_cursor(app, crate::roll_custom::custom_hit(app, pos))
-        };
-        ui.ctx().set_cursor_icon(icon);
+    // 有弹出层（右键菜单 / 下拉框）开着：卷帘输入让路（原版 tk 菜单会抓走事件）
+    if !crate::roll_menu::is_popup_open(ui.ctx()) {
+        let input = inputs(ui);
+        handle_input(app, &input, Rect::from_min_size(Pos2::ZERO, rect.size()));
+        if app.drag.is_none()
+            && let Some(pos) = input.pos
+            && pos.x >= app.view.kb_w
+            && pos.y >= app.view.ruler_h
+            && pos.x <= app.view.w
+            && pos.y <= app.view.h
+        {
+            let icon = if app.draft.is_none() && hit_handle(app, pos).is_some() {
+                egui::CursorIcon::Move // 抓住把手（原版 fleur）
+            } else {
+                crate::roll_custom::custom_cursor(app, crate::roll_custom::custom_hit(app, pos))
+            };
+            ui.ctx().set_cursor_icon(icon);
+        }
     }
+    let _ = response;
     paint(app, &painter, rect);
+    crate::roll_menu::menu_ui(app, ui);
 }
 
 // ---------------------------------------------------------------- 坐标与命中
@@ -568,13 +589,19 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
-        on_right(app, pos, input);
+        app.right_drag = on_right(app, pos, input);
     }
-    if input.secondary_released
-        && let Some(pos) = input.pos
-        && rect.contains(pos)
+    if input.secondary_down
+        && let Some(pos) = input.interact.or(input.pos)
     {
-        on_right_release(app, pos);
+        on_right_drag(app, pos);
+    }
+    if input.secondary_released {
+        on_right_release(app);
+        app.right_drag = None;
+    }
+    if input.secondary_double {
+        app.toggle_select_tool();
     }
     if input.middle_pressed
         && let Some(pos) = input.pos
@@ -1373,23 +1400,17 @@ fn on_middle_release(app: &mut App, pos: Pos2, input: &Inputs) {
     }
 }
 
-fn on_right(app: &mut App, pos: Pos2, input: &Inputs) {
+/// 右键按下：画一半的折线 / 弧收尾，删漏斗 / 曲线 / 笔画把手；
+/// 没被处理又在卷帘区里就返回右拖试听的现场（原版 on_right）。
+fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
     app.right_done = false;
-    let is_poly = app
-        .draft
-        .as_ref()
-        .map(|d| d.kind == Kind::Poly)
-        .unwrap_or(false);
-    let is_arc = app
-        .draft
-        .as_ref()
-        .map(|d| d.kind == Kind::Arc)
-        .unwrap_or(false);
+    let kind = app.draft.as_ref().map(|d| d.kind);
+    let finished = app.follow.is_some() || matches!(kind, Some(Kind::Poly) | Some(Kind::Arc));
     if app.follow.is_some() {
         app.cancel_draft();
-    } else if is_poly {
+    } else if kind == Some(Kind::Poly) {
         finish_poly(app);
-    } else if is_arc {
+    } else if kind == Some(Kind::Arc) {
         app.cancel_draft();
     }
     // 右键漏斗的曲线起点 / 锚点 / 手柄：删掉或收回（原版 delete_funnel_handle）
@@ -1415,7 +1436,7 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) {
         && app.curve_delete_handle(i)
     {
         app.right_done = true;
-        return;
+        return None;
     }
     // 右键被拾取曲线笔画的锚点 = 删掉，手柄 = 收回（笔画点不特殊处理）
     let custom_hid = if app.draft.is_none() {
@@ -1433,18 +1454,88 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) {
         crate::roll_live::delete_stroke_handle(app, h);
         app.right_done = true;
     }
+    if app.right_done {
+        return None;
+    }
+    if pos.x < app.view.kb_w {
+        // 键盘列上：取消选择（原版 on_right 的 else 分支）
+        if !finished {
+            app.cancel_draft();
+            app.select(None, false);
+        }
+        return None;
+    }
+    Some(RightDrag {
+        start: pos,
+        tick: None,
+        deselect: !finished,
+        shift: input.shift,
+    })
 }
 
-fn on_right_release(app: &mut App, pos: Pos2) {
+/// 右键拖动时的 tick（原版 scrub_tick）：键盘列以右、不小于 0。
+fn scrub_tick(app: &App, pos: Pos2) -> f64 {
+    let x = pos.x.max(app.view.kb_w);
+    (app.view.b_of(x) * app.ppq as f64).max(0.0)
+}
+
+/// 右键拖动：先按 4px 判断是试听而不是菜单，然后扫过哪些音符就响哪些（原版 on_right_drag）。
+fn on_right_drag(app: &mut App, pos: Pos2) {
+    app.position = Some(position_text(app, pos));
+    let Some(sc) = app.right_drag.as_ref() else {
+        return;
+    };
+    if sc.tick.is_none() {
+        if (pos - sc.start).length() < 4.0 {
+            return;
+        }
+        app.stop_play();
+        let tick = scrub_tick(app, pos);
+        if let Some(sc) = app.right_drag.as_mut() {
+            sc.tick = Some(tick);
+        }
+        if !app.scrub(tick, tick) {
+            app.right_drag = None;
+        }
+        return;
+    }
+    let prev = app.right_drag.as_ref().and_then(|s| s.tick);
+    let tick = scrub_tick(app, pos);
+    if let Some(prev) = prev {
+        if !app.scrub(prev, tick) {
+            app.right_drag = None;
+            return;
+        }
+        if let Some(sc) = app.right_drag.as_mut() {
+            sc.tick = Some(tick);
+        }
+    }
+}
+
+/// 右键松开：拖过 = 停试听；点形状 = 菜单；点空白 = 取消选择（原版 on_right_release）。
+fn on_right_release(app: &mut App) {
+    let sc = app.right_drag.take();
     if std::mem::take(&mut app.right_done) {
         return; // 按下时已处理（曲线删点 / 收手柄）
     }
-    if app.draft.is_none() && !app.sels.is_empty() {
-        let i = hit_shape(app, pos);
-        if i.is_none() {
-            app.select(None, false);
-        }
+    let Some(sc) = sc else {
+        return;
+    };
+    if sc.tick.is_some() {
+        app.scrub_end();
+        return;
     }
+    if !sc.deselect {
+        return; // 刚画完折线 / 弧，或取消了跟鼠标的草稿
+    }
+    if app.draft.is_none()
+        && let Some(i) = hit_shape(app, sc.start)
+    {
+        crate::roll_menu::open_menu(app, i, sc.start, sc.shift);
+        return;
+    }
+    app.cancel_draft();
+    app.select(None, false);
 }
 
 fn on_wheel(app: &mut App, pos: Pos2, input: &Inputs) {

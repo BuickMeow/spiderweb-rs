@@ -311,8 +311,13 @@ fn read_input(ui: &egui::Ui) -> Inputs {
 /// 面板入口：工具条、键盘、输入、绘制。
 pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
     velocity_toolbar(app, ui);
+    // 有弹出层（右键菜单 / 下拉框）开着：面板输入让路
+    let popup_open = crate::roll_menu::is_popup_open(ui.ctx());
     // Enter = 完成最后的线 / 曲线（原版 pianoroll.on_key -> vel.confirm）
-    if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if !popup_open
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    {
         app.vel.confirm();
     }
     let rect = ui.available_rect_before_wrap();
@@ -326,9 +331,11 @@ pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let _ = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-    let input = read_input(ui);
-    handle_input(app, &input, pane);
-    set_cursor(app, &input, pane, ui.ctx());
+    if !popup_open {
+        let input = read_input(ui);
+        handle_input(app, &input, pane);
+        set_cursor(app, &input, pane, ui.ctx());
+    }
     paint(app, &painter, pane);
 }
 

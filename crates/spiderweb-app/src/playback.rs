@@ -79,7 +79,6 @@ impl Player {
     }
 
     /// 立刻发一个音符（右拖试听）。
-    #[allow(dead_code)] // 右拖试听待移植
     pub fn note(&mut self, ch: u8, key: u8, vel: u8) {
         if let Some(c) = self.conn.as_mut() {
             let _ = c.send(&[0x90 | (ch & 0x0f), key & 0x7f, vel & 0x7f]);
