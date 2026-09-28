@@ -2,6 +2,7 @@
 members = [
     "crates/spiderweb-core",
     "crates/spiderweb-domino",
+    "crates/spiderweb-io",
     "crates/spiderweb-app",
 ]
 resolver = "2"
