@@ -277,7 +277,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
         .unwrap_or_default();
 
     // 主体至少这么高：egui 的窗口会缩到内容高度，不设的话会比原版的 900x620 矮很多
-    let body_h = (ctx.screen_rect().height() * 0.72).clamp(520.0, 900.0);
+    let body_h = (ctx.viewport_rect().height() * 0.72).clamp(520.0, 900.0);
     egui::Window::new(format!("Spiderweb {VERSION} — Help"))
         .open(&mut open)
         .default_size([960.0, 760.0])
