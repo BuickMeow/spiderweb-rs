@@ -10,7 +10,7 @@
 
 use crate::arc::arc_points;
 use crate::shape::{Tumour, TumourShape, TumourSide, TumourWrap};
-use crate::{dist, hypot2, round_half_even, Pt};
+use crate::{Pt, dist, hypot2, round_half_even};
 use serde_json::{Map, Value};
 
 /// 最多多少个凸起（tumour.py MAX_TUMOURS）。
@@ -57,11 +57,7 @@ fn bisect_left(a: &[f64], x: f64) -> usize {
 fn py_mod(x: f64, y: f64) -> f64 {
     let r = x % y;
     if r != 0.0 {
-        if (r < 0.0) != (y < 0.0) {
-            r + y
-        } else {
-            r
-        }
+        if (r < 0.0) != (y < 0.0) { r + y } else { r }
     } else {
         0.0_f64.copysign(y)
     }
@@ -69,20 +65,12 @@ fn py_mod(x: f64, y: f64) -> f64 {
 
 /// CPython `max(a, b)`（并列时保留先出现的 a）。
 fn py_max(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
+    if b > a { b } else { a }
 }
 
 /// CPython `min(a, b)`（并列时保留先出现的 a）。
 fn py_min(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
+    if b < a { b } else { a }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,11 +195,7 @@ fn py_int(v: &Value) -> Option<i64> {
 /// 一个数值字段：取出来、转成 float、不是有限数就当没有（`None`）。
 fn num(obj: &Map<String, Value>, key: &str) -> Option<f64> {
     let v = py_float(obj.get(key)?)?;
-    if v.is_finite() {
-        Some(v)
-    } else {
-        None
-    }
+    if v.is_finite() { Some(v) } else { None }
 }
 
 /// 从文件里读出的肿瘤设置（不是字典时为 None；对应 Python `clean_tumour`）。

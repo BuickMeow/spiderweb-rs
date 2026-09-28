@@ -20,19 +20,39 @@ fn paths_vectors() {
             }
             "direction_changes" => {
                 let g = P::direction_changes(&floats(&args[0]));
-                let w: Vec<usize> = out.as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
+                let w: Vec<usize> = out
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
                 assert_eq!(g, w, "{ctx}");
             }
             "spans" => {
-                let lo: Vec<usize> = args[0].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
-                let hi: Vec<usize> = args[1].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
+                let lo: Vec<usize> = args[0]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
+                let hi: Vec<usize> = args[1]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
                 let rev: Option<Vec<bool>> = if args[2].is_null() {
                     None
                 } else {
                     Some(args[2].as_array().unwrap().iter().map(b).collect())
                 };
                 let g = P::spans(&lo, &hi, rev.as_deref());
-                let w: Vec<usize> = out.as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
+                let w: Vec<usize> = out
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
                 assert_eq!(g, w, "{ctx}");
             }
             "stretch_ends" => {
@@ -56,11 +76,21 @@ fn paths_vectors() {
                 assert_rows3_eq(&g, out, &ctx);
             }
             "parts_notes" => {
-                let first: Vec<usize> = args[1].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
+                let first: Vec<usize> = args[1]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
                 let tails: Vec<bool> = args[2].as_array().unwrap().iter().map(b).collect();
                 let (notes, per) = P::parts_notes(&pts(&args[0]), &first, &tails, b(&args[3]));
                 assert_rows3_eq(&notes, &out[0], &ctx);
-                let wper: Vec<usize> = out[1].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect();
+                let wper: Vec<usize> = out[1]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect();
                 assert_eq!(per, wper, "{ctx} per");
             }
             "path_notes" => {

@@ -330,7 +330,11 @@ impl Default for Shape {
 impl Shape {
     /// 新建一个形状（对应 engine.make_shape 的简化：不做种类专属初始化，由调用方负责）。
     pub fn new(kind: Kind, pts: Vec<Pt>) -> Self {
-        let mut sh = Self { kind, pts, ..Self::default() };
+        let mut sh = Self {
+            kind,
+            pts,
+            ..Self::default()
+        };
         if kind == Kind::Funnel {
             sh.starts = Vec::new();
         }

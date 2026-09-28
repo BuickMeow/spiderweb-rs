@@ -14,7 +14,10 @@ pub struct PyRandom {
 
 impl PyRandom {
     pub fn new(seed: i64) -> Self {
-        let mut r = Self { mt: [0; N], index: N };
+        let mut r = Self {
+            mt: [0; N],
+            index: N,
+        };
         r.seed(seed);
         r
     }
@@ -49,9 +52,10 @@ impl PyRandom {
         let mut j = 0usize;
         let mut k = N.max(key.len());
         while k > 0 {
-            self.mt[i] = (self.mt[i] ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1664525)))
-                .wrapping_add(key[j])
-                .wrapping_add(j as u32);
+            self.mt[i] = (self.mt[i]
+                ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1664525)))
+            .wrapping_add(key[j])
+            .wrapping_add(j as u32);
             i += 1;
             j += 1;
             if i >= N {
@@ -65,8 +69,9 @@ impl PyRandom {
         }
         k = N - 1;
         while k > 0 {
-            self.mt[i] = (self.mt[i] ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1566083941)))
-                .wrapping_sub(i as u32);
+            self.mt[i] = (self.mt[i]
+                ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1566083941)))
+            .wrapping_sub(i as u32);
             i += 1;
             if i >= N {
                 self.mt[0] = self.mt[N - 1];
@@ -85,7 +90,8 @@ impl PyRandom {
             }
             for kk in N - M..N - 1 {
                 let y = (self.mt[kk] & UPPER_MASK) | (self.mt[kk + 1] & LOWER_MASK);
-                self.mt[kk] = self.mt[kk - (N - M)] ^ (y >> 1) ^ if y & 1 == 1 { MATRIX_A } else { 0 };
+                self.mt[kk] =
+                    self.mt[kk - (N - M)] ^ (y >> 1) ^ if y & 1 == 1 { MATRIX_A } else { 0 };
             }
             let y = (self.mt[N - 1] & UPPER_MASK) | (self.mt[0] & LOWER_MASK);
             self.mt[N - 1] = self.mt[M - 1] ^ (y >> 1) ^ if y & 1 == 1 { MATRIX_A } else { 0 };
@@ -144,7 +150,9 @@ mod tests {
         // python3 -c "import random; r=random.Random(42); print([r.choice((1,-1)) for _ in range(16)])"
         assert_eq!(
             choices,
-            vec![1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+            vec![
+                1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+            ]
         );
     }
 }

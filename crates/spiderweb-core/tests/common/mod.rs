@@ -6,8 +6,9 @@ use serde_json::Value;
 
 pub fn cases(module: &str) -> Vec<Value> {
     let path = format!("{}/tests/vectors/{module}.json", env!("CARGO_MANIFEST_DIR"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("缺少向量文件 {path}（先运行 tools/gen_{module}_vectors.py）：{e}"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("缺少向量文件 {path}（先运行 tools/gen_{module}_vectors.py）：{e}")
+    });
     let data: Value = serde_json::from_str(&text).expect("向量 JSON 解析失败");
     data["cases"].as_array().expect("cases 不是数组").clone()
 }

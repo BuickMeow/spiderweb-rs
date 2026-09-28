@@ -31,7 +31,11 @@ pub fn env_at(env: &[Pt], u: f64, left: bool) -> f64 {
     }
     let (u0, v0) = (env[i - 1][0], env[i - 1][1]);
     let (u1, v1) = (env[i][0], env[i][1]);
-    if u1 == u0 { v0 } else { v0 + (v1 - v0) * (u - u0) / (u1 - u0) }
+    if u1 == u0 {
+        v0
+    } else {
+        v0 + (v1 - v0) * (u - u0) / (u1 - u0)
+    }
 }
 
 /// 一批 u 的包络值（envelope.env_values），与逐点调用同结果。
@@ -55,7 +59,9 @@ pub fn paint_env(env: &[Pt], pts: &[Pt]) -> Vec<Pt> {
 
 /// 去掉 0..1 之外无关的点、重复点、直线段中间的点（envelope.tidy_env）。
 pub fn tidy_env(env: &[Pt]) -> Vec<Pt> {
-    let inside: Vec<usize> = (0..env.len()).filter(|&i| (0.0..=1.0).contains(&env[i][0])).collect();
+    let inside: Vec<usize> = (0..env.len())
+        .filter(|&i| (0.0..=1.0).contains(&env[i][0]))
+        .collect();
     let (lo, hi) = if inside.is_empty() {
         (0, env.len())
     } else {
@@ -78,7 +84,10 @@ pub fn tidy_env(env: &[Pt]) -> Vec<Pt> {
                 *out.last_mut().unwrap() = p;
                 continue;
             }
-            if u0 < u1 && u1 < p[0] && (v0 + (p[1] - v0) * (u1 - u0) / (p[0] - u0) - v1).abs() < 1e-7 {
+            if u0 < u1
+                && u1 < p[0]
+                && (v0 + (p[1] - v0) * (u1 - u0) / (p[0] - u0) - v1).abs() < 1e-7
+            {
                 *out.last_mut().unwrap() = p;
                 continue;
             }

@@ -5,8 +5,8 @@
 //! 每第三个点（0, 3, 6, ...）是曲线经过的锚点，两个锚点之间是两个手柄：
 //! 前一个锚点的出手柄与后一个锚点的入手柄。
 
-use crate::{Pt, dist, hypot2};
 use crate::shape::Sym;
+use crate::{Pt, dist, hypot2};
 
 /// 一条曲线：`pts` 为扁平点列，`sharp` 为尖角锚点序号，`sym` 为对称方式。
 #[derive(Clone, Debug, PartialEq)]

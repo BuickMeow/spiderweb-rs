@@ -82,7 +82,11 @@ fn remap(pts: &mut [Pt], i: usize, j: usize, move_start: bool, move_end: bool, e
     let d = if pe > ps { 1.0 } else { -1.0 };
     let ns = if move_start { ps as f64 - d * EDGE } else { ys };
     let ne = if move_end {
-        if end_dot { pe as f64 - d * EDGE } else { pe as f64 + d * EDGE }
+        if end_dot {
+            pe as f64 - d * EDGE
+        } else {
+            pe as f64 + d * EDGE
+        }
     } else {
         ye
     };
@@ -107,7 +111,14 @@ pub fn stretch_ends(path: &[Pt], end_dot: bool) -> Vec<Pt> {
         remap(&mut pts, 0, n - 1, true, true, end_dot);
     } else {
         remap(&mut pts, 0, turns[1], true, false, false);
-        remap(&mut pts, turns[turns.len() - 2], n - 1, false, true, end_dot);
+        remap(
+            &mut pts,
+            turns[turns.len() - 2],
+            n - 1,
+            false,
+            true,
+            end_dot,
+        );
     }
     pts
 }
@@ -188,7 +199,9 @@ pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
     lo.extend(&cuts);
     let mut hi: Vec<usize> = cuts.clone();
     hi.push(n - 1);
-    let rev: Vec<bool> = (0..lo.len()).map(|k| pts[hi[k]][0] < pts[lo[k]][0]).collect();
+    let rev: Vec<bool> = (0..lo.len())
+        .map(|k| pts[hi[k]][0] < pts[lo[k]][0])
+        .collect();
     let q_idx = spans(&lo, &hi, Some(&rev));
     let q: Vec<Pt> = q_idx.iter().map(|&i| pts[i]).collect();
 
@@ -204,7 +217,9 @@ pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
     for &pe in &piece_end[..piece_end.len() - 1] {
         same[pe] = false;
     }
-    let up: Vec<bool> = (0..q.len() - 1).map(|i| (q[i + 1][0] - q[i][0]).abs() < 1e-9).collect();
+    let up: Vec<bool> = (0..q.len() - 1)
+        .map(|i| (q[i + 1][0] - q[i][0]).abs() < 1e-9)
+        .collect();
     let mut split: Vec<usize> = Vec::new();
     for i in 1..up.len() {
         if same[i] && same[i - 1] && up[i] != up[i - 1] {
@@ -212,7 +227,9 @@ pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
         }
     }
 
-    let mut first: Vec<usize> = (0..size.len()).map(|k| piece_end[k] + 1 - size[k]).collect();
+    let mut first: Vec<usize> = (0..size.len())
+        .map(|k| piece_end[k] + 1 - size[k])
+        .collect();
     first.extend(&split);
     first.sort_unstable();
     let mut last: Vec<usize> = split;
@@ -242,7 +259,12 @@ pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
 }
 
 /// 从左到右的片段 → 每跨一个 pitch 一个音符（paths.parts_notes）。返回 (音符, 每段音符数)。
-pub fn parts_notes(r: &[Pt], first: &[usize], tails: &[bool], counts: bool) -> (Vec<[i64; 3]>, Vec<usize>) {
+pub fn parts_notes(
+    r: &[Pt],
+    first: &[usize],
+    tails: &[bool],
+    counts: bool,
+) -> (Vec<[i64; 3]>, Vec<usize>) {
     let k_parts = first.len();
     let mut last: Vec<usize> = first[1..].iter().map(|&f| f - 1).collect();
     last.push(r.len() - 1);
@@ -386,10 +408,16 @@ pub fn dot_segment_notes(path: &[Pt]) -> Vec<[i64; 3]> {
         acc += p_;
         cum.push(acc - 1);
     }
-    let tail_rows: Vec<usize> = (0..per.len()).filter(|&k| per[k] >= 2).map(|k| row[cum[k]]).collect();
+    let tail_rows: Vec<usize> = (0..per.len())
+        .filter(|&k| per[k] >= 2)
+        .map(|k| row[cum[k]])
+        .collect();
     let in_tails: Vec<bool> = row.iter().map(|r| tail_rows.contains(r)).collect();
     let at = unique_ranks2(&raw.iter().map(|r| (r[0], r[2])).collect::<Vec<_>>());
-    let non_tail_rows: Vec<usize> = (0..raw.len()).filter(|&i| !in_tails[i]).map(|i| at[i]).collect();
+    let non_tail_rows: Vec<usize> = (0..raw.len())
+        .filter(|&i| !in_tails[i])
+        .map(|i| at[i])
+        .collect();
     (0..raw.len())
         .filter(|&i| !(in_tails[i] && non_tail_rows.contains(&at[i])))
         .map(|i| raw[i])
@@ -401,7 +429,9 @@ pub fn unique_ranks3(rows: &[[i64; 3]]) -> Vec<usize> {
     let mut sorted = rows.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    rows.iter().map(|r| sorted.binary_search(r).unwrap()).collect()
+    rows.iter()
+        .map(|r| sorted.binary_search(r).unwrap())
+        .collect()
 }
 
 /// (start, key) 对的排名。
@@ -409,5 +439,7 @@ pub fn unique_ranks2(rows: &[(i64, i64)]) -> Vec<usize> {
     let mut sorted = rows.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    rows.iter().map(|r| sorted.binary_search(r).unwrap()).collect()
+    rows.iter()
+        .map(|r| sorted.binary_search(r).unwrap())
+        .collect()
 }
