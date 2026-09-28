@@ -118,6 +118,10 @@ pub struct App {
     pub sels: BTreeSet<usize>,
     pub sel: Option<usize>,
     pub draft: Option<Shape>,
+    /// 正在画的方 / 圆 / 三角是哪个工具（原版 draft["draw"]）
+    pub draft_draw: Option<Tool>,
+    /// 选中的自定义形状被拾取的笔画号（原版 app.stroke）
+    pub stroke: Option<usize>,
     pub drag: Option<Drag>,
     pub follow: Option<Drag>,
     pub arc_bend: bool,
@@ -141,8 +145,6 @@ pub struct App {
     pub funnel_defaults: FunnelDefaults,
     pub free_smooth: i64,
     pub text_defaults: TextSettings,
-    #[allow(dead_code)] // 自定义形状工具待移植
-    pub custom_shape: String,
     pub playhead: f64,
     pub rendered: Vec<[i64; 6]>,
     pub note_counts: Vec<usize>,
@@ -165,6 +167,8 @@ pub struct App {
     pub loaded: bool,
     pub panel_sel: Option<usize>,
     pub vel_text: [String; 2],
+    /// 自定义形状面板的 gate 文本框（ticks）
+    pub custom_gate_text: String,
 }
 
 impl App {
@@ -180,6 +184,8 @@ impl App {
             sels: BTreeSet::new(),
             sel: None,
             draft: None,
+            draft_draw: None,
+            stroke: None,
             drag: None,
             follow: None,
             arc_bend: false,
@@ -207,7 +213,6 @@ impl App {
             funnel_defaults: FunnelDefaults::default(),
             free_smooth: 0,
             text_defaults: TextSettings::default(),
-            custom_shape: "Circle".to_string(),
             playhead: 0.0,
             rendered: Vec::new(),
             note_counts: Vec::new(),
@@ -229,6 +234,7 @@ impl App {
             loaded: false,
             panel_sel: None,
             vel_text: ["127".into(), "127".into()],
+            custom_gate_text: "60".into(),
         };
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
@@ -310,6 +316,9 @@ impl App {
         self.view.apply_state(p.view);
         self.sels.clear();
         self.sel = None;
+        self.stroke = None;
+        self.draft = None;
+        self.draft_draw = None;
     }
 
     pub fn to_project(&self) -> Project {
@@ -505,7 +514,13 @@ impl App {
     pub fn select_many(&mut self, indices: BTreeSet<usize>, primary: Option<usize>) {
         self.sels = indices;
         self.sel = primary;
+        self.stroke = None;
         self.edit_key = None;
+    }
+
+    /// 拾取选中自定义形状的笔画 k（None = 取消拾取）（原版 set_stroke）。
+    pub fn set_stroke(&mut self, k: Option<usize>) {
+        self.stroke = k;
     }
 
     pub fn select_all(&mut self) {
@@ -532,6 +547,17 @@ impl App {
         }
         self.select(None, false);
         self.shapes_changed();
+    }
+
+    /// Delete 键：选中自定义形状的一条笔画时删笔画，否则删形状（原版 on_key 的 delete）。
+    pub fn delete_pressed(&mut self) {
+        if self.sels.len() == 1
+            && let (Some(i), Some(k)) = (self.sel, self.stroke)
+        {
+            crate::roll_live::delete_stroke(self, i, k);
+            return;
+        }
+        self.delete_selected();
     }
 
     pub fn delete_all(&mut self) {
@@ -886,15 +912,20 @@ impl App {
 
     pub fn cancel_draft(&mut self) {
         self.draft = None;
+        self.draft_draw = None;
         self.drag = None;
         self.follow = None;
         self.arc_bend = false;
     }
 
+    /// 提交草稿：Live 绘制 / 方框进自定义形状（原版 commit_draft -> live_commit）。
     pub fn commit_draft(&mut self) {
-        if let Some(sh) = self.draft.take() {
+        if let Some(sh) = self.draft.take()
+            && !crate::roll_live::live_commit(self, &sh)
+        {
             self.add_shape(sh);
         }
+        self.draft_draw = None;
         self.arc_bend = false;
     }
 
@@ -913,6 +944,7 @@ impl App {
             return true;
         }
         self.draft = None;
+        self.draft_draw = None;
         self.pending_big = Some(PendingBig {
             shapes: vec![d],
             total: n,
@@ -973,10 +1005,11 @@ impl App {
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Escape)) {
                 self.cancel_draft();
+                self.set_stroke(None);
                 self.select(None, false);
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Delete)) {
-                self.delete_selected();
+                self.delete_pressed();
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::G)) {
                 self.live = !self.live;
