@@ -2,12 +2,72 @@
 
 use eframe::egui;
 
-use spiderweb_core::shape::Kind;
+use spiderweb_core::shape::{Kind, TextAlign, TextSettings, TextUnit};
+use spiderweb_core::text::{self, TextChange};
 use spiderweb_io::project::{ChannelMode, ChannelSplit};
 
 use crate::app::{App, Tool};
 
 const SNAPS: [&str; 7] = ["Off", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"];
+
+/// 字重选择（fonts.WEIGHTS）。
+const WEIGHTS: [(i32, &str); 9] = [
+    (100, "Thin"),
+    (200, "Extra light"),
+    (300, "Light"),
+    (400, "Regular"),
+    (500, "Medium"),
+    (600, "Semibold"),
+    (700, "Bold"),
+    (800, "Extra bold"),
+    (900, "Black"),
+];
+
+/// 最接近的字重名（原版 sync_text 的 min(WEIGHTS, ...)）。
+fn weight_name(w: i32) -> &'static str {
+    WEIGHTS
+        .iter()
+        .min_by_key(|(v, _)| (v - w).abs())
+        .map(|(_, n)| *n)
+        .unwrap_or("Regular")
+}
+
+/// 面板的一行数字框（原版 ENTRIES 的 label / unit / range / scrub 步长）。
+struct NumberRow<'a> {
+    label: &'a str,
+    unit: &'a str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+    speed: f64,
+}
+
+fn number_row(
+    ui: &mut egui::Ui,
+    row: NumberRow<'_>,
+    changes: &mut TextChange,
+    any: &mut bool,
+    set: impl FnOnce(&mut TextChange, f64),
+) {
+    ui.horizontal(|ui| {
+        ui.label(row.label);
+        let mut v = row.value;
+        if ui
+            .add(
+                egui::DragValue::new(&mut v)
+                    .speed(row.speed)
+                    .range(row.range)
+                    .max_decimals(4),
+            )
+            .changed()
+        {
+            set(changes, v);
+            *any = true;
+        }
+        if !row.unit.is_empty() {
+            ui.weak(row.unit);
+        }
+    });
+}
 
 fn parse_int(text: &str, lo: i64, hi: i64) -> Option<i64> {
     spiderweb_io::mathexpr::calc_int(text, Some(lo), Some(hi)).ok()
@@ -84,6 +144,7 @@ impl App {
         self.project_section(ui);
         self.shapes_section(ui);
         self.defaults_section(ui);
+        self.text_section(ui);
         self.points_section(ui);
     }
 
@@ -350,6 +411,222 @@ impl App {
             }
         }
         self.shapes_changed();
+    }
+
+    // ------------------------------------------------------------ 文本面板
+
+    /// 选中的文本形状（按下标排序）（原版 text_shapes）。
+    pub fn text_shapes(&self) -> Vec<usize> {
+        self.sels
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.shapes
+                    .get(i)
+                    .map(|sh| sh.text.is_some())
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    /// 面板显示的（设置, size 框的数字）：正在输入的、选中的第一段文本，或新文本的默认值
+    /// （原版 text_current；size 跟着轴走，见 shown_size）。
+    fn text_current(&self) -> (TextSettings, f64) {
+        if let Some((tx, axes)) = crate::roll_text::typing_state(self) {
+            let cap = text::text_font(&tx).cap;
+            return (tx.clone(), text::shown_size(&tx, axes, cap));
+        }
+        if let Some(&i) = self.text_shapes().first()
+            && let Some(sh) = self.shapes.get(i)
+        {
+            let tx = sh.text.clone().unwrap_or_default();
+            if let Some(axes) = text::text_axes(sh) {
+                let cap = text::text_font(&tx).cap;
+                let size = text::shown_size(&tx, axes, cap);
+                return (tx, size);
+            }
+            let size = tx.size;
+            return (tx, size);
+        }
+        (self.text_defaults.clone(), self.text_defaults.size)
+    }
+
+    /// 文本面板（原版 panel_text）：字体 / 字号 / 字重 / 字距 / 行距 / 对齐 / 阈值 / 加粗。
+    fn text_section(&mut self, ui: &mut egui::Ui) {
+        let text_shapes = self.text_shapes();
+        if self.typing.is_none() && self.tool != Tool::Text && text_shapes.is_empty() {
+            return;
+        }
+        if self.font_families.is_empty() {
+            self.font_families = spiderweb_core::fonts::font_families();
+        }
+        let (tx, size) = self.text_current();
+        let font_found = text::text_font(&tx).found();
+        let mut changes = TextChange::default();
+        let mut any = false;
+        egui::CollapsingHeader::new("Text")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Font");
+                    egui::ComboBox::from_id_salt("text_font")
+                        .selected_text(tx.font.clone())
+                        .width(150.0)
+                        .show_ui(ui, |ui| {
+                            for f in &self.font_families {
+                                if ui.selectable_label(tx.font == *f, f).clicked() {
+                                    changes.font = Some(f.clone());
+                                    any = true;
+                                }
+                            }
+                        });
+                    if ui
+                        .button("选择字体…")
+                        .on_hover_text(
+                            "Pick the font (you can type its name in the window that opens).",
+                        )
+                        .clicked()
+                    {
+                        crate::text_dialog::open_font_dialog(self, &tx);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Size");
+                    let mut v = size;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut v)
+                                .speed(1.0)
+                                .range(0.01..=2000.0)
+                                .max_decimals(4),
+                        )
+                        .changed()
+                    {
+                        changes.size = Some(v);
+                        any = true;
+                    }
+                    if ui
+                        .selectable_label(tx.unit == TextUnit::Font, "Font size")
+                        .clicked()
+                    {
+                        changes.unit = Some(TextUnit::Font);
+                        any = true;
+                    }
+                    if ui
+                        .selectable_label(tx.unit == TextUnit::Rows, "Rows")
+                        .clicked()
+                    {
+                        changes.unit = Some(TextUnit::Rows);
+                        any = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Weight");
+                    let current = weight_name(tx.weight);
+                    egui::ComboBox::from_id_salt("text_weight")
+                        .selected_text(current)
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            for (w, n) in WEIGHTS {
+                                if ui.selectable_label(current == n, n).clicked() {
+                                    changes.weight = Some(w);
+                                    any = true;
+                                }
+                            }
+                        });
+                    let mut italic = tx.italic;
+                    if ui.checkbox(&mut italic, "Italic").changed() {
+                        changes.italic = Some(italic);
+                        any = true;
+                    }
+                });
+                number_row(
+                    ui,
+                    NumberRow {
+                        label: "Letter spacing",
+                        unit: "/1000 em",
+                        value: tx.tracking,
+                        range: -1000.0..=10000.0,
+                        speed: 10.0,
+                    },
+                    &mut changes,
+                    &mut any,
+                    |c, v| c.tracking = Some(v),
+                );
+                number_row(
+                    ui,
+                    NumberRow {
+                        label: "Line spacing",
+                        unit: "%",
+                        value: tx.leading,
+                        range: 1.0..=1000.0,
+                        speed: 5.0,
+                    },
+                    &mut changes,
+                    &mut any,
+                    |c, v| c.leading = Some(v),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Align");
+                    for (align, label) in [
+                        (TextAlign::Left, "Left"),
+                        (TextAlign::Center, "Centre"),
+                        (TextAlign::Right, "Right"),
+                    ] {
+                        if ui.selectable_label(tx.align == align, label).clicked() {
+                            changes.align = Some(align);
+                            any = true;
+                        }
+                    }
+                });
+                number_row(
+                    ui,
+                    NumberRow {
+                        label: "Threshold",
+                        unit: "%",
+                        value: tx.threshold,
+                        range: 0.0..=100.0,
+                        speed: 1.0,
+                    },
+                    &mut changes,
+                    &mut any,
+                    |c, v| c.threshold = Some(v),
+                );
+                number_row(
+                    ui,
+                    NumberRow {
+                        label: "Grow",
+                        unit: "keys",
+                        value: tx.grow,
+                        range: -100.0..=100.0,
+                        speed: 0.1,
+                    },
+                    &mut changes,
+                    &mut any,
+                    |c, v| c.grow = Some(v),
+                );
+                let info = if !font_found {
+                    format!(
+                        "“{}” isn't installed on this PC. The letters stay as they were saved.",
+                        tx.font
+                    )
+                } else if self.typing.is_some() {
+                    "Typing: Enter = new line, Esc = done. Click somewhere else for a new text, on a text to retype it.".to_string()
+                } else if self.tool == Tool::Text {
+                    "Click on the piano roll and type. Click a text to retype it.".to_string()
+                } else {
+                    "Double-click the text (or right-click → Edit text) to retype it.".to_string()
+                };
+                let info = if text_shapes.len() > 1 && self.typing.is_none() {
+                    format!("{info}  Changes go to all {} selected texts.", text_shapes.len())
+                } else {
+                    info
+                };
+                ui.label(egui::RichText::new(info).weak().size(10.0));
+            });
+        if any {
+            crate::roll_text::set_text_setting(self, &changes);
+        }
     }
 
     fn points_section(&mut self, ui: &mut egui::Ui) {

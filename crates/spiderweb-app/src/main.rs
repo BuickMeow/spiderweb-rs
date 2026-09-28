@@ -7,7 +7,9 @@ mod panels;
 mod playback;
 mod roll;
 mod roll_curve;
+mod roll_text;
 mod roll_velocity;
+mod text_dialog;
 
 fn main() {
     let viewport = eframe::egui::ViewportBuilder::default()

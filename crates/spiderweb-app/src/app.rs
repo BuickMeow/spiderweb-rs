@@ -18,7 +18,9 @@ use spiderweb_io::project::{
 
 use crate::playback::{DEFAULT_DEVICE, Player};
 use crate::roll::{Drag, View};
+use crate::roll_text::Typing;
 use crate::roll_velocity::VelocityState;
+use crate::text_dialog::FontDialog;
 
 #[allow(dead_code)] // 关于窗口待移植
 pub const VERSION: &str = "0.1.0";
@@ -165,6 +167,14 @@ pub struct App {
     pub loaded: bool,
     pub panel_sel: Option<usize>,
     pub vel_text: [String; 2],
+    /// 正在输入的文本（原版 roll.typing）
+    pub typing: Option<Typing>,
+    /// 文本剪切板的内容，等有 ctx 的时候写进系统剪贴板
+    pub text_clipboard: Option<String>,
+    /// 字体选择窗口
+    pub font_dialog: Option<FontDialog>,
+    /// 已安装的字体族名（第一次用到时读一次）
+    pub font_families: Vec<String>,
 }
 
 impl App {
@@ -229,6 +239,10 @@ impl App {
             loaded: false,
             panel_sel: None,
             vel_text: ["127".into(), "127".into()],
+            typing: None,
+            text_clipboard: None,
+            font_dialog: None,
+            font_families: Vec::new(),
         };
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
@@ -310,6 +324,7 @@ impl App {
         self.view.apply_state(p.view);
         self.sels.clear();
         self.sel = None;
+        self.typing = None;
     }
 
     pub fn to_project(&self) -> Project {
@@ -505,6 +520,16 @@ impl App {
     pub fn select_many(&mut self, indices: BTreeSet<usize>, primary: Option<usize>) {
         self.sels = indices;
         self.sel = primary;
+        // 选到了别的形状（或打字时选了东西）：这次输入结束（原版 select_many）
+        if let Some(ty) = &self.typing {
+            let keep = match ty.i {
+                Some(i) => self.sels.contains(&i),
+                None => self.sels.is_empty(),
+            };
+            if !keep {
+                crate::roll_text::end_typing(self);
+            }
+        }
         self.edit_key = None;
     }
 
@@ -526,6 +551,7 @@ impl App {
         if self.sels.is_empty() {
             return;
         }
+        crate::roll_text::end_typing(self);
         self.push_undo();
         for i in self.sels.iter().rev() {
             self.shapes.remove(*i);
@@ -786,6 +812,7 @@ impl App {
     }
 
     fn restore(&mut self, from_undo: bool) {
+        crate::roll_text::end_typing(self);
         let src = if from_undo {
             &mut self.undo_stack
         } else {
@@ -885,6 +912,7 @@ impl App {
     // ------------------------------------------------------------ 工具
 
     pub fn cancel_draft(&mut self) {
+        crate::roll_text::end_typing(self);
         self.draft = None;
         self.drag = None;
         self.follow = None;
@@ -923,7 +951,8 @@ impl App {
     // ------------------------------------------------------------ eframe
 
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // 正在打字：按键都归文本（原版 on_key 的 typing 优先级），快捷键让路
+        if self.typing.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, KeyboardShortcut, Modifiers};
@@ -1056,6 +1085,8 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // 文字输入优先：Event::Text / 编辑键先给正在输入的文本，剩下的才轮到快捷键
+        crate::roll_text::text_keyboard(self, &ctx);
         self.handle_shortcuts(&ctx);
         self.update_playing(&ctx);
 
@@ -1088,6 +1119,8 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 crate::roll::roll_ui(self, ui);
             });
+
+        crate::text_dialog::font_dialog_ui(self, &ctx);
 
         if let Some(pending) = self.pending_big.take() {
             let mut go = false;

@@ -251,6 +251,8 @@ pub enum Drag {
     Handle {
         i: usize,
     },
+    /// 文本工具点下后拖动：选到鼠标（原版 ("textsel",)）
+    TextSel,
 }
 
 struct Inputs {
@@ -317,7 +319,7 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
 
 // ---------------------------------------------------------------- 坐标与命中
 
-fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
+pub(crate) fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
     let v = &app.view;
     let x = p.x.clamp(v.kb_w, v.w);
     let y = p.y.clamp(v.ruler_h, v.h);
@@ -638,7 +640,10 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 screen: pos,
             });
         }
-        Tool::Square | Tool::Circle | Tool::Triangle | Tool::Custom | Tool::Funnel | Tool::Text => {
+        Tool::Text => {
+            crate::roll_text::text_press_shift(app, pos, pt, input.shift);
+        }
+        Tool::Square | Tool::Circle | Tool::Triangle | Tool::Custom | Tool::Funnel => {
             app.status = format!("{} 工具待移植", app.tool.label());
         }
     }
@@ -753,6 +758,9 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
                 d.pts[1] = pt;
             }
         }
+        Drag::TextSel => {
+            crate::roll_text::text_drag(app, pos);
+        }
         Drag::Create { start, .. } => {
             let pt = event_pt(app, pos, true, input.shift);
             let kind = app.draft.as_ref().map(|d| d.kind).unwrap_or(Kind::Line);
@@ -859,6 +867,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs) {
         Drag::Handle { .. } => {
             app.shapes_changed();
         }
+        Drag::TextSel => {}
     }
     if matches!(app.tool, Tool::Poly) && app.draft.is_some() {
         // 继续等下一个点
@@ -873,6 +882,15 @@ fn on_double(app: &mut App, pos: Pos2, shift: bool) {
         .unwrap_or(false);
     if is_poly {
         finish_poly(app);
+        return;
+    }
+    // 双击文本：Select 工具 = 切到文本工具接着打；文本工具 = 选中鼠标下的词（原版 on_double）
+    if app.tool == Tool::Select && crate::roll_text::text_at(app, pos).is_some() {
+        crate::roll_text::text_edit(app, pos);
+        return;
+    }
+    if app.tool == Tool::Text {
+        crate::roll_text::text_double(app, pos);
         return;
     }
     // 双击选中的曲线：在曲线上离鼠标最近的地方加锚点（中键同理，见 on_middle_release）
@@ -1195,6 +1213,7 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
     paint_keyboard(app, painter, rect);
     paint_ruler(app, painter, rect);
     paint_playhead(app, painter, rect);
+    crate::roll_text::paint_text_caret(app, painter, rect);
 }
 
 fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
