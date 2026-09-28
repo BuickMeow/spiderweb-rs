@@ -38,9 +38,42 @@ pub type Note4 = [i64; 4];
 /// (start, end, key, velocity, slot, owner) 音符行（engine.render 的最终形态）。
 pub type Note6 = [i64; 6];
 
-/// 两点距离。
+/// CPython 3.9 `math.hypot` 的复刻：按最大分量缩放后用 Neumaier 补偿求和
+/// （见 CPython Modules/mathmodule.c 的 vector_norm；普通 sqrt(x²+y²) 会有 ulp 偏差，
+/// 而对照向量要求逐位一致）。
+pub fn hypot2(x0: f64, x1: f64) -> f64 {
+    let x0 = x0.abs();
+    let x1 = x1.abs();
+    let mut max = 0.0;
+    if x0 > max {
+        max = x0;
+    }
+    if x1 > max {
+        max = x1;
+    }
+    if max.is_infinite() {
+        return max;
+    }
+    if x0.is_nan() || x1.is_nan() {
+        return f64::NAN;
+    }
+    if max == 0.0 {
+        return max;
+    }
+    let (mut csum, mut frac) = (1.0, 0.0);
+    for x in [x0, x1] {
+        let x = x / max;
+        let x = x * x;
+        let oldcsum = csum;
+        csum += x;
+        frac += (oldcsum - csum) + x;
+    }
+    max * (csum - 1.0 + frac).sqrt()
+}
+
+/// 两点距离（CPython `math.dist` 同款）。
 pub fn dist(a: Pt, b: Pt) -> f64 {
-    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+    hypot2(a[0] - b[0], a[1] - b[1])
 }
 
 /// Python `round()` / NumPy `round()` 的银行家舍入（.5 取偶）。

@@ -3,41 +3,10 @@
 //! 弧记住 `k` = 绘制时屏幕上多少个 beat 对应一个 key（屏幕上 x = beats / k，y 直接用 key）。
 //! k 为 1（两个方向等比例）时弧就是正圆的一段。
 
-use crate::Pt;
+use crate::{Pt, dist};
 
 /// 每 1.5° 一个采样点（对应 Python `math.radians(1.5)`）。
 pub const STEP: f64 = 1.5 * (std::f64::consts::PI / 180.0);
-
-/// CPython 3.9 `math.dist` 的复刻（按最大分量缩放 + Neumaier 补偿求和，
-/// 普通 sqrt(x²+y²) 会有 ulp 偏差）。
-fn dist(a: Pt, b: Pt) -> f64 {
-    let (x0, x1) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
-    let mut max = 0.0;
-    if x0 > max {
-        max = x0;
-    }
-    if x1 > max {
-        max = x1;
-    }
-    if max.is_infinite() {
-        return max;
-    }
-    if x0.is_nan() || x1.is_nan() {
-        return f64::NAN;
-    }
-    if max == 0.0 {
-        return max;
-    }
-    let (mut csum, mut frac) = (1.0, 0.0);
-    for x in [x0, x1] {
-        let x = x / max;
-        let x = x * x;
-        let oldcsum = csum;
-        csum += x;
-        frac += (oldcsum - csum) + x;
-    }
-    max * (csum - 1.0 + frac).sqrt()
-}
 
 /// Python 的浮点取模（结果的符号与除数一致，且零的符号随除数）。
 fn py_mod(x: f64, y: f64) -> f64 {

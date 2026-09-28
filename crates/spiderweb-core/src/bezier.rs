@@ -5,52 +5,8 @@
 //! 每第三个点（0, 3, 6, ...）是曲线经过的锚点，两个锚点之间是两个手柄：
 //! 前一个锚点的出手柄与后一个锚点的入手柄。
 
-use crate::Pt;
+use crate::{Pt, dist, hypot2};
 use crate::shape::Sym;
-
-/// CPython 3.9 `math.dist` / `math.hypot` 的复刻：先按最大分量缩放，
-/// 再用 Neumaier 补偿求和（float 逐位一致所需，普通 sqrt(x²+y²) 会有 ulp 偏差）。
-fn norm2(a: f64, b: f64) -> f64 {
-    let x0 = a.abs();
-    let x1 = b.abs();
-    let mut max = 0.0;
-    if x0 > max {
-        max = x0;
-    }
-    if x1 > max {
-        max = x1;
-    }
-    let found_nan = x0.is_nan() || x1.is_nan();
-    // vector_norm(2, ...) （见 CPython Modules/mathmodule.c）
-    if max.is_infinite() {
-        return max;
-    }
-    if found_nan {
-        return f64::NAN;
-    }
-    if max == 0.0 {
-        return max;
-    }
-    let (mut csum, mut frac) = (1.0, 0.0);
-    for x in [x0, x1] {
-        let x = x / max;
-        let x = x * x;
-        let oldcsum = csum;
-        csum += x;
-        frac += (oldcsum - csum) + x;
-    }
-    max * (csum - 1.0 + frac).sqrt()
-}
-
-/// `math.dist(a, b)`。
-fn dist(a: Pt, b: Pt) -> f64 {
-    norm2(a[0] - b[0], a[1] - b[1])
-}
-
-/// `math.hypot(x, y)`。
-fn hypot(x: f64, y: f64) -> f64 {
-    norm2(x, y)
-}
 
 /// 一条曲线：`pts` 为扁平点列，`sharp` 为尖角锚点序号，`sym` 为对称方式。
 #[derive(Clone, Debug, PartialEq)]
@@ -458,8 +414,8 @@ pub fn drag_point(
                 let (hx, hy) = (s[0], s[1]);
                 let s = to_screen(c.pts[other]);
                 let (ox, oy) = (s[0], s[1]);
-                let d = hypot(hx - ax, hy - ay);
-                let length = hypot(ox - ax, oy - ay);
+                let d = hypot2(hx - ax, hy - ay);
+                let length = hypot2(ox - ax, oy - ay);
                 if d > 0.0 && length > 0.0 {
                     c.pts[other] =
                         from_screen(ax - (hx - ax) / d * length, ay - (hy - ay) / d * length);
@@ -699,7 +655,7 @@ pub fn nearest(
         for i in 0..=n {
             let p = seg_point(seg[0], seg[1], seg[2], seg[3], i as f64 / n as f64);
             let sp = to_screen(p);
-            let d = hypot(sp[0] - x, sp[1] - y);
+            let d = hypot2(sp[0] - x, sp[1] - y);
             let better = match best {
                 None => true,
                 Some(b) => d < b.2,
@@ -752,7 +708,7 @@ pub fn difference(pts_a: &[Pt], pts_b: &[Pt]) -> f64 {
 // ---------------------------------------------------------------- 拟合（Philip Schneider 算法）
 
 fn unit(v: Pt) -> Pt {
-    let d = hypot(v[0], v[1]);
+    let d = hypot2(v[0], v[1]);
     if d != 0.0 {
         [v[0] / d, v[1] / d]
     } else {
