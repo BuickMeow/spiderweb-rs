@@ -766,7 +766,7 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
     match bezier::can_delete(&c, j) {
         None => {}
         Some(bezier::CanDelete::Middle) => {
-            app.status = "对称曲线的中间锚点会保留（关掉对称再删）".to_string();
+            app.status = rust_i18n::t!("status.middle_anchor").to_string();
         }
         Some(_) => {
             let Some((to_screen, _)) = stroke_maps(app, &fr.frame) else {

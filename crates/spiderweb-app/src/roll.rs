@@ -865,7 +865,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                     aspect: Some(aspect),
                 });
             } else {
-                app.status = format!("图形库里没有 “{name}”：在面板里选一个，或用 Drawer… 画一个");
+                app.status = rust_i18n::t!("status.no_shape").to_string();
             }
         }
         Tool::Text => {
@@ -1138,7 +1138,13 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
                 sh.pts = new_pts;
             }
             app.shapes_changed();
-            app.position = Some(format!("已转 {:+.1}°", angle.to_degrees()));
+            app.position = Some(
+                rust_i18n::t!(
+                    "status.turned",
+                    angle = format!("{:+.1}", angle.to_degrees())
+                )
+                .to_string(),
+            );
         }
     }
 }

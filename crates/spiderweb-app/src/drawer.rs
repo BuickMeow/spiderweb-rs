@@ -501,7 +501,7 @@ impl Drawer {
         match bezier::can_delete(&c, j) {
             None => true,
             Some(CanDelete::Middle) => {
-                self.status = "对称曲线的中间锚点会保留（先关掉对称）".to_string();
+                self.status = rust_i18n::t!("status.middle_anchor").to_string();
                 true
             }
             Some(_) => {
@@ -1053,11 +1053,11 @@ impl Drawer {
     pub fn save(&mut self, dir: &Path) -> Option<String> {
         let name = clean_name(&self.name);
         if self.strokes.is_empty() {
-            self.status = "先画一个形状，再保存".to_string();
+            self.status = rust_i18n::t!("drawer.draw_first").to_string();
             return None;
         }
         if name.is_empty() {
-            self.status = "先给形状起个名字".to_string();
+            self.status = rust_i18n::t!("drawer.name_first").to_string();
             return None;
         }
         let taken = library_names(dir)
@@ -1067,25 +1067,21 @@ impl Drawer {
             .saved_name
             .as_deref()
             .is_some_and(|s| s.eq_ignore_ascii_case(&name));
-        if taken
-            && !same
-            && !confirm(&format!(
-                "“{name}” 已在图形库里，替换吗？\n已放上卷帘的形状不受影响。"
-            ))
+        if taken && !same && !confirm(rust_i18n::t!("drawer.replace", name = name.clone()).as_ref())
         {
             return None;
         }
         self.strokes = join_strokes(&self.strokes);
         self.sel = None;
         if let Err(e) = save_shape(dir, &name, &self.strokes) {
-            self.status = format!("保存失败：{e}");
+            self.status = rust_i18n::t!("drawer.save_failed", e = e.to_string()).to_string();
             return None;
         }
         self.name = name.clone();
         self.saved_name = Some(name.clone());
         self.dirty = false;
         self.refresh_list(dir, Some(&name));
-        self.status = format!("已保存 “{name}”");
+        self.status = rust_i18n::t!("drawer.saved", name = name.clone()).to_string();
         Some(name)
     }
 
@@ -1093,25 +1089,22 @@ impl Drawer {
     fn use_shape(&mut self, dir: &Path) -> Option<String> {
         let same =
             self.saved_name.as_deref() == Some(clean_name(&self.name).as_str()) && !self.dirty;
-        let name = if same {
+        if same {
             self.saved_name.clone()
         } else {
             self.save(dir)
-        };
-        if name.is_none() {
-            self.status = "还没保存：先画一个形状并起名".to_string();
         }
-        name
     }
 
     /// 改过就确认（原版 keep_changes）。
     fn keep_changes(&self) -> bool {
-        !(self.dirty && !self.strokes.is_empty()) || confirm("当前图形还没保存，扔掉吗？")
+        !(self.dirty && !self.strokes.is_empty())
+            || confirm(rust_i18n::t!("drawer.discard").as_ref())
     }
 
     fn open_selected(&mut self, dir: &Path) {
+        // 没选形状：原版直接什么都不做
         let Some(name) = self.lib_sel.clone() else {
-            self.status = "先在列表里选一个形状".to_string();
             return;
         };
         if !self.keep_changes() {
@@ -1119,7 +1112,9 @@ impl Drawer {
         }
         match load_shape(dir, &name) {
             Some(strokes) => self.open_shape(&name, strokes),
-            None => self.status = format!("读不了 “{name}”"),
+            None => {
+                self.status = rust_i18n::t!("drawer.read_failed", name = name.clone()).to_string()
+            }
         }
     }
 
@@ -1137,44 +1132,42 @@ impl Drawer {
             .iter()
             .any(|n| n.eq_ignore_ascii_case(&name));
         if !saved {
-            self.status = format!("“{name}” 是内置形状，删不了（Save 一个同名文件才能覆盖它）");
+            self.status = rust_i18n::t!("drawer.builtin", name = name.clone()).to_string();
             return;
         }
         let back = builtin_name(&name)
-            .map(|b| format!("\n内置的 “{b}” 会回到列表里。"))
+            .map(|b| rust_i18n::t!("drawer.builtin_back", b = b).to_string())
             .unwrap_or_default();
-        if !confirm(&format!(
-            "从图形库里删掉 “{name}” 吗？\n已放上卷帘的形状不受影响。{back}"
-        )) {
+        if !confirm(rust_i18n::t!("drawer.delete_ask", name = name.clone(), back = back).as_ref()) {
             return;
         }
         if let Err(e) = std::fs::remove_file(shape_file(dir, &name)) {
-            self.status = format!("删除失败：{e}");
+            self.status = rust_i18n::t!("drawer.delete_failed", e = e.to_string()).to_string();
         }
         self.refresh_list(dir, None);
         self.lib_sel = None;
     }
 
+    /// Rename 是移植版补充的（原版画板没有改名）：能用的错误提示沿用原版措辞。
     fn rename_selected(&mut self, dir: &Path) {
         let Some(old) = self.lib_sel.clone() else {
-            self.status = "先选一个库里的形状".to_string();
             return;
         };
         if !shape_file(dir, &old).exists() {
-            self.status = format!("“{old}” 是内置形状，先 Save 成文件再改名");
+            self.status = rust_i18n::t!("drawer.builtin", name = old.clone()).to_string();
             return;
         }
         let new = clean_name(&self.name);
         if new.is_empty() || new.eq_ignore_ascii_case(&old) {
-            self.status = "在 Name 里写新名字，再点 Rename".to_string();
             return;
         }
-        if shape_file(dir, &new).exists() && !confirm(&format!("“{new}” 已存在，替换吗？"))
+        if shape_file(dir, &new).exists()
+            && !confirm(rust_i18n::t!("drawer.replace", name = new.clone()).as_ref())
         {
             return;
         }
         if let Err(e) = std::fs::rename(shape_file(dir, &old), shape_file(dir, &new)) {
-            self.status = format!("改名失败：{e}");
+            self.status = rust_i18n::t!("drawer.rename_failed", e = e.to_string()).to_string();
             return;
         }
         if self.saved_name.as_deref() == Some(old.as_str()) {
@@ -1182,7 +1175,6 @@ impl Drawer {
             self.name = new.clone();
         }
         self.refresh_list(dir, Some(&new));
-        self.status = format!("已改名为 “{new}”");
     }
 
     // ------------------------------------------------------------ 绘制
@@ -1375,17 +1367,16 @@ impl Drawer {
     /// 状态文字（原版 redraw 末尾）。
     fn update_state_text(&mut self) {
         let mut text = if self.strokes.is_empty() {
-            "Nothing drawn yet.".to_string()
+            rust_i18n::t!("drawer.state_nothing").to_string()
         } else if strokes_closed(&self.strokes) {
-            "Closed shape: Empty, Fill and Spam all work.".to_string()
+            rust_i18n::t!("drawer.state_closed").to_string()
         } else if open_paths(&self.strokes).len() == 1 {
-            "One gap (red dots): Fill and Spam close it with a straight line.".to_string()
+            rust_i18n::t!("drawer.state_one_gap").to_string()
         } else {
-            "Open ends (red dots): more than one gap, so only Empty and Outline spam work until all but one are closed."
-                .to_string()
+            rust_i18n::t!("drawer.state_open").to_string()
         };
         if self.dirty && !self.strokes.is_empty() {
-            text += "\nNot saved yet.";
+            text += rust_i18n::t!("drawer.state_unsaved").as_ref();
         }
         self.state_text = text;
     }
@@ -1441,7 +1432,7 @@ pub fn drawer_ui(app: &mut App, ctx: &egui::Context) {
     let dir = library_dir(app);
     let mut use_name: Option<String> = None;
     let mut open = d.open;
-    let response = egui::Window::new("Spiderweb — 自定义形状抽屉")
+    let response = egui::Window::new(rust_i18n::t!("drawer.title"))
         .default_size([1000.0, 720.0])
         .min_size([700.0, 500.0])
         .resizable(true)
@@ -1460,9 +1451,6 @@ pub fn drawer_ui(app: &mut App, ctx: &egui::Context) {
             egui::CentralPanel::default().show(ui, |ui| {
                 d.board_ui(ui, ctx);
             });
-            if let Some(name) = &use_name {
-                d.status = format!("已在卷帘使用 “{name}”");
-            }
         });
     d.open = open;
 
@@ -1534,26 +1522,43 @@ fn tool_key(tool: DrawerTool) -> Option<Key> {
     })
 }
 
-fn sym_text(sym: Option<Sym>) -> &'static str {
-    match sym {
-        None => "Symmetry: Off",
-        Some(Sym::Mirror) => "Symmetry: Mirrored",
-        Some(Sym::Turn) => "Symmetry: Turned",
+/// 抽屉工具 -> 帮助主题 id（原版 DRAWER_TOOL_TOPICS；Triangle 是移植版补充，用总主题）。
+fn tool_topic(tool: DrawerTool) -> &'static str {
+    match tool {
+        DrawerTool::Select => "drawer_select",
+        DrawerTool::Line => "drawer_line",
+        DrawerTool::Poly => "drawer_poly",
+        DrawerTool::Free => "drawer_free",
+        DrawerTool::Curve => "drawer_curve",
+        DrawerTool::Arc => "drawer_arc",
+        DrawerTool::Square => "drawer_square",
+        DrawerTool::Circle => "drawer_circle",
+        DrawerTool::Triangle => "drawer",
+        DrawerTool::Erase => "drawer_erase",
     }
+}
+
+fn sym_text(sym: Option<Sym>) -> String {
+    match sym {
+        None => rust_i18n::t!("drawer.sym_off"),
+        Some(Sym::Mirror) => rust_i18n::t!("drawer.sym_mirror"),
+        Some(Sym::Turn) => rust_i18n::t!("drawer.sym_turn"),
+    }
+    .to_string()
 }
 
 impl Drawer {
     fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             for tool in DrawerTool::ALL {
-                let text = format!("{} ({})", tool.label(), tool.hotkey().to_uppercase());
+                let text = format!("{} ({})", tool.ui_label(), tool.hotkey().to_uppercase());
                 if ui.selectable_label(self.tool == tool, text).clicked() {
                     self.set_tool(tool);
                 }
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("Grid");
+            ui.label(rust_i18n::t!("drawer.grid"));
             egui::ComboBox::from_id_salt("drawer_grid")
                 .selected_text(self.grid_n.to_string())
                 .width(56.0)
@@ -1567,25 +1572,31 @@ impl Drawer {
                         }
                     }
                 });
-            if ui.button("Undo").clicked() {
+            if ui.button(rust_i18n::t!("drawer.undo")).clicked() {
                 self.undo();
             }
-            if ui.button("Clear").clicked() && !self.strokes.is_empty() {
+            if ui.button(rust_i18n::t!("drawer.clear")).clicked() && !self.strokes.is_empty() {
                 self.push_undo();
                 self.strokes.clear();
                 self.sel = None;
                 self.changed();
             }
-            if ui.button("Reset view").clicked() {
+            if ui.button(rust_i18n::t!("drawer.reset_view")).clicked() {
                 self.view = BoardView::default();
             }
-            ui.label(format!("Zoom {:.0}%", self.view.zoom * 100.0));
-            if ui.button("Copy").clicked() {
+            ui.label(
+                rust_i18n::t!(
+                    "drawer.zoom",
+                    pct = format!("{:.0}", self.view.zoom * 100.0)
+                )
+                .to_string(),
+            );
+            if ui.button(rust_i18n::t!("drawer.copy")).clicked() {
                 self.copy_strokes();
             }
             let can_paste = self.clipboard.is_some() && self.draft.is_none();
             if ui
-                .add_enabled(can_paste, egui::Button::new("Paste"))
+                .add_enabled(can_paste, egui::Button::new(rust_i18n::t!("drawer.paste")))
                 .clicked()
             {
                 self.paste_strokes();
@@ -1595,31 +1606,40 @@ impl Drawer {
         let mut sym_pick: Option<Option<Sym>> = None;
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(has_sel, egui::Button::new("Delete stroke"))
+                .add_enabled(
+                    has_sel,
+                    egui::Button::new(rust_i18n::t!("drawer.delete_stroke")),
+                )
                 .clicked()
             {
                 self.delete_selected_stroke();
             }
             if ui
-                .add_enabled(has_sel, egui::Button::new("Flip sideways"))
+                .add_enabled(
+                    has_sel,
+                    egui::Button::new(rust_i18n::t!("drawer.flip_sideways")),
+                )
                 .clicked()
             {
                 self.flip_or_turn(true);
             }
             if ui
-                .add_enabled(has_sel, egui::Button::new("Flip upside down"))
+                .add_enabled(
+                    has_sel,
+                    egui::Button::new(rust_i18n::t!("drawer.flip_upside_down")),
+                )
                 .clicked()
             {
                 self.flip_or_turn(false);
             }
             if ui
-                .add_enabled(has_sel, egui::Button::new("Turn left"))
+                .add_enabled(has_sel, egui::Button::new(rust_i18n::t!("menu.turn_left")))
                 .clicked()
             {
                 self.turn(true);
             }
             if ui
-                .add_enabled(has_sel, egui::Button::new("Turn right"))
+                .add_enabled(has_sel, egui::Button::new(rust_i18n::t!("menu.turn_right")))
                 .clicked()
             {
                 self.turn(false);
@@ -1635,9 +1655,9 @@ impl Drawer {
                     .width(150.0)
                     .show_ui(ui, |ui| {
                         for (label, mode) in [
-                            ("Off", None),
-                            ("Mirrored (arch)", Some(Sym::Mirror)),
-                            ("Turned (S)", Some(Sym::Turn)),
+                            (rust_i18n::t!("drawer.sym_off"), None),
+                            (rust_i18n::t!("drawer.sym_mirror"), Some(Sym::Mirror)),
+                            (rust_i18n::t!("drawer.sym_turn"), Some(Sym::Turn)),
                         ] {
                             if ui.selectable_label(now == mode, label).clicked() {
                                 sym_pick = Some(mode);
@@ -1645,9 +1665,9 @@ impl Drawer {
                         }
                     });
             });
-            ui.label("Sides");
+            ui.label(rust_i18n::t!("drawer.sides"));
             ui.add(egui::DragValue::new(&mut self.sides).range(3..=64));
-            if ui.button("Polygon").clicked() {
+            if ui.button(rust_i18n::t!("drawer.polygon")).clicked() {
                 let pts = dt::polygon_pts([0.5, 0.5], SIDES_SPAN, self.sides as usize);
                 self.commit_stroke(Stroke::Poly {
                     pts,
@@ -1685,7 +1705,7 @@ impl Drawer {
 
     fn side_ui(&mut self, ui: &mut egui::Ui, dir: &Path) -> Option<String> {
         let mut used = None;
-        ui.heading("Shape library");
+        ui.heading(rust_i18n::t!("drawer.library"));
         egui::ScrollArea::vertical()
             .max_height(260.0)
             .id_salt("drawer_library")
@@ -1700,31 +1720,31 @@ impl Drawer {
                 }
             });
         ui.horizontal(|ui| {
-            if ui.button("Open").clicked() {
+            if ui.button(rust_i18n::t!("drawer.open")).clicked() {
                 self.open_selected(dir);
             }
-            if ui.button("Delete").clicked() {
+            if ui.button(rust_i18n::t!("drawer.delete")).clicked() {
                 self.delete_selected(dir);
             }
-            if ui.button("New").clicked() {
+            if ui.button(rust_i18n::t!("drawer.new")).clicked() {
                 self.new_shape();
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(rust_i18n::t!("drawer.name"));
             ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(150.0));
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Save").clicked() {
+            if ui.button(rust_i18n::t!("drawer.save")).clicked() {
                 self.save(dir);
             }
-            if ui.button("Save as…").clicked() {
+            if ui.button(rust_i18n::t!("drawer.save_as")).clicked() {
                 self.save(dir);
             }
-            if ui.button("Rename").clicked() {
+            if ui.button(rust_i18n::t!("drawer.rename")).clicked() {
                 self.rename_selected(dir);
             }
-            if ui.button("Use on the piano roll").clicked()
+            if ui.button(rust_i18n::t!("drawer.use")).clicked()
                 && let Some(name) = self.use_shape(dir)
             {
                 used = Some(name);
@@ -1743,17 +1763,25 @@ impl Drawer {
             ui.label(egui::RichText::new(&self.status).weak());
         }
         ui.separator();
-        ui.label(
-            egui::RichText::new(
-                "画板是 0..1 的方框（v 向上），画在框外也行。\n\
-                 拖出线 / 曲线 / 方 / 圆 / 三角，折线点着画（右键或双击收尾），\
-                 自由笔拖着画，弧点三下（起点 / 经过点 / 终点）。\n\
-                 Select：拖点、拖整体；右键曲线的锚点删除、手柄收回。\n\
-                 Save 后在卷帘的 Custom 里选它，或直接 Use。",
-            )
-            .small()
-            .weak(),
-        );
+        // 侧栏底部的帮助：当前工具的 + 总主题（原版 update_side_help）
+        if let (Some(t), Some(dr)) = (
+            crate::help_texts::by_id(tool_topic(self.tool)),
+            crate::help_texts::by_id("drawer"),
+        ) {
+            ui.label(
+                egui::RichText::new(
+                    rust_i18n::t!(
+                        "drawer.help",
+                        tool = t.title,
+                        tool_text = t.text,
+                        drawer_text = dr.text
+                    )
+                    .to_string(),
+                )
+                .small()
+                .weak(),
+            );
+        }
         used
     }
 
@@ -1766,11 +1794,12 @@ impl Drawer {
         if let Some(pos) = input.pos.filter(|p| rect.contains(*p)) {
             let p = self.uv_at(pos.x, pos.y);
             let n = self.grid_n as f64;
-            self.pos_text = format!(
-                "Mouse: x {:+.1}, y {:+.1} grid squares from the middle",
-                (p[0] - 0.5) * n,
-                (p[1] - 0.5) * n
-            );
+            self.pos_text = rust_i18n::t!(
+                "drawer.pos",
+                x = format!("{:+.1}", (p[0] - 0.5) * n),
+                y = format!("{:+.1}", (p[1] - 0.5) * n)
+            )
+            .to_string();
         }
         if input.scroll_y.abs() > 0.0
             && let Some(pos) = input.pos.filter(|p| rect.contains(*p))
@@ -1851,7 +1880,6 @@ impl App {
         self.select(None, false);
         self.tool = Tool::Custom;
         self.cancel_draft();
-        self.status = format!("自定义形状用 “{name}”：在卷帘上拖一个框放置");
         self.schedule_autosave();
     }
 

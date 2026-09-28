@@ -342,11 +342,11 @@ pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
 /// 顶部小工具条（原版 vbar）。
 fn velocity_toolbar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.label("Velocity");
+        ui.label(rust_i18n::t!("velocity.title"));
         for (tool, label) in [
-            (VelTool::Line, "Linear"),
-            (VelTool::Curve, "Curve"),
-            (VelTool::Pencil, "Pencil"),
+            (VelTool::Line, rust_i18n::t!("velocity.linear")),
+            (VelTool::Curve, rust_i18n::t!("velocity.curve")),
+            (VelTool::Pencil, rust_i18n::t!("velocity.pencil")),
         ] {
             if ui.selectable_label(app.vel.tool == tool, label).clicked() {
                 app.vel.tool = tool;
@@ -354,11 +354,9 @@ fn velocity_toolbar(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.add_space(10.0);
         ui.label(
-            egui::RichText::new(
-                "Ctrl = flat · Shift = snap · Enter = done · select a shape to edit only its notes",
-            )
-            .weak()
-            .size(10.0),
+            egui::RichText::new(rust_i18n::t!("velocity.hint"))
+                .weak()
+                .size(10.0),
         );
     });
 }

@@ -208,7 +208,7 @@ impl App {
         match what {
             None => return false,
             Some(CanDelete::Middle) => {
-                self.status = "对称曲线的中间锚点会保留（关掉对称再删）".to_string();
+                self.status = rust_i18n::t!("status.middle_anchor").to_string();
                 return true;
             }
             Some(_) => {}

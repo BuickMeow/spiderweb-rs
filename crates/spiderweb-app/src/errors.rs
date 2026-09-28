@@ -55,10 +55,11 @@ pub fn record_panic(dir: &Path, info: &PanicHookInfo<'_>) -> String {
         std::env::consts::OS
     );
     let text = panic_text(info);
+    let path = log_path(dir).display().to_string();
     if append(dir, &head, &text) {
-        format!("出错了：详情已写入 {}", log_path(dir).display())
+        rust_i18n::t!("status.error_saved", path = path).to_string()
     } else {
-        format!("出错了：详情写不进 {}", log_path(dir).display())
+        rust_i18n::t!("status.error_not_saved", path = path).to_string()
     }
 }
 
@@ -69,14 +70,17 @@ pub fn panic_text(info: &PanicHookInfo<'_>) -> String {
         .downcast_ref::<&str>()
         .map(|s| (*s).to_string())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "(非字符串 panic)".to_string());
+        .unwrap_or_default();
     let at = info
         .location()
         .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-        .unwrap_or_else(|| "未知位置".to_string());
+        .unwrap_or_else(|| "?".to_string());
     let thread = std::thread::current();
     let name = thread.name().unwrap_or("?").to_string();
-    format!("线程 '{name}' 在 {at} panic：\n{msg}")
+    format!(
+        "{} {at}\n{msg}",
+        rust_i18n::t!("errors.in_thread", name = name)
+    )
 }
 
 /// 往 errors.log 追一条；太大先改名成 errors-old.log。true = 写成功。

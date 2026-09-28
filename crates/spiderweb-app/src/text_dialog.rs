@@ -105,7 +105,7 @@ pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
     let mut pick: Option<String> = None;
     let mut open = true;
     let mut close = false;
-    egui::Window::new("Font")
+    egui::Window::new(rust_i18n::t!("font.title"))
         .collapsible(false)
         .resizable(true)
         .default_size([420.0, 460.0])
@@ -115,7 +115,7 @@ pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
-            ui.label("Type a font's name, or pick one:");
+            ui.label(rust_i18n::t!("font.type"));
             let first = dlg.listed_for.is_none();
             let resp =
                 ui.add(egui::TextEdit::singleline(&mut dlg.search).desired_width(f32::INFINITY));
@@ -159,16 +159,16 @@ pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
             ui.label(
                 egui::RichText::new(match &now {
                     Some(f) => f.clone(),
-                    None => "(no font with that name)".to_string(),
+                    None => rust_i18n::t!("font.none").to_string(),
                 })
                 .weak()
                 .size(11.0),
             );
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui.button(rust_i18n::t!("font.ok")).clicked() {
                     pick = now.clone();
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(rust_i18n::t!("font.cancel")).clicked() {
                     close = true;
                 }
             });

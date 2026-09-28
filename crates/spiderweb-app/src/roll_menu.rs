@@ -95,23 +95,43 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
     let one = t.count == 1;
     let mut out: Vec<MenuEntry> = Vec::new();
     if one && t.kind == Kind::Poly {
-        out.push(item("Add point here", MenuAction::AddPolyPoint, true));
+        out.push(item(
+            rust_i18n::t!("menu.add_point"),
+            MenuAction::AddPolyPoint,
+            true,
+        ));
     }
     if one && t.kind == Kind::Curve {
-        out.push(item("Add anchor here", MenuAction::AddCurveAnchor, true));
+        out.push(item(
+            rust_i18n::t!("menu.add_anchor"),
+            MenuAction::AddCurveAnchor,
+            true,
+        ));
     }
     if one && t.has_text {
-        out.push(item("Edit text", MenuAction::EditText, true));
+        out.push(item(
+            rust_i18n::t!("menu.edit_text"),
+            MenuAction::EditText,
+            true,
+        ));
     }
     if one && t.kind == Kind::Custom && !t.has_notes && !t.has_text {
         if t.picked_curve.is_some() {
-            out.push(item("Add anchor here", MenuAction::AddCurveAnchor, true));
+            out.push(item(
+                rust_i18n::t!("menu.add_anchor"),
+                MenuAction::AddCurveAnchor,
+                true,
+            ));
         }
         if t.picked_stroke.is_some() {
-            out.push(item("Delete this stroke", MenuAction::DeleteStroke, true));
+            out.push(item(
+                rust_i18n::t!("menu.delete_stroke"),
+                MenuAction::DeleteStroke,
+                true,
+            ));
         }
         out.push(item(
-            "Save drawing to the shape library…",
+            rust_i18n::t!("menu.save_library"),
             MenuAction::SaveToLibrary,
             false,
         ));
@@ -120,27 +140,51 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
         out.push(MenuEntry::Separator);
     }
     let shapes = if t.count == 1 {
-        "shape".to_string()
+        rust_i18n::t!("menu.shape").to_string()
     } else {
-        format!("{} shapes", t.count)
+        rust_i18n::t!("menu.n_shapes", n = t.count.to_string()).to_string()
     };
-    out.push(item(format!("Delete {shapes}"), MenuAction::Delete, true));
     out.push(item(
-        format!("Duplicate {shapes}"),
+        rust_i18n::t!("menu.delete", shapes = shapes.clone()),
+        MenuAction::Delete,
+        true,
+    ));
+    out.push(item(
+        rust_i18n::t!("menu.duplicate", shapes = shapes.clone()),
         MenuAction::Duplicate,
         true,
     ));
-    out.push(item(format!("Copy {shapes}"), MenuAction::Copy, true));
     out.push(item(
-        "Paste at the play line",
+        rust_i18n::t!("menu.copy", shapes = shapes),
+        MenuAction::Copy,
+        true,
+    ));
+    out.push(item(
+        rust_i18n::t!("menu.paste"),
         MenuAction::Paste,
         t.clipboard,
     ));
     out.push(MenuEntry::Separator);
-    out.push(item("Flip sideways", MenuAction::FlipSideways, true));
-    out.push(item("Flip upside down", MenuAction::FlipUpsideDown, true));
-    out.push(item("Turn 90° left", MenuAction::TurnLeft, true));
-    out.push(item("Turn 90° right", MenuAction::TurnRight, true));
+    out.push(item(
+        rust_i18n::t!("menu.flip_sideways"),
+        MenuAction::FlipSideways,
+        true,
+    ));
+    out.push(item(
+        rust_i18n::t!("menu.flip_upside_down"),
+        MenuAction::FlipUpsideDown,
+        true,
+    ));
+    out.push(item(
+        rust_i18n::t!("menu.turn_left"),
+        MenuAction::TurnLeft,
+        true,
+    ));
+    out.push(item(
+        rust_i18n::t!("menu.turn_right"),
+        MenuAction::TurnRight,
+        true,
+    ));
     out
 }
 

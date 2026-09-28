@@ -27,6 +27,7 @@ egui = "0.36"
 egui_extras = "0.36"
 rfd = "0.17.2"
 bytemuck = { version = "1", features = ["derive"] }
+rust-i18n = "4"
 
 [profile.release]
 opt-level = 3

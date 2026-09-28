@@ -335,7 +335,7 @@ pub fn funnel_finish_wall(app: &mut App, still: bool) {
     }
     let Some(arr) = arrange_funnel(app.view.sx, app.view.sy, &pts) else {
         truncate_wall(app);
-        app.status = "墙要与线的方向交叉 — 重画一次".to_string();
+        app.status = rust_i18n::t!("status.wall_must_cross").to_string();
         return;
     };
     if let Some(d) = app.draft.as_mut() {
@@ -610,7 +610,7 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
                 shm.starts.push(st);
             }
             app.shapes_changed();
-            app.status = "在线上加了新起点（两条曲线联动）".to_string();
+            // 原版这里弹 "funnel_links" 的 tip（help.rs 的 tips），没有状态栏文案
             return true;
         }
     }

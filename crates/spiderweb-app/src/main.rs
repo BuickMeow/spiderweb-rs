@@ -2,12 +2,16 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod app;
 mod drawer;
 mod drawer_tools;
 mod errors;
 mod help;
 mod help_texts;
+#[cfg(test)]
+mod i18n_check;
 mod note_gpu;
 mod panels;
 mod playback;
@@ -24,6 +28,8 @@ mod test_support;
 mod text_dialog;
 
 fn main() {
+    // 目前只有英语一种文案（原版即英语）；以后加语言时在这里换成系统语言
+    rust_i18n::set_locale("en");
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([1400.0, 820.0])
         .with_min_inner_size([1000.0, 600.0])
@@ -42,6 +48,6 @@ fn main() {
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     ) {
-        eprintln!("Spiderweb 启动失败：{e}");
+        eprintln!("{}", rust_i18n::t!("app.startup_failed", e = e));
     }
 }

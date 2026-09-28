@@ -192,10 +192,7 @@ pub fn tool_topic(tool: Tool) -> &'static str {
 /// 侧栏底部的当前工具帮助（原版 update_side_help）。
 pub fn side_help_text(app: &App) -> String {
     match help_texts::by_id(tool_topic(app.tool)) {
-        Some(t) => format!(
-            "{}\n{}\n\nHelp (F1): every tip, searchable.",
-            t.title, t.text
-        ),
+        Some(t) => rust_i18n::t!("help.side", title = t.title, text = t.text).to_string(),
         None => String::new(),
     }
 }
@@ -206,7 +203,7 @@ pub fn side_help_ui(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let mut open = false;
-    egui::CollapsingHeader::new("Help")
+    egui::CollapsingHeader::new(rust_i18n::t!("help.side_title"))
         .default_open(true)
         .id_salt("side_help")
         .show(ui, |ui| {
@@ -215,7 +212,7 @@ pub fn side_help_ui(app: &mut App, ui: &mut egui::Ui) {
                     .small()
                     .color(egui::Color32::from_gray(120)),
             );
-            open = ui.button("Help (F1)").clicked();
+            open = ui.button(rust_i18n::t!("help.button")).clicked();
         });
     if open {
         open_help(app, None);
@@ -270,15 +267,10 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut on = app.tips.on;
     let mut reset = false;
     let mut link: Option<&'static str> = None;
-    let base = app
-        .autosave_path
-        .parent()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
 
     // 主体至少这么高：egui 的窗口会缩到内容高度，不设的话会比原版的 900x620 矮很多
     let body_h = (ctx.viewport_rect().height() * 0.72).clamp(520.0, 900.0);
-    egui::Window::new(format!("Spiderweb {VERSION} — Help"))
+    egui::Window::new(rust_i18n::t!("help.title", version = VERSION))
         .open(&mut open)
         .default_size([960.0, 760.0])
         .min_width(600.0)
@@ -290,15 +282,13 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
                     ui.set_width(250.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut query)
-                            .hint_text("Search")
+                            .hint_text(rust_i18n::t!("help.search_hint"))
                             .desired_width(ui.available_width()),
                     );
                     ui.label(
-                        egui::RichText::new(
-                            "Search: type words (all of them have to be in the topic)",
-                        )
-                        .small()
-                        .weak(),
+                        egui::RichText::new(rust_i18n::t!("help.search_note"))
+                            .small()
+                            .weak(),
                     );
                     egui::ScrollArea::vertical()
                         .id_salt("help_list")
@@ -339,14 +329,14 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let cur = selected.clone();
-                            show_topic(ui, cur.as_deref(), &base, &mut selected, &mut link);
+                            show_topic(ui, cur.as_deref(), &mut selected, &mut link);
                         });
                 });
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.checkbox(&mut on, "Show a tip the first time I use something");
-                if ui.button("Show all tips again").clicked() {
+                ui.checkbox(&mut on, rust_i18n::t!("help.show_first_tip"));
+                if ui.button(rust_i18n::t!("help.show_all")).clicked() {
                     reset = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -378,13 +368,12 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
 fn show_topic(
     ui: &mut egui::Ui,
     id: Option<&str>,
-    base: &str,
     selected: &mut Option<String>,
     link: &mut Option<&'static str>,
 ) {
     let Some(t) = id.and_then(help_texts::by_id) else {
         ui.label(
-            egui::RichText::new("Nothing found. Try fewer or other words.")
+            egui::RichText::new(rust_i18n::t!("help.nothing_found"))
                 .weak()
                 .size(14.0),
         );
@@ -396,18 +385,15 @@ fn show_topic(
     ui.label(t.text);
     if t.id == "about" {
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Website").clicked() {
-                *link = Some(WEBSITE);
-            }
-            ui.weak(format!("程序目录：{base}"));
-        });
+        if ui.button(rust_i18n::t!("help.website")).clicked() {
+            *link = Some(WEBSITE);
+        }
     }
     let see = help_texts::see(t.id);
     if !see.is_empty() {
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            ui.weak("See also:");
+            ui.weak(rust_i18n::t!("help.see_also"));
             for (n, sid) in see.iter().enumerate() {
                 if n > 0 {
                     ui.weak("·");
@@ -448,7 +434,7 @@ pub fn tips_ui(app: &mut App, ctx: &egui::Context) {
     let mut on_changed = false;
     let mut got_it = false;
     let mut more = false;
-    egui::Window::new("Tip")
+    egui::Window::new(rust_i18n::t!("tip.title"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
         .collapsible(false)
         .resizable(false)
@@ -460,14 +446,14 @@ pub fn tips_ui(app: &mut App, ctx: &egui::Context) {
             ui.label(topic.tip);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut on, "Show tips").changed() {
+                if ui.checkbox(&mut on, rust_i18n::t!("tip.show")).changed() {
                     on_changed = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Got it").clicked() {
+                    if ui.button(rust_i18n::t!("tip.got_it")).clicked() {
                         got_it = true;
                     }
-                    if ui.button("More…").clicked() {
+                    if ui.button(rust_i18n::t!("tip.more")).clicked() {
                         more = true;
                     }
                 });

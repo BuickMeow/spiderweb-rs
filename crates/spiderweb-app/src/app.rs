@@ -81,6 +81,25 @@ impl Tool {
         }
     }
 
+    /// 界面上的工具名（按钮 / 提示；形状名等数据仍用 [`Tool::label`]）。
+    pub fn ui_label(self) -> String {
+        match self {
+            Tool::Select => rust_i18n::t!("tool.select"),
+            Tool::Line => rust_i18n::t!("tool.line"),
+            Tool::Poly => rust_i18n::t!("tool.poly"),
+            Tool::Free => rust_i18n::t!("tool.free"),
+            Tool::Curve => rust_i18n::t!("tool.curve"),
+            Tool::Arc => rust_i18n::t!("tool.arc"),
+            Tool::Custom => rust_i18n::t!("tool.custom"),
+            Tool::Funnel => rust_i18n::t!("tool.funnel"),
+            Tool::Text => rust_i18n::t!("tool.text"),
+            Tool::Square => rust_i18n::t!("tool.square"),
+            Tool::Circle => rust_i18n::t!("tool.circle"),
+            Tool::Triangle => rust_i18n::t!("tool.triangle"),
+        }
+        .to_string()
+    }
+
     pub fn hotkey(self) -> &'static str {
         match self {
             Tool::Select => "v",
@@ -190,6 +209,8 @@ pub struct App {
     pub dirty: bool,
     pub last_autosave: Instant,
     pub pending_big: Option<PendingBig>,
+    /// Delete all 的确认框（原版 messagebox.askyesno）：待确认的形状数。
+    pub pending_delete_all: Option<usize>,
     pub clipboard: Vec<Shape>,
     pub loaded: bool,
     pub panel_sel: Option<usize>,
@@ -291,6 +312,7 @@ impl App {
             dirty: false,
             last_autosave: Instant::now(),
             pending_big: None,
+            pending_delete_all: None,
             clipboard: Vec::new(),
             loaded: false,
             panel_sel: None,
@@ -353,8 +375,12 @@ impl App {
                 backup: None,
             } => {
                 self.status = match renamed_to {
-                    Some(p) => format!("autosave 打不开，已改名为 {}", p.display()),
-                    None => "autosave 打不开".to_string(),
+                    Some(p) => rust_i18n::t!(
+                        "status.autosave_broken_kept",
+                        path = p.display().to_string()
+                    )
+                    .to_string(),
+                    None => rust_i18n::t!("status.autosave_broken").to_string(),
                 };
             }
         }
@@ -443,9 +469,8 @@ impl App {
             .save_file()
         {
             let p = self.to_project();
-            match p.write(&path, None) {
-                Ok(()) => self.status = format!("已保存 {}", path.display()),
-                Err(e) => self.status = format!("保存失败：{e}"),
+            if let Err(e) = p.write(&path, None) {
+                self.status = rust_i18n::t!("status.couldnt_save", e = e.to_string()).to_string();
             }
         }
     }
@@ -460,9 +485,11 @@ impl App {
                 Ok(p) => {
                     self.apply_project(p);
                     self.shapes_changed();
-                    self.status = format!("已打开 {}", path.display());
                 }
-                Err(e) => self.status = format!("打不开：{e:?}"),
+                Err(e) => {
+                    self.status = rust_i18n::t!("status.couldnt_open_project", e = format!("{e:?}"))
+                        .to_string()
+                }
             }
         }
     }
@@ -480,8 +507,34 @@ impl App {
             self.beats as u8,
             &self.rendered,
         ) {
-            Ok(()) => self.status = format!("已写出 {}", path.display()),
-            Err(e) => self.status = format!("写出失败：{e:?}"),
+            Ok(()) => {
+                let channels = if self.channel_mode == ChannelMode::Auto {
+                    self.slot_count
+                } else {
+                    1
+                };
+                let note = if self.ppq >= i64::from(spiderweb_io::midi::PPQ_WARN) {
+                    rust_i18n::t!(
+                        "status.ppq_warning",
+                        ppq = self.ppq.to_string(),
+                        warn = spiderweb_io::midi::PPQ_WARN.to_string()
+                    )
+                    .to_string()
+                } else {
+                    String::new()
+                };
+                self.status = rust_i18n::t!(
+                    "status.saved_midi",
+                    notes = self.rendered.len().to_string(),
+                    channels = channels.to_string(),
+                    path = path.display().to_string(),
+                    note = note
+                )
+                .to_string();
+            }
+            Err(e) => {
+                self.status = rust_i18n::t!("status.couldnt_save", e = format!("{e:?}")).to_string()
+            }
         }
     }
 
@@ -497,16 +550,21 @@ impl App {
 
     pub fn shape_label(&self, sh: &Shape) -> String {
         if sh.notes.is_some() {
-            return "Pasted notes".to_string();
+            return rust_i18n::t!("shape.pasted_notes").to_string();
         }
         if sh.text.is_some() {
-            return format!("Text: {}", if sh.name.is_empty() { "?" } else { &sh.name });
+            return rust_i18n::t!(
+                "shape.text",
+                name = if sh.name.is_empty() { "?" } else { &sh.name }
+            )
+            .to_string();
         }
         if sh.kind == Kind::Custom {
-            return format!(
-                "Custom: {}",
-                if sh.name.is_empty() { "?" } else { &sh.name }
-            );
+            return rust_i18n::t!(
+                "shape.custom",
+                name = if sh.name.is_empty() { "?" } else { &sh.name }
+            )
+            .to_string();
         }
         engine::KINDS
             .iter()
@@ -656,10 +714,17 @@ impl App {
         self.delete_selected();
     }
 
+    /// Delete all：先弹原版的确认框（Ctrl+Z 能撤销）。
     pub fn delete_all(&mut self) {
         if self.shapes.is_empty() {
             return;
         }
+        self.pending_delete_all = Some(self.shapes.len());
+    }
+
+    /// 确认后真正清空（原版 delete_all 的确认部分之后）。
+    fn do_delete_all(&mut self) {
+        self.cancel_draft();
         self.push_undo();
         self.shapes.clear();
         self.select(None, false);
@@ -795,10 +860,8 @@ impl App {
             return;
         }
         self.clipboard = self.sels.iter().map(|&i| self.shapes[i].clone()).collect();
-        self.status = format!(
-            "已复制 {} 个形状 — Ctrl+V 粘贴到播放线",
-            self.clipboard.len()
-        );
+        self.status =
+            rust_i18n::t!("status.copied_shapes", n = self.clipboard.len().to_string()).to_string();
     }
 
     pub fn paste(&mut self) {
@@ -837,29 +900,59 @@ impl App {
                 .collect()
         };
         if notes.is_empty() {
-            self.status = "没有音符可复制".to_string();
+            self.status = if self.sels.is_empty() {
+                rust_i18n::t!("status.no_notes_to_copy").to_string()
+            } else {
+                rust_i18n::t!("status.selected_shapes_no_notes").to_string()
+            };
             return;
         }
+        let ppq = self.ppq;
         match spiderweb_domino::clip_data(&notes, self.ppq as u16, self.beats) {
             Ok(raw) => {
                 if spiderweb_domino::put_on_clipboard(&raw) {
-                    self.status = "已复制到 Domino 剪贴板".to_string();
+                    let what = if self.sels.is_empty() {
+                        rust_i18n::t!("status.all_notes", n = notes.len().to_string()).to_string()
+                    } else {
+                        rust_i18n::t!(
+                            "status.notes_count",
+                            n = notes.len().to_string(),
+                            s = if notes.len() == 1 { "" } else { "s" }
+                        )
+                        .to_string()
+                    };
+                    let tracks = notes.iter().map(|n| n[4]).collect::<BTreeSet<i64>>().len();
+                    let place = if tracks == 1 {
+                        rust_i18n::t!("status.a_track").to_string()
+                    } else {
+                        rust_i18n::t!("status.first_of_tracks", n = tracks.to_string()).to_string()
+                    };
+                    self.status = rust_i18n::t!(
+                        "status.copied_domino",
+                        what = what,
+                        ppq = ppq.to_string(),
+                        place = place
+                    )
+                    .to_string();
                 } else {
-                    self.status = "剪贴板不可用（仅 Windows 支持 Domino 格式）".to_string();
+                    self.status = rust_i18n::t!("status.clipboard_error").to_string();
                 }
             }
-            Err(e) => self.status = format!("复制失败：{e:?}"),
+            Err(_) => self.status = rust_i18n::t!("status.clipboard_error").to_string(),
         }
     }
 
     pub fn paste_from_domino(&mut self) {
         match spiderweb_domino::get_from_clipboard() {
-            spiderweb_domino::ClipboardGet::Busy | spiderweb_domino::ClipboardGet::NoData => {
-                self.status = "剪贴板里没有 Domino 数据".to_string();
+            spiderweb_domino::ClipboardGet::Busy => {
+                self.status = rust_i18n::t!("status.clipboard_error").to_string();
+            }
+            spiderweb_domino::ClipboardGet::NoData => {
+                self.status = rust_i18n::t!("status.no_domino_notes").to_string();
             }
             spiderweb_domino::ClipboardGet::Data(raw) => match spiderweb_domino::read_notes(&raw) {
-                Ok((rows, _ppq)) => {
-                    if let Some(mut sh) = notes_shape(&rows, self.ppq as f64, "From Domino") {
+                Ok((rows, their_ppq)) => {
+                    if let Some(mut sh) = notes_shape(&rows, self.ppq as f64, "Pasted notes") {
                         // 粘贴起点对齐到播放线（原版把复制内容的起点放在播放线）
                         let t0 =
                             rows.iter().map(|r| r[0]).min().unwrap_or(0) as f64 / self.ppq as f64;
@@ -868,12 +961,28 @@ impl App {
                             p[0] += shift;
                         }
                         self.add_shape(sh);
-                        self.status = "已从 Domino 粘贴".to_string();
+                        let n = rows.len();
+                        let note = match their_ppq {
+                            Some(p) if i64::from(p) != self.ppq => {
+                                rust_i18n::t!("status.domino_ppq", ppq = p.to_string()).to_string()
+                            }
+                            _ => String::new(),
+                        };
+                        self.status = rust_i18n::t!(
+                            "status.pasted_domino",
+                            n = n.to_string(),
+                            s = if n == 1 { "" } else { "s" },
+                            note = note
+                        )
+                        .to_string();
                     } else {
-                        self.status = "Domino 数据里没有音符".to_string();
+                        self.status = rust_i18n::t!("status.domino_no_notes").to_string();
                     }
                 }
-                Err(e) => self.status = format!("Domino 数据读不了：{e:?}"),
+                Err(e) => {
+                    self.status = rust_i18n::t!("status.clipboard_read_error", e = format!("{e:?}"))
+                        .to_string()
+                }
             },
         }
     }
@@ -1240,13 +1349,16 @@ impl App {
         if let Some(pos) = &self.position {
             parts.push(pos.clone());
         }
-        parts.push(format!(
-            "{} shapes · {} notes",
-            self.shapes.len(),
-            self.rendered.len()
-        ));
+        parts.push(
+            rust_i18n::t!(
+                "status.shapes_notes",
+                shapes = self.shapes.len().to_string(),
+                notes = self.rendered.len().to_string()
+            )
+            .to_string(),
+        );
         if self.channel_mode == ChannelMode::Auto && self.slot_count > 0 {
-            parts.push(format!("{} tracks (one channel each)", self.slot_count));
+            parts.push(rust_i18n::t!("status.tracks", n = self.slot_count.to_string()).to_string());
         }
         if !self.sels.is_empty() {
             let n: usize = self
@@ -1254,7 +1366,15 @@ impl App {
                 .iter()
                 .map(|&i| self.note_counts.get(i).copied().unwrap_or(0))
                 .sum();
-            parts.push(format!("selected: {} notes", n));
+            let shapes = if self.sels.len() > 1 {
+                rust_i18n::t!("status.many_shapes", n = self.sels.len().to_string()).to_string()
+            } else {
+                String::new()
+            };
+            parts.push(
+                rust_i18n::t!("status.selected", shapes = shapes, notes = n.to_string())
+                    .to_string(),
+            );
         }
         if !self.status.is_empty() {
             parts.push(self.status.clone());
@@ -1342,15 +1462,14 @@ impl eframe::App for App {
                 .collapsible(false)
                 .resizable(false)
                 .show(&ctx, |ui| {
-                    ui.label(format!(
-                        "这一步会生成约 {} 个音符，可能让程序变卡。继续吗？",
-                        pending.total
-                    ));
+                    ui.label(
+                        rust_i18n::t!("confirm.big", total = pending.total.to_string()).to_string(),
+                    );
                     ui.horizontal(|ui| {
-                        if ui.button("继续").clicked() {
+                        if ui.button(rust_i18n::t!("common.yes").to_string()).clicked() {
                             go = true;
                         }
-                        if ui.button("取消").clicked() {
+                        if ui.button(rust_i18n::t!("common.no").to_string()).clicked() {
                             cancel = true;
                         }
                     });
@@ -1361,6 +1480,32 @@ impl eframe::App for App {
                 }
             } else if !cancel {
                 self.pending_big = Some(pending);
+            }
+        }
+
+        if let Some(count) = self.pending_delete_all.take() {
+            let mut delete = false;
+            let mut cancel = false;
+            egui::Window::new("Spiderweb")
+                .collapsible(false)
+                .resizable(false)
+                .show(&ctx, |ui| {
+                    ui.label(
+                        rust_i18n::t!("confirm.delete_all", n = count.to_string()).to_string(),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(rust_i18n::t!("common.yes").to_string()).clicked() {
+                            delete = true;
+                        }
+                        if ui.button(rust_i18n::t!("common.no").to_string()).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            if delete {
+                self.do_delete_all();
+            } else if !cancel {
+                self.pending_delete_all = Some(count);
             }
         }
     }

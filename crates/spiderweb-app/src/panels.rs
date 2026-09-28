@@ -39,9 +39,9 @@ fn weight_name(w: i32) -> &'static str {
 }
 
 /// 面板的一行数字框（原版 ENTRIES 的 label / unit / range / scrub 步长）。
-struct NumberRow<'a> {
-    label: &'a str,
-    unit: &'a str,
+struct NumberRow {
+    label: String,
+    unit: String,
     value: f64,
     range: std::ops::RangeInclusive<f64>,
     speed: f64,
@@ -49,7 +49,7 @@ struct NumberRow<'a> {
 
 fn number_row(
     ui: &mut egui::Ui,
-    row: NumberRow<'_>,
+    row: NumberRow,
     changes: &mut TextChange,
     any: &mut bool,
     set: impl FnOnce(&mut TextChange, f64),
@@ -151,35 +151,38 @@ fn tumour_kind(kind: Kind) -> bool {
     )
 }
 
-fn tumour_shape_name(s: TumourShape) -> &'static str {
+fn tumour_shape_name(s: TumourShape) -> String {
     match s {
-        TumourShape::Triangle => "Triangle",
-        TumourShape::Square => "Square",
-        TumourShape::Circle => "Circle",
-        TumourShape::Parabola => "Parabola",
+        TumourShape::Triangle => rust_i18n::t!("tool.triangle"),
+        TumourShape::Square => rust_i18n::t!("tool.square"),
+        TumourShape::Circle => rust_i18n::t!("tool.circle"),
+        TumourShape::Parabola => rust_i18n::t!("panel.tumour.parabola"),
     }
+    .to_string()
 }
 
-fn tumour_side_name(s: TumourSide) -> &'static str {
+fn tumour_side_name(s: TumourSide) -> String {
     match s {
-        TumourSide::Alt => "Alternating",
-        TumourSide::Left => "Left",
-        TumourSide::Right => "Right",
-        TumourSide::Random => "Random",
+        TumourSide::Alt => rust_i18n::t!("panel.tumour.side_alt"),
+        TumourSide::Left => rust_i18n::t!("panel.tumour.side_left"),
+        TumourSide::Right => rust_i18n::t!("panel.tumour.side_right"),
+        TumourSide::Random => rust_i18n::t!("panel.tumour.side_random"),
     }
+    .to_string()
 }
 
-fn tumour_wrap_name(w: TumourWrap) -> &'static str {
+fn tumour_wrap_name(w: TumourWrap) -> String {
     match w {
-        TumourWrap::Simple => "Straight",
-        TumourWrap::Wrap => "Bent with the line",
+        TumourWrap::Simple => rust_i18n::t!("panel.tumour.wrap_straight"),
+        TumourWrap::Wrap => rust_i18n::t!("panel.tumour.wrap_bent"),
     }
+    .to_string()
 }
 
 /// 一行肿瘤数字框；改了就把（新值, 是不是新一次拖动）记进 `changes`。
 fn tumour_num_row(
     ui: &mut egui::Ui,
-    row: NumberRow<'_>,
+    row: NumberRow,
     make: impl Fn(f64) -> TumourChange,
     changes: &mut Vec<(TumourChange, bool)>,
     fresh: &mut bool,
@@ -227,7 +230,7 @@ impl App {
                     continue;
                 }
                 let selected = self.tool == tool;
-                let text = format!("{} ({})", tool.label(), tool.hotkey().to_uppercase());
+                let text = format!("{} ({})", tool.ui_label(), tool.hotkey().to_uppercase());
                 // 按钮上显示这个工具的 tip（原版 widgets.Tooltip）
                 let tip = tip_of(crate::help::tool_topic(tool));
                 if ui
@@ -247,7 +250,7 @@ impl App {
             }
             ui.separator();
             if ui
-                .checkbox(&mut self.live, "Live shape (G)")
+                .checkbox(&mut self.live, rust_i18n::t!("toolbar.live_shape"))
                 .on_hover_text(tip_of("live"))
                 .changed()
                 && self.live
@@ -256,7 +259,7 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("Snap");
+            ui.label(rust_i18n::t!("toolbar.snap"));
             egui::ComboBox::from_id_salt("snap")
                 .selected_text(self.snap.clone())
                 .width(70.0)
@@ -267,35 +270,39 @@ impl App {
                         }
                     }
                 });
-            ui.checkbox(&mut self.show_lines, "Show lines").changed();
-            ui.checkbox(&mut self.show_notes, "Show notes");
+            ui.checkbox(&mut self.show_lines, rust_i18n::t!("toolbar.show_lines"))
+                .changed();
+            ui.checkbox(&mut self.show_notes, rust_i18n::t!("toolbar.show_notes"));
             if ui
-                .checkbox(&mut self.show_velocity, "Velocity pane")
+                .checkbox(
+                    &mut self.show_velocity,
+                    rust_i18n::t!("toolbar.velocity_pane"),
+                )
                 .changed()
                 && self.show_velocity
             {
                 self.tips.show("velocity");
             }
-            if ui.button("Fit view").clicked() {
+            if ui.button(rust_i18n::t!("toolbar.fit_view")).clicked() {
                 self.view.fit_shapes(&self.shapes, self.beats);
             }
-            if ui.button("Undo").clicked() {
+            if ui.button(rust_i18n::t!("toolbar.undo")).clicked() {
                 self.undo();
             }
-            if ui.button("Redo").clicked() {
+            if ui.button(rust_i18n::t!("toolbar.redo")).clicked() {
                 self.redo();
             }
             let play_label = if self.player.running() {
-                "■ Stop (Space)"
+                rust_i18n::t!("toolbar.stop")
             } else {
-                "▶ Play (Space)"
+                rust_i18n::t!("toolbar.play")
             };
             if ui.button(play_label).clicked() {
                 self.toggle_play();
             }
             if ui
-                .button("Help (F1)")
-                .on_hover_text("Every tip, searchable. Opens at the tool you're using.")
+                .button(rust_i18n::t!("toolbar.help"))
+                .on_hover_text(rust_i18n::t!("toolbar.help_tip"))
                 .clicked()
             {
                 crate::help::open_help(self, None);
@@ -414,25 +421,21 @@ impl App {
         };
         let mut changed = false;
         let mut fresh = false;
-        egui::CollapsingHeader::new("Freehand")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.freehand.title"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Straighten");
+                    ui.label(rust_i18n::t!("panel.freehand.straighten"));
                     let resp = ui
                         .add(egui::Slider::new(&mut value, 0..=100))
-                        .on_hover_text(
-                            "0 = as you drew it. Higher = straighter lines and smoother curves; \
-                             a stroke that ends where it started becomes a perfect shape. \
-                             New freehand strokes use the last number picked.",
-                        );
+                        .on_hover_text(rust_i18n::t!("panel.freehand.tip"));
                     fresh = resp.drag_started();
                     if resp.changed() {
                         changed = true;
                     }
                 });
                 ui.label(
-                    egui::RichText::new("0 = as drawn, 100 = simplest")
+                    egui::RichText::new(rust_i18n::t!("panel.freehand.note"))
                         .weak()
                         .size(10.0),
                 );
@@ -557,24 +560,18 @@ impl App {
         // 这一帧有没有数字框 / 滑块刚刚开始拖（新的一次手势 = 新的一步撤销）
         let mut fresh = false;
         let mut reroll = false;
-        let note_total: i64 = if placed {
-            targets
-                .iter()
-                .filter_map(|&i| self.shapes.get(i))
-                .map(|sh| self.note_count(sh))
-                .sum()
-        } else {
-            0
-        };
-        egui::CollapsingHeader::new("Tumour")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.tumour.title"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let mut on_edit = on;
-                    if ui.checkbox(&mut on_edit, "Tumours").changed() {
+                    if ui
+                        .checkbox(&mut on_edit, rust_i18n::t!("panel.tumour.on"))
+                        .changed()
+                    {
                         changes.push((TumourChange::On(on_edit), true));
                     }
-                    ui.label("Shape");
+                    ui.label(rust_i18n::t!("panel.tumour.shape"));
                     let mut shape_edit = shape;
                     egui::ComboBox::from_id_salt("tumour_shape")
                         .selected_text(tumour_shape_name(shape_edit))
@@ -601,8 +598,8 @@ impl App {
                 tumour_num_row(
                     ui,
                     NumberRow {
-                        label: "Size",
-                        unit: "keys",
+                        label: rust_i18n::t!("panel.tumour.size").to_string(),
+                        unit: rust_i18n::t!("unit.keys").to_string(),
                         value: size,
                         range: 0.0..=1000.0,
                         speed: 0.1,
@@ -614,8 +611,8 @@ impl App {
                 tumour_num_row(
                     ui,
                     NumberRow {
-                        label: "Length",
-                        unit: "ticks",
+                        label: rust_i18n::t!("panel.tumour.length").to_string(),
+                        unit: rust_i18n::t!("unit.ticks").to_string(),
                         value: length,
                         range: 0.0..=10_000_000.0,
                         speed: 1.0,
@@ -627,8 +624,8 @@ impl App {
                 tumour_num_row(
                     ui,
                     NumberRow {
-                        label: "Distance",
-                        unit: "ticks",
+                        label: rust_i18n::t!("panel.tumour.distance").to_string(),
+                        unit: rust_i18n::t!("unit.ticks").to_string(),
                         value: dist,
                         range: 1.0..=10_000_000.0,
                         speed: 1.0,
@@ -640,8 +637,8 @@ impl App {
                 tumour_num_row(
                     ui,
                     NumberRow {
-                        label: "Lead in",
-                        unit: "ticks",
+                        label: rust_i18n::t!("panel.tumour.lead_in").to_string(),
+                        unit: rust_i18n::t!("unit.ticks").to_string(),
                         value: ease,
                         range: 0.0..=10_000_000.0,
                         speed: 1.0,
@@ -651,7 +648,7 @@ impl App {
                     &mut fresh,
                 );
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Side");
+                    ui.label(rust_i18n::t!("panel.tumour.side"));
                     let mut side_edit = side;
                     egui::ComboBox::from_id_salt("tumour_side")
                         .selected_text(tumour_side_name(side_edit))
@@ -674,7 +671,7 @@ impl App {
                     if side_edit != side {
                         changes.push((TumourChange::Side(side_edit), true));
                     }
-                    ui.label("Wrap");
+                    ui.label(rust_i18n::t!("panel.tumour.wrap"));
                     let mut wrap_edit = wrap;
                     egui::ComboBox::from_id_salt("tumour_wrap")
                         .selected_text(tumour_wrap_name(wrap_edit))
@@ -694,7 +691,7 @@ impl App {
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Range");
+                    ui.label(rust_i18n::t!("panel.tumour.range"));
                     let mut start_edit = start;
                     let resp = ui.add(
                         egui::DragValue::new(&mut start_edit)
@@ -706,7 +703,7 @@ impl App {
                     if resp.changed() {
                         changes.push((TumourChange::Start(start_edit / 100.0), fresh));
                     }
-                    ui.label("% to");
+                    ui.label(rust_i18n::t!("panel.tumour.pct_to"));
                     let mut end_edit = end;
                     let resp = ui.add(
                         egui::DragValue::new(&mut end_edit)
@@ -718,23 +715,29 @@ impl App {
                     if resp.changed() {
                         changes.push((TumourChange::End(end_edit / 100.0), fresh));
                     }
-                    ui.label("%");
+                    ui.label(rust_i18n::t!("panel.tumour.pct"));
                     let mut fit_edit = fit;
-                    if ui.checkbox(&mut fit_edit, "Fit").changed() {
+                    if ui
+                        .checkbox(&mut fit_edit, rust_i18n::t!("panel.tumour.fit"))
+                        .changed()
+                    {
                         changes.push((TumourChange::Fit(fit_edit), true));
                     }
                     // "New random" 只在方向是 Random 且开着时能按（原版 reroll 按钮）
                     let can_reroll = on && side == TumourSide::Random;
                     if ui
-                        .add_enabled(can_reroll, egui::Button::new("New random"))
-                        .on_hover_text("Random sides: pick them again.")
+                        .add_enabled(
+                            can_reroll,
+                            egui::Button::new(rust_i18n::t!("panel.tumour.new_random")),
+                        )
+                        .on_hover_text(rust_i18n::t!("panel.tumour.reroll_tip"))
                         .clicked()
                     {
                         reroll = true;
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Seed");
+                    ui.label(rust_i18n::t!("panel.tumour.seed"));
                     let resp = ui.add(
                         egui::DragValue::new(&mut seed)
                             .speed(1.0)
@@ -745,19 +748,19 @@ impl App {
                         changes.push((TumourChange::Seed(seed), fresh));
                     }
                     let mut mirror_edit = mirror;
-                    if ui.checkbox(&mut mirror_edit, "Mirror").changed() {
+                    if ui
+                        .checkbox(&mut mirror_edit, rust_i18n::t!("panel.tumour.mirror"))
+                        .changed()
+                    {
                         changes.push((TumourChange::Mirror(mirror_edit), true));
                     }
                 });
                 let info = if !on {
-                    "Tick Tumours to put bumps along this line.".to_string()
+                    rust_i18n::t!("panel.tumour.info_off").to_string()
                 } else if placed {
-                    format!(
-                        "{note_total} notes. Bumps along the line; the line's points stay draggable. \
-                         Length 0 = spikes (a zigzag)."
-                    )
+                    rust_i18n::t!("panel.tumour.info_on").to_string()
                 } else {
-                    "New line-like shapes get these tumours (Length 0 = spikes).".to_string()
+                    String::new()
                 };
                 ui.label(egui::RichText::new(info).weak().size(10.0));
             });
@@ -838,11 +841,11 @@ impl App {
             return; // 选中的都不是自定义形状
         }
         let title = if placed.is_empty() {
-            "New custom shape".to_string()
+            rust_i18n::t!("panel.custom.title_new").to_string()
         } else if placed.len() > 1 {
-            format!("Custom shapes ({})", placed.len())
+            rust_i18n::t!("panel.custom.title_many", n = placed.len().to_string()).to_string()
         } else {
-            "Custom shape".to_string()
+            rust_i18n::t!("panel.custom.title").to_string()
         };
         egui::CollapsingHeader::new(title)
             .default_open(true)
@@ -896,7 +899,7 @@ impl App {
         let lib_names = crate::drawer::library_names(&self.library_dir);
 
         ui.horizontal(|ui| {
-            ui.label("Shape");
+            ui.label(rust_i18n::t!("panel.custom.shape"));
             egui::ComboBox::from_id_salt("custom_shape")
                 .selected_text(name.clone())
                 .width(100.0)
@@ -907,7 +910,7 @@ impl App {
                         }
                     }
                 });
-            if ui.button("Drawer…").clicked() {
+            if ui.button(rust_i18n::t!("panel.custom.drawer")).clicked() {
                 self.open_drawer();
             }
         });
@@ -917,17 +920,18 @@ impl App {
                 .filter_map(|&i| self.shapes.get(i))
                 .map(|s| self.note_count(s))
                 .sum();
-            ui.label(format!(
-                "{total} 个粘贴的音符。拖角点 / 边缩放，角外旋转，边中外斜切。"
+            ui.label(rust_i18n::t!(
+                "panel.custom.info_pasted",
+                total = total.to_string()
             ));
         } else {
-            ui.label("Inside");
+            ui.label(rust_i18n::t!("panel.custom.inside"));
             for (label, value) in [
-                ("Empty (outline only)", Fill::Empty),
-                ("Fill (one long note per key)", Fill::Fill),
-                ("Spam (notes of one gate)", Fill::Spam),
+                (rust_i18n::t!("panel.custom.empty"), Fill::Empty),
+                (rust_i18n::t!("panel.custom.fill"), Fill::Fill),
+                (rust_i18n::t!("panel.custom.spam"), Fill::Spam),
                 (
-                    "Outline spam (the outline in notes of one gate)",
+                    rust_i18n::t!("panel.custom.outline_spam"),
                     Fill::OutlineSpam,
                 ),
             ] {
@@ -941,23 +945,26 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(spam, |ui| {
-                    ui.label("gate");
+                    ui.label(rust_i18n::t!("panel.custom.gate"));
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.custom_gate_text).desired_width(70.0),
                     );
                     if resp.lost_focus() {
                         apply_gate = true; // Enter 或点到别处都应用（原版 Return / FocusOut）
                     }
-                    ui.label("ticks (Enter to apply)");
+                    ui.label(rust_i18n::t!("panel.custom.gate_hint"));
                 });
             });
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(spam, |ui| {
-                    ui.label("start");
+                    ui.label(rust_i18n::t!("panel.custom.start"));
                     if ui
                         .add_enabled(
                             align != Align::Auto,
-                            egui::RadioButton::new(align == Align::Auto, "Auto"),
+                            egui::RadioButton::new(
+                                align == Align::Auto,
+                                rust_i18n::t!("panel.custom.auto"),
+                            ),
                         )
                         .clicked()
                     {
@@ -966,7 +973,10 @@ impl App {
                     if ui
                         .add_enabled(
                             align != Align::Aligned,
-                            egui::RadioButton::new(align == Align::Aligned, "Aligned"),
+                            egui::RadioButton::new(
+                                align == Align::Aligned,
+                                rust_i18n::t!("panel.custom.aligned"),
+                            ),
                         )
                         .clicked()
                     {
@@ -984,35 +994,42 @@ impl App {
                 .filter_map(|&i| self.shapes.get(i))
                 .map(|s| self.note_count(s))
                 .sum();
-            let mut info = format!("{total} 个音符。");
+            let mut info =
+                rust_i18n::t!("panel.custom.info_notes", total = total.to_string()).to_string();
             if gaps == 1 && matches!(fill, Fill::Fill | Fill::Spam) {
-                info += "  轮廓有一个缺口：按虚线补直接上。";
+                info += &format!("  {}", rust_i18n::t!("panel.custom.info_one_gap"));
             } else if gaps > 1 {
-                info += &format!("  轮廓有 {gaps} 个缺口：只能 Empty / Outline spam。");
+                info += &format!(
+                    "  {}",
+                    rust_i18n::t!("panel.custom.info_gaps", gaps = gaps.to_string())
+                );
             }
             if let Some(k) = self.stroke
                 && placed.len() == 1
                 && let Some(sh) = self.shapes.get(placed[0])
             {
                 info += &format!(
-                    "  已拾取第 {} / {} 条笔画（Del 删除，Esc 取消拾取）。",
-                    k + 1,
-                    sh.strokes.len()
+                    "  {}",
+                    rust_i18n::t!(
+                        "panel.custom.info_picked",
+                        k = (k + 1).to_string(),
+                        n = sh.strokes.len().to_string()
+                    )
                 );
             }
             info
         } else if self.live && crate::roll_live::is_stroke_tool(self.tool) {
-            "Live shape：画下的东西进同一个自定义形状（没有选中的就新建一个）。轮廓要填就先闭合。"
-                .to_string()
+            rust_i18n::t!("panel.custom.info_live").to_string()
         } else if crate::roll_live::builtin_template(&self.library_dir, &name).is_none() {
-            "选一个形状，或用 Drawer… 画一个。".to_string()
+            rust_i18n::t!("panel.custom.info_pick").to_string()
         } else if self.tool.is_box() {
-            format!(
-                "在卷帘上拖一个框，或点两个角（Ctrl = 屏幕上正的 {}）。",
-                self.tool.label()
+            rust_i18n::t!(
+                "panel.custom.info_drag_perfect",
+                tool = self.tool.ui_label()
             )
+            .to_string()
         } else {
-            "在卷帘上拖一个框，或点两个角放置（Ctrl = 保持比例）。".to_string()
+            rust_i18n::t!("panel.custom.info_drag_place").to_string()
         };
         if !info.is_empty() {
             ui.label(
@@ -1039,7 +1056,7 @@ impl App {
     /// 面板里选了一个模板（内置或图形库里的）：新形状用它，选中的自定义形状也换成它。
     fn pick_custom_template(&mut self, name: &str, placed: &[usize]) {
         let Some((strokes, _)) = crate::roll_live::builtin_template(&self.library_dir, name) else {
-            self.status = format!("读不了形状 “{name}”");
+            self.status = rust_i18n::t!("panel.custom.error_read", name = name).to_string();
             return;
         };
         self.custom_defaults.shape = name.to_string();
@@ -1089,10 +1106,10 @@ impl App {
 
     /// gate 文本框（ticks，mathexpr 表达式）应用成形状的拍数（原版 on_gate）。
     fn apply_custom_gate(&mut self, placed: &[usize]) {
+        // 输入不合法：原版只把输入框标红（Bad.TEntry），没有提示文字
         let Ok(ticks) =
             spiderweb_io::mathexpr::calc_int(&self.custom_gate_text, Some(1), Some(10_000_000))
         else {
-            self.status = "gate 要是 1..10000000 ticks 的表达式".to_string();
             return;
         };
         let gate = ticks as f64 / self.ppq as f64;
@@ -1111,13 +1128,13 @@ impl App {
     }
 
     fn project_section(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Project")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.project.title"))
             .default_open(true)
             .show(ui, |ui| {
                 egui::Grid::new("project_grid")
                     .num_columns(2)
                     .show(ui, |ui| {
-                        ui.label("PPQ");
+                        ui.label(rust_i18n::t!("panel.project.ppq"));
                         if ui
                             .add(egui::TextEdit::singleline(&mut self.pvar.ppq).desired_width(90.0))
                             .changed()
@@ -1125,7 +1142,7 @@ impl App {
                             self.on_project_change();
                         }
                         ui.end_row();
-                        ui.label("BPM");
+                        ui.label(rust_i18n::t!("panel.project.bpm"));
                         if ui
                             .add(egui::TextEdit::singleline(&mut self.pvar.bpm).desired_width(90.0))
                             .changed()
@@ -1133,7 +1150,7 @@ impl App {
                             self.on_project_change();
                         }
                         ui.end_row();
-                        ui.label("Beats per bar");
+                        ui.label(rust_i18n::t!("panel.project.beats"));
                         if ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.pvar.beats)
@@ -1144,7 +1161,7 @@ impl App {
                             self.on_project_change();
                         }
                         ui.end_row();
-                        ui.label("Output file");
+                        ui.label(rust_i18n::t!("panel.project.output"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.pvar.output).desired_width(180.0),
                         );
@@ -1153,61 +1170,67 @@ impl App {
                 if self.ppq >= 32767 {
                     ui.colored_label(
                         egui::Color32::from_rgb(0xd0, 0x00, 0x00),
-                        "Many programs can't open this PPQ",
+                        rust_i18n::t!("panel.project.ppq_warning"),
                     );
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Open…").clicked() {
+                    if ui.button(rust_i18n::t!("panel.project.open")).clicked() {
                         self.open_project();
                     }
-                    if ui.button("Save…").clicked() {
+                    if ui.button(rust_i18n::t!("panel.project.save")).clicked() {
                         self.save_project_as();
                     }
-                    if ui.button("Generate MIDI").clicked() {
+                    if ui.button(rust_i18n::t!("panel.project.generate")).clicked() {
                         self.generate_midi();
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Paste from Domino").clicked() {
+                    if ui
+                        .button(rust_i18n::t!("panel.project.paste_domino"))
+                        .clicked()
+                    {
                         self.paste_from_domino();
                     }
-                    if ui.button("Copy to Domino").clicked() {
+                    if ui
+                        .button(rust_i18n::t!("panel.project.copy_domino"))
+                        .clicked()
+                    {
                         self.copy_to_domino();
                     }
                 });
-                ui.label("Channels");
+                ui.label(rust_i18n::t!("panel.project.channels"));
                 ui.radio_value(
                     &mut self.channel_mode,
                     ChannelMode::Raw,
-                    "As drawn (keep overlaps)",
+                    rust_i18n::t!("panel.project.mode_raw"),
                 );
                 ui.radio_value(
                     &mut self.channel_mode,
                     ChannelMode::Single,
-                    "Single channel (remove overlaps)",
+                    rust_i18n::t!("panel.project.mode_single"),
                 );
                 ui.radio_value(
                     &mut self.channel_mode,
                     ChannelMode::Auto,
-                    "Multi channel (a channel per overlap)",
+                    rust_i18n::t!("panel.project.mode_auto"),
                 );
                 if self.channel_mode == ChannelMode::Auto {
                     ui.horizontal(|ui| {
-                        ui.label("Split");
+                        ui.label(rust_i18n::t!("panel.project.split"));
                         ui.radio_value(
                             &mut self.channel_split,
                             ChannelSplit::Key,
-                            "Same key at the same time",
+                            rust_i18n::t!("panel.project.split_key"),
                         );
                         ui.radio_value(
                             &mut self.channel_split,
                             ChannelSplit::Time,
-                            "Any notes at the same time",
+                            rust_i18n::t!("panel.project.split_time"),
                         );
                     });
                 }
                 ui.horizontal(|ui| {
-                    ui.label("MIDI out");
+                    ui.label(rust_i18n::t!("panel.project.midi_out"));
                     egui::ComboBox::from_id_salt("midi_out")
                         .selected_text(if self.midi_device.is_empty() {
                             "(default)"
@@ -1229,7 +1252,7 @@ impl App {
     }
 
     fn shapes_section(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Shapes")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.shapes.title"))
             .default_open(true)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
@@ -1244,12 +1267,13 @@ impl App {
                                 let count = self.note_counts.get(i).copied().unwrap_or(0);
                                 (
                                     i,
-                                    format!(
-                                        "{}.  {}  —  {} notes",
-                                        i + 1,
-                                        self.shape_label(sh),
-                                        count
-                                    ),
+                                    rust_i18n::t!(
+                                        "panel.shapes.item",
+                                        i = (i + 1).to_string(),
+                                        label = self.shape_label(sh),
+                                        notes = count.to_string()
+                                    )
+                                    .to_string(),
                                 )
                             })
                             .collect();
@@ -1269,13 +1293,16 @@ impl App {
                         }
                     });
                 ui.horizontal(|ui| {
-                    if ui.button("Duplicate").clicked() {
+                    if ui.button(rust_i18n::t!("panel.shapes.duplicate")).clicked() {
                         self.duplicate();
                     }
-                    if ui.button("Delete").clicked() {
+                    if ui.button(rust_i18n::t!("panel.shapes.delete")).clicked() {
                         self.delete_selected();
                     }
-                    if ui.button("Delete all").clicked() {
+                    if ui
+                        .button(rust_i18n::t!("panel.shapes.delete_all"))
+                        .clicked()
+                    {
                         self.delete_all();
                     }
                 });
@@ -1286,24 +1313,26 @@ impl App {
         let title = match self.selected() {
             Some(sh) => {
                 let extra = if self.sels.len() > 1 {
-                    format!("  (+{} more selected)", self.sels.len() - 1)
+                    rust_i18n::t!("panel.defaults.more", n = (self.sels.len() - 1).to_string())
+                        .to_string()
                 } else {
                     String::new()
                 };
-                format!(
-                    "Shape {}: {}{}",
-                    self.sel.unwrap_or(0) + 1,
-                    self.shape_label(sh),
-                    extra
+                rust_i18n::t!(
+                    "panel.defaults.title",
+                    i = (self.sel.unwrap_or(0) + 1).to_string(),
+                    label = self.shape_label(sh),
+                    extra = extra
                 )
+                .to_string()
             }
-            None => "New shape defaults".to_string(),
+            None => rust_i18n::t!("panel.defaults.new").to_string(),
         };
         egui::CollapsingHeader::new(title)
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Velocity");
+                    ui.label(rust_i18n::t!("panel.defaults.velocity"));
                     let r0 = ui
                         .add(egui::TextEdit::singleline(&mut self.vel_text[0]).desired_width(50.0));
                     ui.label("→");
@@ -1314,10 +1343,18 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Last note");
+                    ui.label(rust_i18n::t!("panel.defaults.last_note"));
                     let mut end_dot = self.target_end_dot();
-                    let r0 = ui.radio_value(&mut end_dot, false, "ends on the last point");
-                    let r1 = ui.radio_value(&mut end_dot, true, "starts exactly on the last point");
+                    let r0 = ui.radio_value(
+                        &mut end_dot,
+                        false,
+                        rust_i18n::t!("panel.defaults.ends_on"),
+                    );
+                    let r1 = ui.radio_value(
+                        &mut end_dot,
+                        true,
+                        rust_i18n::t!("panel.defaults.starts_on"),
+                    );
                     if r0.changed() || r1.changed() {
                         self.set_end_dot(end_dot);
                     }
@@ -1423,14 +1460,15 @@ impl App {
             self.font_families = spiderweb_core::fonts::font_families();
         }
         let (tx, size) = self.text_current();
-        let font_found = text::text_font(&tx).found();
+        let font = text::text_font(&tx);
+        let font_found = font.found();
         let mut changes = TextChange::default();
         let mut any = false;
-        egui::CollapsingHeader::new("Text")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.text.title"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Font");
+                    ui.label(rust_i18n::t!("panel.text.font"));
                     egui::ComboBox::from_id_salt("text_font")
                         .selected_text(tx.font.clone())
                         .width(150.0)
@@ -1443,17 +1481,18 @@ impl App {
                             }
                         });
                     if ui
-                        .button("选择字体…")
-                        .on_hover_text(
-                            "Pick the font (you can type its name in the window that opens).",
+                        .button(
+                            rust_i18n::t!("panel.text.font_button", font = tx.font.clone())
+                                .to_string(),
                         )
+                        .on_hover_text(rust_i18n::t!("panel.text.font_tip"))
                         .clicked()
                     {
                         crate::text_dialog::open_font_dialog(self, &tx);
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Size");
+                    ui.label(rust_i18n::t!("panel.text.size"));
                     let mut v = size;
                     if ui
                         .add(
@@ -1468,14 +1507,20 @@ impl App {
                         any = true;
                     }
                     if ui
-                        .selectable_label(tx.unit == TextUnit::Font, "Font size")
+                        .selectable_label(
+                            tx.unit == TextUnit::Font,
+                            rust_i18n::t!("panel.text.unit_font"),
+                        )
                         .clicked()
                     {
                         changes.unit = Some(TextUnit::Font);
                         any = true;
                     }
                     if ui
-                        .selectable_label(tx.unit == TextUnit::Rows, "Rows")
+                        .selectable_label(
+                            tx.unit == TextUnit::Rows,
+                            rust_i18n::t!("panel.text.unit_rows"),
+                        )
                         .clicked()
                     {
                         changes.unit = Some(TextUnit::Rows);
@@ -1483,7 +1528,7 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Weight");
+                    ui.label(rust_i18n::t!("panel.text.weight"));
                     let current = weight_name(tx.weight);
                     egui::ComboBox::from_id_salt("text_weight")
                         .selected_text(current)
@@ -1497,7 +1542,10 @@ impl App {
                             }
                         });
                     let mut italic = tx.italic;
-                    if ui.checkbox(&mut italic, "Italic").changed() {
+                    if ui
+                        .checkbox(&mut italic, rust_i18n::t!("panel.text.italic"))
+                        .changed()
+                    {
                         changes.italic = Some(italic);
                         any = true;
                     }
@@ -1505,8 +1553,8 @@ impl App {
                 number_row(
                     ui,
                     NumberRow {
-                        label: "Letter spacing",
-                        unit: "/1000 em",
+                        label: rust_i18n::t!("panel.text.letter_spacing").to_string(),
+                        unit: "/1000 em".to_string(),
                         value: tx.tracking,
                         range: -1000.0..=10000.0,
                         speed: 10.0,
@@ -1518,8 +1566,8 @@ impl App {
                 number_row(
                     ui,
                     NumberRow {
-                        label: "Line spacing",
-                        unit: "%",
+                        label: rust_i18n::t!("panel.text.line_spacing").to_string(),
+                        unit: "%".to_string(),
                         value: tx.leading,
                         range: 1.0..=1000.0,
                         speed: 5.0,
@@ -1529,11 +1577,11 @@ impl App {
                     |c, v| c.leading = Some(v),
                 );
                 ui.horizontal(|ui| {
-                    ui.label("Align");
+                    ui.label(rust_i18n::t!("panel.text.align"));
                     for (align, label) in [
-                        (TextAlign::Left, "Left"),
-                        (TextAlign::Center, "Centre"),
-                        (TextAlign::Right, "Right"),
+                        (TextAlign::Left, rust_i18n::t!("panel.text.align_left")),
+                        (TextAlign::Center, rust_i18n::t!("panel.text.align_center")),
+                        (TextAlign::Right, rust_i18n::t!("panel.text.align_right")),
                     ] {
                         if ui.selectable_label(tx.align == align, label).clicked() {
                             changes.align = Some(align);
@@ -1544,8 +1592,8 @@ impl App {
                 number_row(
                     ui,
                     NumberRow {
-                        label: "Threshold",
-                        unit: "%",
+                        label: rust_i18n::t!("panel.text.threshold").to_string(),
+                        unit: "%".to_string(),
                         value: tx.threshold,
                         range: 0.0..=100.0,
                         speed: 1.0,
@@ -1557,8 +1605,8 @@ impl App {
                 number_row(
                     ui,
                     NumberRow {
-                        label: "Grow",
-                        unit: "keys",
+                        label: rust_i18n::t!("panel.text.grow").to_string(),
+                        unit: rust_i18n::t!("unit.keys").to_string(),
                         value: tx.grow,
                         range: -100.0..=100.0,
                         speed: 0.1,
@@ -1568,19 +1616,26 @@ impl App {
                     |c, v| c.grow = Some(v),
                 );
                 let info = if !font_found {
-                    format!(
-                        "“{}” isn't installed on this PC. The letters stay as they were saved.",
-                        tx.font
+                    rust_i18n::t!(
+                        "panel.text.not_installed",
+                        font = tx.font.clone(),
+                        face = font.face.clone()
                     )
+                    .to_string()
                 } else if self.typing.is_some() {
-                    "Typing: Enter = new line, Esc = done. Click somewhere else for a new text, on a text to retype it.".to_string()
+                    rust_i18n::t!("panel.text.typing").to_string()
                 } else if self.tool == Tool::Text {
-                    "Click on the piano roll and type. Click a text to retype it.".to_string()
+                    rust_i18n::t!("panel.text.click_type").to_string()
                 } else {
-                    "Double-click the text (or right-click → Edit text) to retype it.".to_string()
+                    rust_i18n::t!("panel.text.dbl_click").to_string()
                 };
                 let info = if text_shapes.len() > 1 && self.typing.is_none() {
-                    format!("{info}  Changes go to all {} selected texts.", text_shapes.len())
+                    rust_i18n::t!(
+                        "panel.text.all_texts",
+                        info = info,
+                        n = text_shapes.len().to_string()
+                    )
+                    .to_string()
                 } else {
                     info
                 };
@@ -1606,15 +1661,15 @@ impl App {
         let ppq = self.ppq as f64;
         let mut pts = sh.pts.clone();
         let mut changed = false;
-        egui::CollapsingHeader::new("Points")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.points.title"))
             .default_open(true)
             .show(ui, |ui| {
                 egui::Grid::new("points_grid")
                     .num_columns(3)
                     .show(ui, |ui| {
-                        ui.label("Point");
-                        ui.label("Tick");
-                        ui.label("Pitch");
+                        ui.label(rust_i18n::t!("panel.points.point"));
+                        ui.label(rust_i18n::t!("panel.points.tick"));
+                        ui.label(rust_i18n::t!("panel.points.pitch"));
                         ui.end_row();
                         for (i, pt) in pts.iter_mut().enumerate() {
                             let name = names
@@ -1709,19 +1764,18 @@ impl App {
             .as_ref()
             .is_some_and(|d| d.kind == Kind::Funnel && d.pts.len() == 2);
         let info = if waiting_wall {
-            "再画墙（Ctrl = 关于线对称，右键 = 取消）。".to_string()
+            rust_i18n::t!("panel.funnel.info_waiting_wall").to_string()
         } else if placed {
-            let mut s = format!("{note_total} notes.  ");
+            let mut s =
+                rust_i18n::t!("panel.funnel.info_notes", n = note_total.to_string()).to_string();
             if !parts_text.is_empty() {
-                s += &format!(
-                    "已高亮：{parts_text}。右键 = 曲线形状，Del = 删除，Esc = 清除，Ctrl+点击 = 加 / 减。"
-                );
+                s += rust_i18n::t!("panel.funnel.info_highlighted", parts = parts_text).as_ref();
             } else if targets.len() == 1 {
-                s += "中键点线 = 新起点，靠近曲线 = 加锚点；Select 再点曲线 = 高亮。";
+                s += rust_i18n::t!("panel.funnel.info_start_curve").as_ref();
             }
             s
         } else {
-            "先画漏斗的线，再画墙（拖动或各点两下）。".to_string()
+            rust_i18n::t!("panel.funnel.info_draw").to_string()
         };
 
         let mut new = cur;
@@ -1732,27 +1786,41 @@ impl App {
         let mut turn = false;
         let mut apply_formula = false;
         let mut formula_text = self.funnel_formula.clone();
-        egui::CollapsingHeader::new("Funnel")
+        egui::CollapsingHeader::new(rust_i18n::t!("panel.funnel.title"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Inside");
-                    ui.radio_value(&mut new.fill, FunnelFill::Spam, "Spam");
-                    ui.radio_value(&mut new.fill, FunnelFill::Long, "Long notes");
+                    ui.label(rust_i18n::t!("panel.funnel.inside"));
+                    ui.radio_value(
+                        &mut new.fill,
+                        FunnelFill::Spam,
+                        rust_i18n::t!("panel.funnel.spam"),
+                    );
+                    ui.radio_value(
+                        &mut new.fill,
+                        FunnelFill::Long,
+                        rust_i18n::t!("panel.funnel.long_notes"),
+                    );
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Wall");
+                    ui.label(rust_i18n::t!("panel.funnel.wall"));
                     // 反向漏斗的墙在前头：两种说法跟着换（原版 sync_funnel）
                     let (end_text, start_text) = if reversed {
-                        ("Notes start on it", "Notes end on it")
+                        (
+                            rust_i18n::t!("panel.funnel.notes_start_on_it"),
+                            rust_i18n::t!("panel.funnel.notes_end_on_it"),
+                        )
                     } else {
-                        ("Notes end on it", "Notes start on it")
+                        (
+                            rust_i18n::t!("panel.funnel.notes_end_on_it"),
+                            rust_i18n::t!("panel.funnel.notes_start_on_it"),
+                        )
                     };
                     ui.radio_value(&mut new.wall, WallMode::In, end_text);
                     ui.radio_value(&mut new.wall, WallMode::Past, start_text);
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Gate");
+                    ui.label(rust_i18n::t!("panel.funnel.gate"));
                     let gate_on = new.fill == FunnelFill::Spam || new.wall == WallMode::Past;
                     ui.add_enabled_ui(gate_on, |ui| {
                         if ui
@@ -1771,10 +1839,10 @@ impl App {
                             text_changed = true;
                         }
                     }
-                    ui.label("ticks");
+                    ui.label(rust_i18n::t!("unit.ticks"));
                 });
                 if ui
-                    .checkbox(&mut new.vary, "Different start and wall gate")
+                    .checkbox(&mut new.vary, rust_i18n::t!("panel.funnel.vary"))
                     .changed()
                     && new.vary
                 {
@@ -1783,20 +1851,36 @@ impl App {
                 let gates_on = new.fill == FunnelFill::Spam && new.vary;
                 ui.add_enabled_ui(gates_on, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Change");
-                        ui.radio_value(&mut new.change, GateChange::Steps, "Steps");
-                        ui.radio_value(&mut new.change, GateChange::Smooth, "Smooth");
+                        ui.label(rust_i18n::t!("panel.funnel.change"));
+                        ui.radio_value(
+                            &mut new.change,
+                            GateChange::Steps,
+                            rust_i18n::t!("panel.funnel.steps"),
+                        );
+                        ui.radio_value(
+                            &mut new.change,
+                            GateChange::Smooth,
+                            rust_i18n::t!("panel.funnel.smooth"),
+                        );
                     });
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Follow");
-                        ui.radio_value(&mut new.follow, GateFollow::Time, "Evenly");
-                        ui.radio_value(&mut new.follow, GateFollow::Curve, "With the curve");
+                        ui.label(rust_i18n::t!("panel.funnel.follow"));
+                        ui.radio_value(
+                            &mut new.follow,
+                            GateFollow::Time,
+                            rust_i18n::t!("panel.funnel.evenly"),
+                        );
+                        ui.radio_value(
+                            &mut new.follow,
+                            GateFollow::Curve,
+                            rust_i18n::t!("panel.funnel.with_curve"),
+                        );
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Curve");
+                    ui.label(rust_i18n::t!("panel.funnel.curve"));
                     egui::ComboBox::from_id_salt("funnel_curve")
-                        .selected_text("Preset…")
+                        .selected_text(rust_i18n::t!("panel.funnel.preset"))
                         .width(140.0)
                         .show_ui(ui, |ui| {
                             for (i, (name, _)) in CURVE_PRESETS.iter().enumerate() {
@@ -1805,21 +1889,24 @@ impl App {
                                 }
                             }
                         });
-                    if ui.button("Inside out").clicked() {
+                    if ui
+                        .button(rust_i18n::t!("panel.funnel.inside_out"))
+                        .clicked()
+                    {
                         inside_out = true;
                     }
-                    if ui.button("Turn").clicked() {
+                    if ui.button(rust_i18n::t!("panel.funnel.turn")).clicked() {
                         turn = true;
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Formula");
+                    ui.label(rust_i18n::t!("panel.funnel.formula"));
                     ui.add(
                         egui::TextEdit::singleline(&mut formula_text)
                             .desired_width(130.0)
                             .hint_text("x^2"),
                     );
-                    if ui.button("Apply").clicked() {
+                    if ui.button(rust_i18n::t!("panel.funnel.apply")).clicked() {
                         apply_formula = true;
                     }
                 });
@@ -1894,26 +1981,30 @@ impl App {
         let Some((_, text)) = CURVE_PRESETS.get(i) else {
             return;
         };
+        let formula_error = |status: &mut String, text: &str, e: String| {
+            *status = rust_i18n::t!("panel.funnel.error_formula", text = text.to_string(), e = e)
+                .to_string();
+        };
         let shape = match text {
-            None => match funnel::preset_curve(None) {
-                Ok(c) => c,
-                Err(e) => {
-                    self.status = format!("曲线算不出来：{e}");
+            None => {
+                // 默认曲线不会算不出来（原版 preset_curve(None) 同样不报错）
+                let Ok(c) = funnel::preset_curve(None) else {
                     return;
-                }
-            },
+                };
+                c
+            }
             Some(t) => match spiderweb_io::mathexpr::formula(t) {
                 Ok(f) => {
                     match funnel::preset_curve(Some(&|x| f.eval(x).map_err(|e| format!("{e:?}")))) {
                         Ok(c) => c,
                         Err(e) => {
-                            self.status = format!("曲线算不出来：{e}");
+                            formula_error(&mut self.status, t, e);
                             return;
                         }
                     }
                 }
                 Err(e) => {
-                    self.status = format!("公式不对：{e:?}");
+                    formula_error(&mut self.status, t, format!("{e:?}"));
                     return;
                 }
             },
@@ -1930,21 +2021,34 @@ impl App {
             Ok(f) => {
                 match funnel::preset_curve(Some(&|x| f.eval(x).map_err(|e| format!("{e:?}")))) {
                     Ok(shape) => self.apply_curve_shape(shape),
-                    Err(e) => self.status = format!("公式算不出来：{e}"),
+                    Err(e) => {
+                        self.status = rust_i18n::t!(
+                            "panel.funnel.error_formula",
+                            text = text.to_string(),
+                            e = e
+                        )
+                        .to_string();
+                    }
                 }
             }
-            Err(e) => self.status = format!("公式不对：{e:?}"),
+            Err(e) => {
+                self.status = rust_i18n::t!(
+                    "panel.funnel.error_formula",
+                    text = text.to_string(),
+                    e = format!("{e:?}")
+                )
+                .to_string();
+            }
         }
     }
 
-    /// 把一条曲线形状给高亮的曲线；没高亮时提示（原版 set_curves）。
+    /// 把一条曲线形状给高亮的曲线（原版 set_curves：没高亮时什么都不做，也不提示）。
     fn apply_curve_shape(&mut self, shape: FunnelCurve) {
         if self
             .funnel_parts()
             .map(|(_, _, c)| c.is_empty())
             .unwrap_or(true)
         {
-            self.status = "先高亮要改的曲线（Select 工具再点一次漏斗）".to_string();
             return;
         }
         self.set_funnel_curves(&|_| shape.clone(), true);

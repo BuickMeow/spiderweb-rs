@@ -40,19 +40,21 @@ impl DrawerTool {
         DrawerTool::Erase,
     ];
 
-    pub fn label(self) -> &'static str {
+    /// 界面上的工具名（按钮等）。
+    pub fn ui_label(self) -> String {
         match self {
-            DrawerTool::Select => "Select",
-            DrawerTool::Line => "Line",
-            DrawerTool::Poly => "Polyline",
-            DrawerTool::Free => "Freehand",
-            DrawerTool::Curve => "Curve",
-            DrawerTool::Arc => "Arc",
-            DrawerTool::Square => "Square",
-            DrawerTool::Circle => "Circle",
-            DrawerTool::Triangle => "Triangle",
-            DrawerTool::Erase => "Eraser",
+            DrawerTool::Select => rust_i18n::t!("drawer_tool.select"),
+            DrawerTool::Line => rust_i18n::t!("drawer_tool.line"),
+            DrawerTool::Poly => rust_i18n::t!("drawer_tool.poly"),
+            DrawerTool::Free => rust_i18n::t!("drawer_tool.free"),
+            DrawerTool::Curve => rust_i18n::t!("drawer_tool.curve"),
+            DrawerTool::Arc => rust_i18n::t!("drawer_tool.arc"),
+            DrawerTool::Square => rust_i18n::t!("drawer_tool.square"),
+            DrawerTool::Circle => rust_i18n::t!("drawer_tool.circle"),
+            DrawerTool::Triangle => rust_i18n::t!("drawer_tool.triangle"),
+            DrawerTool::Erase => rust_i18n::t!("drawer_tool.erase"),
         }
+        .to_string()
     }
 
     pub fn hotkey(self) -> &'static str {
