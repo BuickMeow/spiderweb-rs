@@ -6,6 +6,7 @@ mod app;
 mod panels;
 mod playback;
 mod roll;
+mod roll_velocity;
 
 fn main() {
     let viewport = eframe::egui::ViewportBuilder::default()
