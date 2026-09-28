@@ -269,7 +269,6 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut selected = app.help.topic.clone();
     let mut on = app.tips.on;
     let mut reset = false;
-    let mut close = false;
     let mut link: Option<&'static str> = None;
     let base = app
         .autosave_path
@@ -277,13 +276,16 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
 
+    // 主体至少这么高：egui 的窗口会缩到内容高度，不设的话会比原版的 900x620 矮很多
+    let body_h = (ctx.screen_rect().height() * 0.72).clamp(520.0, 900.0);
     egui::Window::new(format!("Spiderweb {VERSION} — Help"))
         .open(&mut open)
-        .default_size([900.0, 620.0])
+        .default_size([960.0, 760.0])
         .min_width(600.0)
-        .min_height(360.0)
+        .min_height(520.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.set_min_height(body_h);
                 ui.vertical(|ui| {
                     ui.set_width(250.0);
                     ui.add(
@@ -347,9 +349,6 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
                 if ui.button("Show all tips again").clicked() {
                     reset = true;
                 }
-                if ui.button("关闭 (Esc)").clicked() {
-                    close = true;
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.link(format!("Spiderweb {VERSION}")).clicked() {
                         selected = Some("about".to_string());
@@ -370,7 +369,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     if let Some(url) = link {
         ctx.open_url(egui::OpenUrl::new_tab(url));
     }
-    if close || !open {
+    if !open {
         app.help.open = false;
     }
 }
