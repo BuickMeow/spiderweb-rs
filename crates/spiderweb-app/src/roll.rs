@@ -5,10 +5,12 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 
 use spiderweb_core::Pt;
 use spiderweb_core::engine;
+use spiderweb_core::funnel;
 use spiderweb_core::shape::{Kind, Shape};
 
-use crate::app::{App, Tool};
+use crate::app::{App, PartId, Tool};
 use crate::roll_curve::paint_curve_handles;
+use crate::roll_funnel;
 
 pub const BLACK: [i64; 5] = [1, 3, 6, 8, 10];
 pub const NOTE_NAMES: [&str; 12] = [
@@ -249,6 +251,9 @@ pub enum Drag {
         moved: bool,
         /// 点的是唯一选中的自定义形状：松开时拾取它下面的笔画（None = 取消拾取）
         part: Option<Option<usize>>,
+        /// 再次点击单个漏斗：记下它在点啥（释放时高亮 / 清空 part）。
+        funnel_again: Option<usize>,
+        funnel_part: Option<PartId>,
     },
     Handle {
         i: usize,
@@ -286,6 +291,10 @@ pub enum Drag {
     Turn {
         orig: Vec<Pt>,
         a0: f64,
+    },
+    /// 正在画漏斗的墙（原版 drag 的 "wall"）。
+    Wall {
+        screen: Pos2,
     },
 }
 
@@ -422,6 +431,11 @@ fn hit_handle(app: &App, p: Pos2) -> Option<HandleId> {
         return crate::roll_live::hit_stroke_handle(app, sh, p, app.tool == Tool::Select)
             .map(HandleId::Stroke);
     }
+    if sh.kind == Kind::Funnel {
+        // 漏斗：曲线把手 / 起点任何工具都能抓，线 / 墙的点留给 Select
+        return roll_funnel::hit_funnel_handle(app, sh, p, app.tool == Tool::Select)
+            .map(HandleId::Point);
+    }
     let near = 7.0_f32.max(8.0 * app.scale());
     for (pt, i) in handles(app, sh).into_iter().rev() {
         let x = app.view.x_of(pt[0]);
@@ -500,6 +514,12 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
                 return Some(i);
             }
         }
+        // 漏斗的里面也算命中（原版 hit_shape 的 funnel_contains）
+        if sh.kind == Kind::Funnel
+            && funnel::funnel_contains(sh, app.view.b_of(p.x), app.view.p_of(p.y))
+        {
+            return Some(i);
+        }
     }
     None
 }
@@ -548,7 +568,7 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
-        on_right(app, pos);
+        on_right(app, pos, input);
     }
     if input.secondary_released
         && let Some(pos) = input.pos
@@ -569,7 +589,7 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
     }
     if input.middle_released {
         if let Some(pos) = input.interact.or(input.pos) {
-            on_middle_release(app, pos, input.shift);
+            on_middle_release(app, pos, input);
         }
         app.drag = None;
     }
@@ -635,6 +655,28 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             }
             // 点的是“已经唯一选中”的自定义形状：松开时拾取它下面的笔画（原版在这里先判定）
             let was_only_selected = i.is_some() && app.sel == i && app.sels.len() == 1;
+            // 再次点击那个选中的漏斗：鼠标下的线 / 曲线要高亮（原版 again / part）
+            let funnel_again = i.filter(|&j| {
+                app.sels.len() == 1
+                    && app.sels.contains(&j)
+                    && app
+                        .shapes
+                        .get(j)
+                        .map(|s| s.kind == Kind::Funnel)
+                        .unwrap_or(false)
+            });
+            let funnel_part = funnel_again.and_then(|j| {
+                app.shapes
+                    .get(j)
+                    .and_then(|sh| roll_funnel::part_at(app, sh, pos, 6.0))
+            });
+            if input.ctrl
+                && let Some(part) = funnel_part
+            {
+                // Ctrl+点击 part：加上 / 去掉这一个
+                app.toggle_part(part);
+                return;
+            }
             if input.ctrl {
                 if let Some(i) = i {
                     app.select(Some(i), true);
@@ -691,6 +733,8 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 one,
                 moved: false,
                 part,
+                funnel_again,
+                funnel_part,
             });
         }
         Tool::Poly => {
@@ -793,7 +837,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             crate::roll_text::text_press_shift(app, pos, pt, input.shift);
         }
         Tool::Funnel => {
-            app.status = format!("{} 工具待移植", app.tool.label());
+            roll_funnel::funnel_press(app, pos, input.shift);
         }
     }
 }
@@ -892,20 +936,28 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
         Drag::Seek { .. } => {
             app.set_playhead(event_pt(app, pos, true, input.shift)[0]);
         }
-        Drag::Handle { i } => {
-            let pt = event_pt(app, pos, true, input.shift);
-            if app
-                .selected()
-                .map(|sh| sh.kind == Kind::Curve)
-                .unwrap_or(false)
-            {
+        Drag::Handle { i } => match app.selected().map(|sh| sh.kind) {
+            Some(Kind::Curve) => {
+                let pt = event_pt(app, pos, true, input.shift);
                 app.curve_drag(i, pt, input.alt);
-            } else if let Some(sh) = app.selected_mut()
-                && i < sh.pts.len()
-            {
-                sh.pts[i] = pt;
+                app.shapes_changed();
             }
-            app.shapes_changed();
+            Some(Kind::Funnel) => {
+                roll_funnel::funnel_drag_handle(app, i, pos, input.shift, input.alt, input.ctrl);
+            }
+            _ => {
+                let pt = event_pt(app, pos, true, input.shift);
+                if let Some(sh) = app.selected_mut()
+                    && i < sh.pts.len()
+                {
+                    sh.pts[i] = pt;
+                }
+                app.shapes_changed();
+            }
+        },
+        Drag::Wall { .. } => {
+            let pt = event_pt(app, pos, true, input.shift);
+            roll_funnel::funnel_drag_wall(app, pt, input.ctrl);
         }
         Drag::StrokeHandle(h) => {
             let h = crate::roll_live::drag_stroke_handle(app, h, pos, input.shift, input.alt);
@@ -918,6 +970,8 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
             one,
             moved,
             part,
+            funnel_again,
+            funnel_part,
         } => {
             let pt = event_pt(app, pos, true, input.shift);
             let (db, dp) = (pt[0] - start[0], pt[1] - start[1]);
@@ -930,6 +984,8 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
                 one,
                 moved: true,
                 part,
+                funnel_again,
+                funnel_part,
             });
             for (j, pts) in &orig {
                 if let Some(sh) = app.shapes.get_mut(*j) {
@@ -970,7 +1026,11 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
         Drag::Create { start, .. } => {
             let pt = event_pt(app, pos, true, input.shift);
             let kind = app.draft.as_ref().map(|d| d.kind).unwrap_or(Kind::Line);
-            let defaults = app.defaults.clone();
+            let defaults = if kind == Kind::Funnel {
+                roll_funnel::new_funnel_defaults(app)
+            } else {
+                app.defaults.clone()
+            };
             let mut sh = if kind == Kind::Curve {
                 let mut c = engine::make_shape(Kind::Curve, &[start, pt], &defaults);
                 // 温和 S 曲线：与 make_shape 一致
@@ -1071,13 +1131,26 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
             }
         }
         Drag::Move {
-            moved, one, part, ..
+            moved,
+            one,
+            part,
+            funnel_again,
+            funnel_part,
+            ..
         } => {
             if !moved {
                 if let Some(one) = one
                     && app.sels.len() > 1
                 {
                     app.select(Some(one), false);
+                } else if let Some(j) = funnel_again {
+                    // 再次点击那个漏斗：高亮鼠标下的 part（没点到就清空）
+                    let group = app
+                        .shapes
+                        .get(j)
+                        .and_then(|sh| funnel_part.map(|p| roll_funnel::part_group(sh, p)))
+                        .unwrap_or_default();
+                    app.set_parts(group, funnel_part);
                 } else if let Some(stroke) = part {
                     app.set_stroke(stroke); // 点一下自定义形状：拾取 / 取消拾取笔画
                 }
@@ -1085,6 +1158,11 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
         }
         Drag::Create { screen, .. } => {
             let still = (pos - screen).length() < 4.0;
+            let funnel = app
+                .draft
+                .as_ref()
+                .map(|d| d.kind == Kind::Funnel)
+                .unwrap_or(false);
             if still && !second {
                 app.follow = Some(Drag::Create {
                     start: event_pt(app, pos, true, input.shift),
@@ -1092,6 +1170,9 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
                 });
             } else if still {
                 app.cancel_draft();
+            } else if funnel {
+                // 画到选中漏斗的墙上 = 它的一条新线；否则留着等墙
+                roll_funnel::funnel_finish_line(app);
             } else if app.confirm_big_draft() {
                 app.commit_draft();
             }
@@ -1135,6 +1216,10 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
             } else {
                 app.cancel_draft();
             }
+        }
+        Drag::Wall { screen } => {
+            let still = (pos - screen).length() < 4.0;
+            roll_funnel::funnel_finish_wall(app, still);
         }
         Drag::Segment { screen } => {
             let still = (pos - screen).length() < 4.0;
@@ -1255,8 +1340,9 @@ fn finish_poly(app: &mut App) {
     }
 }
 
-/// 中键单击（没有拖动，原版 on_middle_release）在选中的曲线上加锚点。
-fn on_middle_release(app: &mut App, pos: Pos2, shift: bool) {
+/// 中键单击（没有拖动，原版 on_middle_release）：选中的曲线上加锚点；
+/// 选中的漏斗上：在线上加起点 / 靠近曲线加锚点。
+fn on_middle_release(app: &mut App, pos: Pos2, input: &Inputs) {
     let clicked = matches!(
         &app.drag,
         Some(Drag::Pan { start, .. }) if (pos - *start).length() <= 3.0
@@ -1271,21 +1357,23 @@ fn on_middle_release(app: &mut App, pos: Pos2, shift: bool) {
     {
         // 被拾取的曲线笔画：点上加锚点
         let near = Some((12.0 * app.scale()) as f64);
-        if crate::roll_live::stroke_click(app, pos, near, shift) {
+        if crate::roll_live::stroke_click(app, pos, near, input.shift) {
             return;
         }
     }
-    if app
-        .selected()
-        .map(|sh| sh.kind == Kind::Curve)
-        .unwrap_or(false)
-    {
-        let pt = event_pt(app, pos, true, shift);
-        app.curve_click(pos, pt, Some((12.0 * app.scale()) as f64));
+    match app.selected().map(|sh| sh.kind) {
+        Some(Kind::Curve) => {
+            let pt = event_pt(app, pos, true, input.shift);
+            app.curve_click(pos, pt, Some((12.0 * app.scale()) as f64));
+        }
+        Some(Kind::Funnel) => {
+            roll_funnel::funnel_click(app, pos, input.shift, input.ctrl);
+        }
+        _ => {}
     }
 }
 
-fn on_right(app: &mut App, pos: Pos2) {
+fn on_right(app: &mut App, pos: Pos2, input: &Inputs) {
     app.right_done = false;
     let is_poly = app
         .draft
@@ -1303,6 +1391,21 @@ fn on_right(app: &mut App, pos: Pos2) {
         finish_poly(app);
     } else if is_arc {
         app.cancel_draft();
+    }
+    // 右键漏斗的曲线起点 / 锚点 / 手柄：删掉或收回（原版 delete_funnel_handle）
+    let funnel_hit = if app.draft.is_none() {
+        app.selected()
+            .filter(|sh| sh.kind == Kind::Funnel)
+            .and_then(|sh| {
+                roll_funnel::hit_funnel_handle(app, sh, pos, true).filter(|&i| i >= sh.pts.len())
+            })
+    } else {
+        None
+    };
+    if let Some(i) = funnel_hit
+        && roll_funnel::funnel_delete_handle(app, i, input.ctrl)
+    {
+        app.right_done = true;
     }
     // 右键曲线锚点 = 删掉，手柄 = 收回锚点（端点不动，松开时走取消选择）
     if app.draft.is_none()
@@ -1553,6 +1656,7 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
             );
         }
     }
+    roll_funnel::paint_parts(app, painter, rect);
     if let Some(sel) = app.selected() {
         if sel.kind == Kind::Custom {
             crate::roll_live::paint_picked_stroke(app, painter, rect, sel);
@@ -1670,6 +1774,10 @@ fn paint_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     if sh.kind == Kind::Custom {
         // 盒子的角点 / 边中在 paint_custom_box 里；这里是笔画点与被拾取曲线笔画的锚点 / 手柄
         crate::roll_live::paint_custom_handles(app, painter, rect, sh);
+        return;
+    }
+    if sh.kind == Kind::Funnel {
+        roll_funnel::paint_funnel_handles(app, painter, rect, sh);
         return;
     }
     let r = 4.0 * app.scale();

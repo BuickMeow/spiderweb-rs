@@ -2,11 +2,16 @@
 
 use eframe::egui;
 
-use spiderweb_core::shape::{Align, Fill, Kind, TextAlign, TextSettings, TextUnit};
+use spiderweb_core::funnel::{self, CURVE_PRESETS, FunnelSettings};
+use spiderweb_core::shape::{
+    Align, Fill, FunnelCurve, FunnelFill, GateChange, GateFollow, Kind, TextAlign, TextSettings,
+    TextUnit, WallMode,
+};
 use spiderweb_core::text::{self, TextChange};
-use spiderweb_io::project::{ChannelMode, ChannelSplit};
+use spiderweb_io::project::{ChannelMode, ChannelSplit, FunnelDefaults};
 
 use crate::app::{App, Tool};
+use crate::roll_funnel;
 
 const SNAPS: [&str; 7] = ["Off", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"];
 
@@ -141,6 +146,7 @@ impl App {
                 .unwrap_or_else(|| self.defaults.clone());
             self.vel_text = [fmt_num(t.vel0), fmt_num(t.vel1)];
             self.refresh_custom_gate_text();
+            self.sync_funnel_text();
         }
         self.project_section(ui);
         self.shapes_section(ui);
@@ -148,6 +154,7 @@ impl App {
         self.text_section(ui);
         self.custom_section(ui);
         self.points_section(ui);
+        self.funnel_section(ui);
     }
 
     // ------------------------------------------------------------ 自定义形状面板
@@ -993,8 +1000,312 @@ impl App {
             self.shapes_changed();
         }
     }
+
+    // ------------------------------------------------------------ 漏斗
+
+    /// 漏斗面板要作用的形状：选中的漏斗（原版 funnel_targets）。
+    fn funnel_target_indices(&self) -> Vec<usize> {
+        self.sels
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.shapes
+                    .get(i)
+                    .map(|s| s.kind == Kind::Funnel)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    /// gate 文本框跟着选中的漏斗（或默认设置）刷新（原版 sync_funnel 的文本部分）。
+    pub fn sync_funnel_text(&mut self) {
+        let cur = self
+            .selected()
+            .filter(|sh| sh.kind == Kind::Funnel)
+            .map(roll_funnel::settings_of_shape)
+            .unwrap_or_else(|| roll_funnel::settings_of_defaults(&self.funnel_defaults));
+        let ppq = self.ppq.max(1) as f64;
+        self.funnel_text = [fmt_ticks(cur.gate0, ppq), fmt_ticks(cur.gate1, ppq)];
+    }
+
+    /// 漏斗设置面板（原版 panel_funnel._build_funnel / sync_funnel）：填充、墙、gate、
+    /// 变化方式与跟随、曲线预设 / 公式、翻里翻外与首尾对调。
+    fn funnel_section(&mut self, ui: &mut egui::Ui) {
+        let targets = self.funnel_target_indices();
+        if targets.is_empty() && !self.sels.is_empty() {
+            return;
+        }
+        if targets.is_empty() && self.tool != Tool::Funnel {
+            return; // 没选东西：只有 Funnel 工具下才给新漏斗调设置
+        }
+        let cur = targets
+            .first()
+            .and_then(|&i| self.shapes.get(i))
+            .map(roll_funnel::settings_of_shape)
+            .unwrap_or(funnel::FUNNEL_DEFAULTS);
+        let reversed = targets
+            .first()
+            .and_then(|&i| self.shapes.get(i))
+            .is_some_and(funnel::funnel_reversed);
+        let placed = !targets.is_empty();
+        let note_total: i64 = targets
+            .iter()
+            .filter_map(|&i| self.shapes.get(i))
+            .map(|sh| self.note_count(sh))
+            .sum();
+        let parts_text = self.parts_text();
+        let waiting_wall = self
+            .draft
+            .as_ref()
+            .is_some_and(|d| d.kind == Kind::Funnel && d.pts.len() == 2);
+        let info = if waiting_wall {
+            "再画墙（Ctrl = 关于线对称，右键 = 取消）。".to_string()
+        } else if placed {
+            let mut s = format!("{note_total} notes.  ");
+            if !parts_text.is_empty() {
+                s += &format!(
+                    "已高亮：{parts_text}。右键 = 曲线形状，Del = 删除，Esc = 清除，Ctrl+点击 = 加 / 减。"
+                );
+            } else if targets.len() == 1 {
+                s += "中键点线 = 新起点，靠近曲线 = 加锚点；Select 再点曲线 = 高亮。";
+            }
+            s
+        } else {
+            "先画漏斗的线，再画墙（拖动或各点两下）。".to_string()
+        };
+
+        let mut new = cur;
+        let mut text = self.funnel_text.clone();
+        let mut text_changed = false;
+        let mut preset_pick: Option<usize> = None;
+        let mut inside_out = false;
+        let mut turn = false;
+        let mut apply_formula = false;
+        let mut formula_text = self.funnel_formula.clone();
+        egui::CollapsingHeader::new("Funnel")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Inside");
+                    ui.radio_value(&mut new.fill, FunnelFill::Spam, "Spam");
+                    ui.radio_value(&mut new.fill, FunnelFill::Long, "Long notes");
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Wall");
+                    // 反向漏斗的墙在前头：两种说法跟着换（原版 sync_funnel）
+                    let (end_text, start_text) = if reversed {
+                        ("Notes start on it", "Notes end on it")
+                    } else {
+                        ("Notes end on it", "Notes start on it")
+                    };
+                    ui.radio_value(&mut new.wall, WallMode::In, end_text);
+                    ui.radio_value(&mut new.wall, WallMode::Past, start_text);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Gate");
+                    let gate_on = new.fill == FunnelFill::Spam || new.wall == WallMode::Past;
+                    ui.add_enabled_ui(gate_on, |ui| {
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut text[0]).desired_width(52.0))
+                            .changed()
+                        {
+                            text_changed = true;
+                        }
+                    });
+                    if new.vary {
+                        ui.label("→");
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut text[1]).desired_width(52.0))
+                            .changed()
+                        {
+                            text_changed = true;
+                        }
+                    }
+                    ui.label("ticks");
+                });
+                if ui
+                    .checkbox(&mut new.vary, "Different start and wall gate")
+                    .changed()
+                    && new.vary
+                {
+                    text[1] = text[0].clone();
+                }
+                let gates_on = new.fill == FunnelFill::Spam && new.vary;
+                ui.add_enabled_ui(gates_on, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Change");
+                        ui.radio_value(&mut new.change, GateChange::Steps, "Steps");
+                        ui.radio_value(&mut new.change, GateChange::Smooth, "Smooth");
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Follow");
+                        ui.radio_value(&mut new.follow, GateFollow::Time, "Evenly");
+                        ui.radio_value(&mut new.follow, GateFollow::Curve, "With the curve");
+                    });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Curve");
+                    egui::ComboBox::from_id_salt("funnel_curve")
+                        .selected_text("Preset…")
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for (i, (name, _)) in CURVE_PRESETS.iter().enumerate() {
+                                if ui.selectable_label(false, *name).clicked() {
+                                    preset_pick = Some(i);
+                                }
+                            }
+                        });
+                    if ui.button("Inside out").clicked() {
+                        inside_out = true;
+                    }
+                    if ui.button("Turn").clicked() {
+                        turn = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Formula");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut formula_text)
+                            .desired_width(130.0)
+                            .hint_text("x^2"),
+                    );
+                    if ui.button("Apply").clicked() {
+                        apply_formula = true;
+                    }
+                });
+                ui.label(egui::RichText::new(info).weak());
+            });
+
+        if text_changed
+            && let (Some(t0), Some(t1)) = (
+                parse_int(&text[0], 1, 10_000_000),
+                parse_int(&text[1], 1, 10_000_000),
+            )
+        {
+            let ppq = self.ppq.max(1) as f64;
+            new.gate0 = t0 as f64 / ppq;
+            new.gate1 = t1 as f64 / ppq;
+        }
+        if !new.vary {
+            new.gate1 = new.gate0;
+        }
+        if new != cur {
+            self.apply_funnel_settings(new);
+        }
+        if let Some(pi) = preset_pick {
+            self.apply_funnel_preset(pi);
+        }
+        if apply_formula {
+            self.apply_funnel_formula(&formula_text);
+        }
+        if inside_out {
+            self.set_funnel_curves(&|c| funnel::inside_out(c), true);
+        }
+        if turn {
+            self.set_funnel_curves(&|c| funnel::turned_curve(c, true), true);
+        }
+        let ppq = self.ppq.max(1) as f64;
+        self.funnel_text = if text_changed {
+            text
+        } else {
+            [fmt_ticks(new.gate0, ppq), fmt_ticks(new.gate1, ppq)]
+        };
+        self.funnel_formula = formula_text;
+    }
+
+    /// 改选中漏斗（或没选东西时的默认设置）的漏斗设置（原版 set_funnel）。
+    fn apply_funnel_settings(&mut self, s: FunnelSettings) {
+        let targets = self.funnel_target_indices();
+        if !targets.is_empty() {
+            self.push_undo();
+        }
+        if targets.is_empty() {
+            self.funnel_defaults = FunnelDefaults {
+                fill: s.fill,
+                gate0: s.gate0,
+                gate1: s.gate1,
+                vary: s.vary,
+                change: s.change,
+                follow: s.follow,
+                wall: s.wall,
+            };
+        } else {
+            for i in targets {
+                if let Some(sh) = self.shapes.get_mut(i) {
+                    roll_funnel::apply_settings(sh, s);
+                }
+            }
+        }
+        self.shapes_changed();
+    }
+
+    /// 预设曲线（CURVE_PRESETS）给高亮的曲线（原版 apply_formula 的预设部分）。
+    fn apply_funnel_preset(&mut self, i: usize) {
+        let Some((_, text)) = CURVE_PRESETS.get(i) else {
+            return;
+        };
+        let shape = match text {
+            None => match funnel::preset_curve(None) {
+                Ok(c) => c,
+                Err(e) => {
+                    self.status = format!("曲线算不出来：{e}");
+                    return;
+                }
+            },
+            Some(t) => match spiderweb_io::mathexpr::formula(t) {
+                Ok(f) => {
+                    match funnel::preset_curve(Some(&|x| f.eval(x).map_err(|e| format!("{e:?}")))) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.status = format!("曲线算不出来：{e}");
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.status = format!("公式不对：{e:?}");
+                    return;
+                }
+            },
+        };
+        self.apply_curve_shape(shape);
+    }
+
+    /// 自己写的公式给高亮的曲线（原版 apply_formula 的公式部分）。
+    fn apply_funnel_formula(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        match spiderweb_io::mathexpr::formula(text) {
+            Ok(f) => {
+                match funnel::preset_curve(Some(&|x| f.eval(x).map_err(|e| format!("{e:?}")))) {
+                    Ok(shape) => self.apply_curve_shape(shape),
+                    Err(e) => self.status = format!("公式算不出来：{e}"),
+                }
+            }
+            Err(e) => self.status = format!("公式不对：{e:?}"),
+        }
+    }
+
+    /// 把一条曲线形状给高亮的曲线；没高亮时提示（原版 set_curves）。
+    fn apply_curve_shape(&mut self, shape: FunnelCurve) {
+        if self
+            .funnel_parts()
+            .map(|(_, _, c)| c.is_empty())
+            .unwrap_or(true)
+        {
+            self.status = "先高亮要改的曲线（Select 工具再点一次漏斗）".to_string();
+            return;
+        }
+        self.set_funnel_curves(&|_| shape.clone(), true);
+    }
 }
 
 fn fmt_num(v: f64) -> String {
     spiderweb_io::mathexpr::fmt(v)
+}
+
+/// gate 以 tick 显示（原版 fmt(round(t[key] * ppq, 3))）。
+fn fmt_ticks(gate: f64, ppq: f64) -> String {
+    spiderweb_io::mathexpr::fmt((gate * ppq * 1000.0).round() / 1000.0)
 }

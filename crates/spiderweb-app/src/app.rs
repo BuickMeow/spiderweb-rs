@@ -100,6 +100,14 @@ impl Tool {
     }
 }
 
+/// 选中的漏斗里高亮的一个 part（原版 app.parts 的元素）：
+/// 一条线，或一条曲线（起点号, 墙端）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PartId {
+    Line(usize),
+    Curve(usize, usize),
+}
+
 /// 工程文本框（原版 pvar）。
 #[derive(Clone, Debug)]
 pub struct Pvar {
@@ -145,6 +153,14 @@ pub struct App {
     pub defaults: Shape,
     pub custom_defaults: CustomDefaults,
     pub funnel_defaults: FunnelDefaults,
+    /// 选中漏斗里高亮的线与曲线（原版 app.parts）。
+    pub parts: BTreeSet<PartId>,
+    /// 高亮的 part 里点中的那个（联动的曲线换个颜色）。
+    pub part_main: Option<PartId>,
+    /// 漏斗面板的 gate 文本框（tick）。
+    pub funnel_text: [String; 2],
+    /// 漏斗面板的公式输入框。
+    pub funnel_formula: String,
     pub free_smooth: i64,
     pub text_defaults: TextSettings,
     pub playhead: f64,
@@ -221,6 +237,10 @@ impl App {
             defaults: Shape::default(),
             custom_defaults: CustomDefaults::default(),
             funnel_defaults: FunnelDefaults::default(),
+            parts: BTreeSet::new(),
+            part_main: None,
+            funnel_text: ["60".into(), "60".into()],
+            funnel_formula: String::new(),
             free_smooth: 0,
             text_defaults: TextSettings::default(),
             playhead: 0.0,
@@ -254,6 +274,7 @@ impl App {
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
         app.load_autosave();
         app.loaded = true;
+        app.sync_funnel_text();
         app.shapes_changed();
         app
     }
@@ -334,6 +355,8 @@ impl App {
         self.stroke = None;
         self.draft = None;
         self.draft_draw = None;
+        self.parts.clear();
+        self.part_main = None;
     }
 
     pub fn to_project(&self) -> Project {
@@ -541,6 +564,8 @@ impl App {
         }
         self.stroke = None;
         self.edit_key = None;
+        self.parts.clear();
+        self.part_main = None;
     }
 
     /// 拾取选中自定义形状的笔画 k（None = 取消拾取）（原版 set_stroke）。
@@ -1036,9 +1061,14 @@ impl App {
                 self.cancel_draft();
                 self.set_stroke(None);
                 self.select(None, false);
+                self.parts.clear();
+                self.part_main = None;
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Delete)) {
-                self.delete_pressed();
+                // 高亮的漏斗线与曲线优先（原版 delete_parts）
+                if !self.delete_funnel_parts() {
+                    self.delete_pressed();
+                }
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::G)) {
                 self.live = !self.live;

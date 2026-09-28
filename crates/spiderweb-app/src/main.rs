@@ -8,6 +8,7 @@ mod playback;
 mod roll;
 mod roll_curve;
 mod roll_custom;
+mod roll_funnel;
 mod roll_live;
 mod roll_text;
 mod roll_velocity;
