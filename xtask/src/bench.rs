@@ -15,16 +15,14 @@ const KEYS: i64 = 128;
 fn spam_shape(name: &str, notes: i64, start_beat: f64) -> (Shape, f64) {
     let per_key = (notes / KEYS).max(1) as f64;
     let span = per_key * GATE;
-    let box_stroke = vec![
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [1.0, 1.0],
-        [0.0, 1.0],
-        [0.0, 0.0],
-    ];
+    let box_stroke = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]];
     let sh = Shape {
         kind: Kind::Custom,
-        pts: vec![[start_beat, -0.5], [start_beat + span, -0.5], [start_beat, -0.5 + KEYS as f64]],
+        pts: vec![
+            [start_beat, -0.5],
+            [start_beat + span, -0.5],
+            [start_beat, -0.5 + KEYS as f64],
+        ],
         name: name.to_string(),
         strokes: vec![Stroke::Poly {
             pts: box_stroke,

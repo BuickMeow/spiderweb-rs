@@ -152,8 +152,6 @@ fn sync(repo: &Path, upstream_path: &Path, write: bool) -> Result<i32, String> {
     }
     if missing_everywhere.is_empty() && add.is_empty() && diff.is_empty() {
         Ok(0)
-    } else if write {
-        Ok(0)
     } else {
         // Missing or stale wording: a real problem the caller should fix.
         Ok(1)
@@ -182,7 +180,11 @@ fn parse_yml(text: &str) -> Result<BTreeMap<String, String>, String> {
         stack.truncate(depth);
         stack.push((depth, key));
         if !rest.is_empty() {
-            let path = stack.iter().map(|(_, k)| k.as_str()).collect::<Vec<_>>().join(".");
+            let path = stack
+                .iter()
+                .map(|(_, k)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
             out.insert(path, unquote(rest));
         }
     }
@@ -220,7 +222,10 @@ fn emit_yml(flat: &BTreeMap<String, String>) -> String {
         children: BTreeMap<String, Tree>,
         leaf: Option<String>,
     }
-    let mut tree = Tree { children: BTreeMap::new(), leaf: None };
+    let mut tree = Tree {
+        children: BTreeMap::new(),
+        leaf: None,
+    };
     for (key, value) in flat {
         let mut node = &mut tree;
         let parts: Vec<&str> = key.split('.').collect();
@@ -228,13 +233,19 @@ fn emit_yml(flat: &BTreeMap<String, String>) -> String {
             if i == parts.len() - 1 {
                 node.children.insert(
                     part.to_string(),
-                    Tree { children: BTreeMap::new(), leaf: Some(value.clone()) },
+                    Tree {
+                        children: BTreeMap::new(),
+                        leaf: Some(value.clone()),
+                    },
                 );
             } else {
                 node = node
                     .children
                     .entry(part.to_string())
-                    .or_insert_with(|| Tree { children: BTreeMap::new(), leaf: None });
+                    .or_insert_with(|| Tree {
+                        children: BTreeMap::new(),
+                        leaf: None,
+                    });
             }
         }
     }
@@ -306,7 +317,8 @@ fn scan_used(dir: &Path) -> Result<BTreeSet<String>, String> {
     let mut out = BTreeSet::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -316,7 +328,8 @@ fn scan_used(dir: &Path) -> Result<BTreeSet<String>, String> {
             if path.extension().map(|e| e != "rs").unwrap_or(true) {
                 continue;
             }
-            let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let text = fs::read_to_string(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
             for line in text.lines() {
                 let t = line.trim_start();
                 if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
