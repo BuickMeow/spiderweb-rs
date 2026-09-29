@@ -1723,7 +1723,7 @@ impl eframe::App for App {
             let dt = ctx.input(|i| i.stable_dt); // time taken by the last frame
             self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
             self.perf_samples.push(dt * 1000.0);
-            if self.perf_samples.len() >= 600 {
+            if self.perf_samples.len() >= 240 {
                 let mut v = std::mem::take(&mut self.perf_samples);
                 v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let at = |q: f64| v[((v.len() as f64 - 1.0) * q).round() as usize];
