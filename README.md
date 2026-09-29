@@ -52,12 +52,12 @@ Core algorithms (per shape):
 
 Large projects, whole roll in view (`cargo xtask bench-project`):
 
-| Notes | Load + first render | Peak RSS | Frame p50 | Frame p95 |
+| Notes | Load + first render | Peak RSS (load) | Frame p50 | Frame p95 |
 |---|---|---|---|---|
-| 10 M | 0.56 s | 3.5 GB | 100 ms | 117 ms |
-| 25 M | 1.4 s | 8.5 GB | 267 ms | 284 ms |
-| 50 M | 3.4 s | 9.3 GB | 431 ms | 456 ms |
-| 100 M | 12.6 s | 9.8 GB | 533 ms | 1069 ms |
+| 10 M | 0.55 s | 0.9 GB | 100 ms | 117 ms |
+| 25 M | 1.7 s | 1.6 GB | 267 ms | 284 ms |
+| 50 M | 4.1 s | 6.4 GB | 431 ms | 456 ms |
+| 100 M | 8.2 s | 10.4 GB | 533 ms | 1069 ms |
 
 Frame time scales with the number of **visible** notes: a start-tick index
 culls notes outside the viewport (expanded by one screen of ticks and 8 keys on
