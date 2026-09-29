@@ -377,6 +377,10 @@ struct Inputs {
     shift: bool,
     alt: bool,
     scroll: Vec2,
+    /// Touchpad pinch factor (1.0 = none)
+    pinch: f32,
+    /// egui wheel zoom factor, ctrl/cmd + wheel (1.0 = none)
+    zoom: f32,
 }
 
 /// Converts pointer positions to roll-local coordinates (painting adds rect.min, hit testing works in local coordinates).
@@ -404,6 +408,13 @@ fn inputs(ui: &egui::Ui) -> Inputs {
         shift: i.modifiers.shift,
         alt: i.modifiers.alt,
         scroll: i.smooth_scroll_delta,
+        // Trackpad pinch (multi-touch) and egui's wheel zoom factor (ctrl/cmd+wheel)
+        pinch: i.multi_touch().map(|t| t.zoom_delta).unwrap_or(1.0),
+        zoom: if i.multi_touch().is_some() {
+            1.0
+        } else {
+            i.zoom_delta()
+        },
     })
 }
 
@@ -1610,29 +1621,84 @@ fn on_right_release(app: &mut App) {
     app.select(None, false);
 }
 
+/// Zooms both axes around `pos` (touchpad pinch).
+fn zoom_both(view: &mut View, pos: Pos2, f: f64) {
+    let b = view.b_of(pos.x);
+    let p = view.p_of(pos.y);
+    view.sx = (view.sx * f).clamp(0.05, 100000.0);
+    view.sy = (view.sy * f).clamp(1.0, 60.0);
+    view.t = b - (pos.x - view.kb_w) as f64 / view.sx;
+    view.top = p + (pos.y - view.ruler_h) as f64 / view.sy;
+}
+
 fn on_wheel(app: &mut App, pos: Pos2, input: &Inputs) {
-    let up = input.scroll.y > 0.0;
-    let f = if up { 1.25 } else { 0.8 };
-    let zoom_time = input.ctrl && !input.alt;
-    let zoom_pitch = (input.ctrl && !input.shift) || input.alt;
-    if zoom_time {
-        let b = app.view.b_of(pos.x);
-        app.view.sx = (app.view.sx * f).clamp(0.05, 100000.0);
-        app.view.t = b - (pos.x - app.view.kb_w) as f64 / app.view.sx;
+    let v = &mut app.view;
+    // Touchpad pinch: zoom both axes around the pointer.
+    if (input.pinch - 1.0).abs() > 1e-4 {
+        zoom_both(v, pos, input.pinch as f64);
+        v.clamp();
+        return;
     }
-    if zoom_pitch {
-        let p = app.view.p_of(pos.y);
-        app.view.sy = (app.view.sy * f).clamp(1.0, 60.0);
-        app.view.top = p + (pos.y - app.view.ruler_h) as f64 / app.view.sy;
+    // Ctrl/Cmd + wheel: egui turns it into a zoom factor and sends no scroll
+    // delta, so the old sign-based path never saw it; zoom time like upstream.
+    if (input.zoom - 1.0).abs() > 1e-4 {
+        let b = v.b_of(pos.x);
+        v.sx = (v.sx * input.zoom as f64).clamp(0.05, 100000.0);
+        v.t = b - (pos.x - v.kb_w) as f64 / v.sx;
+        v.clamp();
+        return;
     }
-    if !(zoom_time || zoom_pitch) {
-        if input.shift {
-            app.view.t += if up { -120.0 } else { 120.0 } / app.view.sx;
+    let dx = input.scroll.x as f64;
+    let dy = input.scroll.y as f64;
+    if input.alt {
+        // Alt + wheel: pitch zoom (egui consumes Ctrl+wheel for its own zoom).
+        let f = if dy > 0.0 { 1.25 } else { 0.8 };
+        let p = v.p_of(pos.y);
+        v.sy = (v.sy * f).clamp(1.0, 60.0);
+        v.top = p + (pos.y - v.ruler_h) as f64 / v.sy;
+    } else if input.shift {
+        // Shift + wheel: time only (the mouse habit; touchpads use scroll.x).
+        v.t += if dx != 0.0 {
+            -dx / v.sx
+        } else if dy > 0.0 {
+            -120.0 / v.sx
         } else {
-            app.view.top += if up { 3.0 } else { -3.0 };
-        }
+            120.0 / v.sx
+        };
+    } else {
+        // Two-finger scroll / wheel: proportional panning, 1:1 on a touchpad.
+        v.t -= dx / v.sx;
+        v.top += dy / v.sy;
     }
-    app.view.clamp();
+    v.clamp();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_both_keeps_the_pointer_anchored() {
+        let mut v = View {
+            t: 10.0,
+            top: 60.0,
+            sx: 100.0,
+            sy: 10.0,
+            kb_w: 50.0,
+            ruler_h: 20.0,
+            w: 800.0,
+            h: 600.0,
+            ready: true,
+            keys: 128,
+        };
+        let pos = Pos2::new(150.0, 120.0);
+        let (b0, p0) = (v.b_of(pos.x), v.p_of(pos.y));
+        zoom_both(&mut v, pos, 2.0);
+        assert!((v.b_of(pos.x) - b0).abs() < 1e-9);
+        assert!((v.p_of(pos.y) - p0).abs() < 1e-9);
+        assert_eq!(v.sx, 200.0);
+        assert_eq!(v.sy, 20.0);
+    }
 }
 
 fn position_text(app: &App, pos: Pos2) -> String {
