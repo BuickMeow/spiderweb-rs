@@ -181,8 +181,8 @@ def gen():
         E.shape_strokes(custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0]]), TRIANGLE[0]])))
 
     # ------------------------------------------------------------ shape_notes：line / poly / free
-    def add_notes(sh, ppq=960):
-        add("shape_notes", [sh, ppq], E.shape_notes(sh, ppq))
+    def add_notes(sh, ppq=960, keys=128):
+        add("shape_notes", [sh, ppq, keys], E.shape_notes(sh, ppq, keys))
 
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]]))
     add_notes(shape("line", [[4.0, 64.0], [0.0, 60.0]]))  # 反向
@@ -241,7 +241,8 @@ def gen():
     add_notes(custom(ELLIPSE, fill="fill"))
     add_notes(custom(ELLIPSE, fill="spam"))
     add_notes(custom(CURVE_ST, fill="empty"))
-    add_notes(custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0]])], fill="spam"))  # 开放：退回轮廓
+    # （开放笔画 + spam：1.2.0 由 fill_plan 用直线补缺口，属 custom.py 的 Fills/Ends 移植，另有 agent；
+    # 这条用例先不生成，免得把它的行为算进 256 键的向量里）
     add_notes(custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0], [0.5, 0.5]])], fill="fill"))
     add_notes(custom(ARC_ST, fill="fill"))
     add_notes(custom(FREE_ST, fill="empty"))
@@ -269,19 +270,41 @@ def gen():
     add_notes(funnel_opts(fill="spam"), 480)
     add_notes(funnel_opts(fill="spam"), 96)
 
+    # ------------------------------------------------------------ shape_notes：256 键
+    add_notes(shape("line", [[0.0, 120.0], [4.0, 140.0]]), 960, 256)
+    add_notes(shape("line", [[0.0, 120.0], [4.0, 140.0]]), 960, 128)  # 同样的形状：128 键滤掉 >127
+    add_notes(shape("line", [[0.0, 124.0], [0.0, 130.0]]), 960, 256)
+    add_notes(shape("line", [[0.0, 200.0], [0.0, 200.0]]), 960, 256)
+    add_notes(shape("line", [[0.0, 300.0], [0.0, 300.0]]), 960, 256)  # 超过 255：滤掉
+    add_notes(shape("poly", [[0.0, 126.0], [4.0, 134.0]], end_dot=True), 960, 256)
+    add_notes(shape("custom", [[0.0, 124.0], [4.0, 124.0], [0.0, 130.0]],
+                    strokes=[stroke("poly", [[0.0, 0.0], [1.0, 0.0]])]), 960, 256)
+    add_notes(custom(SQUARE, pts=[[0.0, 124.0], [4.0, 124.0], [0.0, 130.0]], fill="spam"), 960, 256)
+    pasted_high = custom(SQUARE, pts=[[0.0, 124.0], [4.0, 124.0], [0.0, 130.0]],
+                         notes=notes_rows([[0, 480, 130, 100, 0], [0, 240, 126, 90, 1]]))
+    add_notes(pasted_high, 960, 256)
+    add_notes(pasted_high, 960, 128)
+
     # ------------------------------------------------------------ shape_notes_tracks
+    def add_tracks(sh, ppq=960, keys=128):
+        add("shape_notes_tracks", [sh, ppq, keys], E.shape_notes_tracks(sh, ppq, keys))
+
     pasted = custom(SQUARE, notes=notes_rows(NOTE_ROWS))
-    add("shape_notes_tracks", [pasted, 960], E.shape_notes_tracks(pasted, 960))
+    add_tracks(pasted)
     pasted_own = custom(SQUARE, notes=notes_rows(NOTE_ROWS), own_vel=True)
-    add("shape_notes_tracks", [pasted_own, 960], E.shape_notes_tracks(pasted_own, 960))
+    add_tracks(pasted_own)
     pasted_dup = custom(SQUARE, notes=notes_rows(NOTE_ROWS_DUP))
-    add("shape_notes_tracks", [pasted_dup, 960], E.shape_notes_tracks(pasted_dup, 960))
+    add_tracks(pasted_dup)
     pasted_dup_own = custom(SQUARE, notes=notes_rows(NOTE_ROWS_DUP), own_vel=True)
-    add("shape_notes_tracks", [pasted_dup_own, 960], E.shape_notes_tracks(pasted_dup_own, 960))
+    add_tracks(pasted_dup_own)
     line_sh = shape("line", [[0.0, 60.0], [4.0, 64.0]])
-    add("shape_notes_tracks", [line_sh, 960], E.shape_notes_tracks(line_sh, 960))
+    add_tracks(line_sh)
     fun_sh = funnel_opts(fill="spam")
-    add("shape_notes_tracks", [fun_sh, 960], E.shape_notes_tracks(fun_sh, 960))
+    add_tracks(fun_sh)
+    pasted_high_own = custom(SQUARE, pts=[[0.0, 124.0], [4.0, 124.0], [0.0, 130.0]],
+                             notes=notes_rows([[0, 480, 130, 100, 0], [0, 240, 126, 90, 1]]), own_vel=True)
+    add_tracks(pasted_high_own, 960, 256)
+    add_tracks(pasted_high_own, 960, 128)
 
     # ------------------------------------------------------------ assign_slots
     def add_slots(lists, split):
@@ -318,6 +341,8 @@ def gen():
     add_resolve([[0, 50, 60, 50, 0, 0], [0, 0, 62, 50, 0, 0], [0, 80, 64, 50, 0, 0]])
     add_resolve([[0, 0, 60, 50, 0, 0], [0, 0, 62, 50, 0, 0]])
     add_resolve([[0, 100, 60, 50, 0, 0], [20, 30, 60, 90, 0, 0], [25, 150, 60, 70, 0, 0]])
+    # 256 键：slot 1 的 key 2 不能和 slot 0 的 key 130 算同一组（slot * 256 + key）
+    add_resolve([[0, 100, 130, 50, 0, 0], [50, 80, 2, 60, 1, 0], [0, 200, 130, 50, 0, 0]])
 
     # ------------------------------------------------------------ render
     def add_render(lists, mode, split, tracks=None, ppq=960):

@@ -100,7 +100,7 @@ fn funnel_shape(notes: i64) -> Shape {
 }
 
 fn note_count(sh: &Shape) -> usize {
-    engine::shape_notes(sh, PPQ).len()
+    engine::shape_notes_default(sh, PPQ).len()
 }
 
 fn main() {
@@ -117,9 +117,10 @@ fn main() {
     bench("funnel_spam_100k", 10, || note_count(&funnel));
 
     // render：把 spam 的音符跑一遍重叠处理 + 通道分配
-    let notes = engine::shape_notes(&spam, PPQ);
+    let notes = engine::shape_notes_default(&spam, PPQ);
     bench("render_single_100k", 10, || {
-        let (rendered, _) = engine::render(&[notes.clone()], Mode::Single, Split::Key, None);
+        let (rendered, _) =
+            engine::render(std::slice::from_ref(&notes), Mode::Single, Split::Key, None);
         rendered.len()
     });
 }

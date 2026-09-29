@@ -943,7 +943,7 @@ fn collect_bars(app: &App, state: &VelocityState, pane: Pane) -> Vec<Bar> {
         push(n, layer, vel, &mut out);
     }
     if let Some(d) = &app.draft {
-        for n in engine::shape_notes(d, ppq) {
+        for n in engine::shape_notes(d, ppq, app.keys) {
             push(&n, DRAFT, n[3] as f64, &mut out);
         }
     }

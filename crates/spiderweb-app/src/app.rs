@@ -174,6 +174,8 @@ pub struct App {
     pub show_velocity: bool,
     pub channel_mode: ChannelMode,
     pub channel_split: ChannelSplit,
+    /// 工程的按键范围：128 或 256（原版 app.keys；0 .. keys - 1）
+    pub keys: i64,
     pub ppq: i64,
     pub beats: i64,
     pub bpm: f64,
@@ -282,6 +284,7 @@ impl App {
             show_velocity: false,
             channel_mode: ChannelMode::Single,
             channel_split: ChannelSplit::Key,
+            keys: 128,
             ppq: 960,
             beats: 4,
             bpm: 120.0,
@@ -376,6 +379,13 @@ impl App {
         }
     }
 
+    /// 面板里换了 Keys（128 / 256）：卷帘跟着变，音符按新范围重算（原版 on_project_change）。
+    pub fn on_keys_change(&mut self) {
+        self.view.keys = self.keys;
+        self.view.clamp();
+        self.shapes_changed();
+    }
+
     pub fn load_autosave(&mut self) {
         let stamp = "autosave-broken";
         match proj::load_autosave(&self.autosave_path, stamp) {
@@ -422,6 +432,8 @@ impl App {
         };
         self.channel_mode = p.channel_mode;
         self.channel_split = p.channel_split;
+        self.keys = p.keys;
+        self.view.keys = self.keys;
         self.snap = p.snap;
         self.defaults.vel0 = p.defaults.vel0;
         self.defaults.vel1 = p.defaults.vel1;
@@ -450,6 +462,7 @@ impl App {
             output: self.pvar.output.clone(),
             channel_mode: self.channel_mode,
             channel_split: self.channel_split,
+            keys: self.keys,
             snap: self.snap.clone(),
             defaults: spiderweb_io::compat::ShapeDefaults {
                 vel0: self.defaults.vel0,
@@ -529,7 +542,7 @@ impl App {
                 } else {
                     1
                 };
-                let note = if self.ppq >= i64::from(spiderweb_io::midi::PPQ_WARN) {
+                let mut note = if self.ppq >= i64::from(spiderweb_io::midi::PPQ_WARN) {
                     rust_i18n::t!(
                         "status.ppq_warning",
                         ppq = self.ppq.to_string(),
@@ -539,6 +552,10 @@ impl App {
                 } else {
                     String::new()
                 };
+                if self.rendered.iter().any(|n| n[2] > 127) {
+                    // 256 键：>127 的键原样写进文件，很多 MIDI 程序读不了（project.it_has_keys_above_127_256）
+                    note += rust_i18n::t!("status.keys_above_127").as_ref();
+                }
                 self.status = rust_i18n::t!(
                     "status.saved_midi",
                     notes = self.rendered.len().to_string(),
@@ -557,7 +574,7 @@ impl App {
     // ------------------------------------------------------------ 音符
 
     pub fn notes_tracks(&self, sh: &Shape) -> NotesAndTracks {
-        engine::shape_notes_tracks(sh, self.ppq as f64)
+        engine::shape_notes_tracks(sh, self.ppq as f64, self.keys)
     }
 
     pub fn notes_of(&self, sh: &Shape) -> Vec<[i64; 4]> {
@@ -914,7 +931,7 @@ impl App {
     // ------------------------------------------------------------ Domino 剪贴板
 
     pub fn copy_to_domino(&mut self) {
-        let notes: Vec<[i64; 6]> = if self.sels.is_empty() {
+        let mut notes: Vec<[i64; 6]> = if self.sels.is_empty() {
             self.rendered.clone()
         } else {
             self.rendered
@@ -923,8 +940,11 @@ impl App {
                 .copied()
                 .collect()
         };
+        // 256 键：Domino 只有 128 个键，>127 的不复制（原版 project.copy_to_domino）
+        let high = notes.iter().filter(|n| n[2] > 127).count();
+        notes.retain(|n| n[2] <= 127);
         if notes.is_empty() {
-            self.status = if self.sels.is_empty() {
+            self.status = if self.sels.is_empty() || high > 0 {
                 rust_i18n::t!("status.no_notes_to_copy").to_string()
             } else {
                 rust_i18n::t!("status.selected_shapes_no_notes").to_string()
@@ -951,13 +971,20 @@ impl App {
                     } else {
                         rust_i18n::t!("status.first_of_tracks", n = tracks.to_string()).to_string()
                     };
-                    self.status = rust_i18n::t!(
+                    let mut copied = rust_i18n::t!(
                         "status.copied_domino",
                         what = what,
                         ppq = ppq.to_string(),
                         place = place
                     )
                     .to_string();
+                    if high > 0 {
+                        copied.push_str(&rust_i18n::t!(
+                            "status.notes_above_127_left_out",
+                            high = high.to_string()
+                        ));
+                    }
+                    self.status = copied;
                 } else {
                     self.status = rust_i18n::t!("status.clipboard_error").to_string();
                 }
@@ -1155,15 +1182,15 @@ impl App {
             .copied()
             .collect();
         for k in gone {
-            self.player.note(k.0, k.1.clamp(0, 127) as u8, 0);
+            self.player.note(k.0, k.1, 0);
             self.scrub_held.remove(&k);
         }
         for (k, (s, v)) in &now {
             if self.scrub_held.get(k) != Some(s) {
                 if self.scrub_held.contains_key(k) {
-                    self.player.note(k.0, k.1.clamp(0, 127) as u8, 0);
+                    self.player.note(k.0, k.1, 0);
                 }
-                self.player.note(k.0, k.1.clamp(0, 127) as u8, *v);
+                self.player.note(k.0, k.1, *v);
                 self.scrub_held.insert(*k, *s);
             }
         }
@@ -1175,7 +1202,7 @@ impl App {
     /// 右拖松开：全部 note off（原版 app.scrub_end）。
     pub fn scrub_end(&mut self) {
         for ((ch, p), _) in std::mem::take(&mut self.scrub_held) {
-            self.player.note(ch, p.clamp(0, 127) as u8, 0);
+            self.player.note(ch, p, 0);
         }
     }
 

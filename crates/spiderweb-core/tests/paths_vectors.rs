@@ -107,3 +107,11 @@ fn paths_vectors() {
     }
     assert!(checked > 30, "用例太少：{checked}");
 }
+
+#[test]
+fn keys_constants() {
+    // paths.KEYS / TOP_KEY（1.2.0 的 256 键模式）
+    assert_eq!(P::KEYS, [128, 256]);
+    assert_eq!(P::TOP_KEY, 255);
+    assert_eq!(P::TOP_KEY, P::KEYS[P::KEYS.len() - 1] - 1);
+}

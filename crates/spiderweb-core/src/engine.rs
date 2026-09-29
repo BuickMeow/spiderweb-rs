@@ -192,14 +192,20 @@ pub fn unique_rows<T: Ord + Clone>(rows: &[T]) -> Vec<T> {
     firsts.into_iter().map(|i| rows[i].clone()).collect()
 }
 
-/// 一个形状的音符 (start, end, pitch, velocity)，tick（engine.shape_notes）。
-pub fn shape_notes(sh: &Shape, ppq: f64) -> Vec<Note4> {
-    shape_notes_tracks(sh, ppq).0
+/// 一个形状的音符 (start, end, pitch, velocity)，tick；keys 是工程的按键范围
+/// （音符在 0..keys）（engine.shape_notes）。
+pub fn shape_notes(sh: &Shape, ppq: f64, keys: i64) -> Vec<Note4> {
+    shape_notes_tracks(sh, ppq, keys).0
+}
+
+/// [`shape_notes`] 的默认 128 键便捷包装（原版 keys=128）。
+pub fn shape_notes_default(sh: &Shape, ppq: f64) -> Vec<Note4> {
+    shape_notes(sh, ppq, crate::paths::KEYS[0])
 }
 
 /// shape_notes；粘贴的音符额外返回每条音符来自哪条轨道（每行一个数，其它形状 None）
 /// （engine.shape_notes_tracks）。
-pub fn shape_notes_tracks(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>) {
+pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Option<Vec<i64>>) {
     let end_dot = sh.end_dot;
     // 画线用的是同一批点；dedupe 也跨笔画边界去掉重复点
     let mut path: Vec<Pt> = dedupe(&shape_strokes(sh).into_iter().flatten().collect::<Vec<Pt>>());
@@ -235,7 +241,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>
     let env = velocity_env(sh);
     let keep: Vec<bool> = raw
         .iter()
-        .map(|r| (0..=127).contains(&r[2]) && r[1] > 0)
+        .map(|r| r[2] >= 0 && r[2] < keys && r[1] > 0)
         .collect();
     raw = raw
         .into_iter()
@@ -301,6 +307,11 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>
         .map(|(r, &v)| [r[0], r[1], r[2], v])
         .collect();
     (notes, tracks)
+}
+
+/// [`shape_notes_tracks`] 的默认 128 键便捷包装（原版 keys=128）。
+pub fn shape_notes_tracks_default(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>) {
+    shape_notes_tracks(sh, ppq, crate::paths::KEYS[0])
 }
 
 // ---------------------------------------------------------------- 重叠与通道
@@ -422,11 +433,11 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     if notes.is_empty() {
         return Vec::new();
     }
-    // 键 = slot * 128 + pitch；组号按在输入里第一次出现的顺序编
+    // 键 = slot * 256 + pitch（256 键：slot 之间不会撞）；组号按在输入里第一次出现的顺序编
     let mut group_of_key: HashMap<i64, usize> = HashMap::new();
     let mut group: Vec<usize> = Vec::with_capacity(notes.len());
     for r in notes {
-        let key = r[4] * 128 + r[2];
+        let key = r[4] * 256 + r[2];
         let next = group_of_key.len();
         group.push(*group_of_key.entry(key).or_insert(next));
     }

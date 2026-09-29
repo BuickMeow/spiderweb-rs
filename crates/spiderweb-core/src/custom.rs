@@ -961,7 +961,7 @@ pub fn inside_spans(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
         return Vec::new();
     }
     let first = 0.max(pitch_of(lo));
-    let last = 127.min(pitch_of(hi));
+    let last = crate::paths::TOP_KEY.min(pitch_of(hi));
     let mut out = Vec::new();
     for q in first..=last {
         let qf = q as f64;

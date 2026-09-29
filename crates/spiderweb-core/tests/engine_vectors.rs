@@ -424,11 +424,13 @@ fn engine_vectors() {
                 assert_paths_eq(&E::shape_strokes(&shape_of(&args[0])), out, &ctx);
             }
             "shape_notes" => {
-                let got = E::shape_notes(&shape_of(&args[0]), f(&args[1]));
+                let keys = args.get(2).map_or(128, i);
+                let got = E::shape_notes(&shape_of(&args[0]), f(&args[1]), keys);
                 assert_rows4_eq(&got, out, &ctx);
             }
             "shape_notes_tracks" => {
-                let (notes, tracks) = E::shape_notes_tracks(&shape_of(&args[0]), f(&args[1]));
+                let keys = args.get(2).map_or(128, i);
+                let (notes, tracks) = E::shape_notes_tracks(&shape_of(&args[0]), f(&args[1]), keys);
                 assert_rows4_eq(&notes, &out[0], &ctx);
                 let want: Option<Vec<i64>> = out[1].as_array().map(|a| a.iter().map(i).collect());
                 assert_eq!(tracks, want, "{ctx}.tracks");

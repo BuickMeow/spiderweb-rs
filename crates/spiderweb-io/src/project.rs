@@ -224,7 +224,7 @@ pub enum ProjectError {
 }
 
 /// Python `project_data` 里键的出现顺序。
-const PROJECT_KEYS: [&str; 17] = [
+const PROJECT_KEYS: [&str; 18] = [
     "version",
     "app_version",
     "ppq",
@@ -233,6 +233,7 @@ const PROJECT_KEYS: [&str; 17] = [
     "output",
     "channel_mode",
     "channel_split",
+    "keys",
     "snap",
     "defaults",
     "custom_defaults",
@@ -261,6 +262,8 @@ pub struct Project {
     pub output: String,
     pub channel_mode: ChannelMode,
     pub channel_split: ChannelSplit,
+    /// 工程的按键范围：128（0-127）或 256（0-255）（1.2.0 的 `keys`；别的值一律 128）。
+    pub keys: i64,
     pub snap: String,
     pub defaults: ShapeDefaults,
     pub custom_defaults: CustomDefaults,
@@ -283,6 +286,7 @@ impl Default for Project {
             output: String::new(),
             channel_mode: ChannelMode::Single,
             channel_split: ChannelSplit::Key,
+            keys: spiderweb_core::paths::KEYS[0],
             snap: "1/16".to_string(),
             defaults: SHAPE_DEFAULTS,
             custom_defaults: CustomDefaults::default(),
@@ -360,6 +364,13 @@ impl Project {
             Some("time") => ChannelSplit::Time,
             _ => ChannelSplit::Key,
         };
+        // 原版：self.keys_var.set(str(KEYS[1] if data.get("keys") == KEYS[1] else KEYS[0]))
+        p.keys = match d.get("keys") {
+            Some(Value::Number(n)) if n.as_f64() == Some(spiderweb_core::paths::KEYS[1] as f64) => {
+                spiderweb_core::paths::KEYS[1]
+            }
+            _ => spiderweb_core::paths::KEYS[0],
+        };
         if let Some(s) = d.get("snap").and_then(Value::as_str)
             && SNAPS.contains(&s)
         {
@@ -420,6 +431,7 @@ impl Project {
             "channel_split".into(),
             Value::from(self.channel_split.as_str()),
         );
+        d.insert("keys".into(), Value::from(self.keys));
         d.insert("snap".into(), Value::from(self.snap.clone()));
         d.insert(
             "defaults".into(),

@@ -163,7 +163,8 @@ pub fn box_draft(app: &App, tool: Tool, a: Pt, b: Pt) -> Shape {
 }
 
 /// 从 (start) 到 (pt) 的框，按 drawing 的宽 / 高（Ctrl）修正 pt（roll_custom.keep_aspect）。
-pub fn keep_aspect_xy(start: Pt, pt: Pt, aspect: f64, sx: f64, sy: f64) -> Pt {
+/// keys 是工程的按键范围：音高夹在 0 .. keys - 1。
+pub fn keep_aspect_xy(start: Pt, pt: Pt, aspect: f64, sx: f64, sy: f64, keys: i64) -> Pt {
     let mut dx = (pt[0] - start[0]) * sx;
     let mut dy = (pt[1] - start[1]) * sy;
     if dx.abs() > dy.abs() * aspect {
@@ -173,13 +174,13 @@ pub fn keep_aspect_xy(start: Pt, pt: Pt, aspect: f64, sx: f64, sy: f64) -> Pt {
     }
     [
         (start[0] + dx / sx).max(0.0),
-        (start[1] + dy / sy).clamp(0.0, 127.0),
+        (start[1] + dy / sy).clamp(0.0, (keys - 1) as f64),
     ]
 }
 
 /// Ctrl 的 box 比例修正。
 pub fn keep_aspect(app: &App, start: Pt, pt: Pt, aspect: f64) -> Pt {
-    keep_aspect_xy(start, pt, aspect, app.view.sx, app.view.sy)
+    keep_aspect_xy(start, pt, aspect, app.view.sx, app.view.sy, app.keys)
 }
 
 // ---------------------------------------------------------------- Live 绘制
@@ -1009,31 +1010,31 @@ mod tests {
 
     #[test]
     fn keep_aspect_wider_than_tall_fixes_dy() {
-        let got = keep_aspect_xy([0.0, 0.0], [4.0, 1.0], 2.0, 10.0, 10.0);
+        let got = keep_aspect_xy([0.0, 0.0], [4.0, 1.0], 2.0, 10.0, 10.0, 128);
         assert_eq!(got, [4.0, 2.0]);
     }
 
     #[test]
     fn keep_aspect_taller_than_wide_fixes_dx() {
         // 高 40px、宽 10px，aspect 2 -> 宽要 80px = 8 拍
-        let got = keep_aspect_xy([0.0, 0.0], [1.0, 4.0], 2.0, 10.0, 10.0);
+        let got = keep_aspect_xy([0.0, 0.0], [1.0, 4.0], 2.0, 10.0, 10.0, 128);
         assert_eq!(got, [8.0, 4.0]);
     }
 
     #[test]
     fn keep_aspect_takes_screen_ratio() {
         // 每拍 20px、每 key 5px：(2 拍, 8 key) 在屏幕上都是 40px，aspect 2 -> 宽 80px = 4 拍
-        let got = keep_aspect_xy([0.0, 0.0], [2.0, 8.0], 2.0, 20.0, 5.0);
+        let got = keep_aspect_xy([0.0, 0.0], [2.0, 8.0], 2.0, 20.0, 5.0, 128);
         assert!((got[0] - 4.0).abs() < 1e-12);
         assert!((got[1] - 8.0).abs() < 1e-12);
     }
 
     #[test]
     fn keep_aspect_clamps_inside_roll() {
-        let got = keep_aspect_xy([0.0, 0.0], [-3.0, 2.0], 1.0, 10.0, 10.0);
+        let got = keep_aspect_xy([0.0, 0.0], [-3.0, 2.0], 1.0, 10.0, 10.0, 128);
         assert_eq!(got, [0.0, 3.0]);
         // 高的那维是 800px：宽被拉到 800px = 80 拍，音高夹在 127
-        let got = keep_aspect_xy([0.0, 120.0], [5.0, 200.0], 1.0, 10.0, 10.0);
+        let got = keep_aspect_xy([0.0, 120.0], [5.0, 200.0], 1.0, 10.0, 10.0, 128);
         assert_eq!(got, [80.0, 127.0]);
     }
 

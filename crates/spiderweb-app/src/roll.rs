@@ -99,6 +99,8 @@ pub struct View {
     pub top: f64,
     pub sx: f64,
     pub sy: f64,
+    /// 工程的按键范围（原版 app.keys）：视图的上限、可见范围都跟着它
+    pub keys: i64,
     pub kb_w: f32,
     pub ruler_h: f32,
     pub w: f32,
@@ -113,6 +115,7 @@ impl Default for View {
             top: 127.5,
             sx: 60.0,
             sy: 6.0,
+            keys: spiderweb_core::paths::KEYS[0],
             kb_w: 56.0,
             ruler_h: 20.0,
             w: 0.0,
@@ -146,7 +149,12 @@ impl View {
     pub fn visible_pitches(&self) -> (i64, i64) {
         let lo = (self.p_of(self.h) - 0.5).ceil() as i64;
         let hi = (self.p_of(self.ruler_h) + 0.5).floor() as i64;
-        (lo.max(0), hi.min(127))
+        (lo.max(0), hi.min(self.keys - 1))
+    }
+
+    /// 滚动位置的上限（pianoroll.clamp_view）：整段都在上面时贴住最高键。
+    fn top_limit(&self) -> f64 {
+        self.keys as f64 - 0.5
     }
 
     pub fn set_screen(&mut self, rect: Rect) {
@@ -158,10 +166,11 @@ impl View {
 
     pub fn clamp(&mut self) {
         let rows = (self.h - self.ruler_h) as f64 / self.sy;
-        self.top = if rows >= 128.0 {
-            127.5
+        let top = self.top_limit();
+        self.top = if rows >= self.keys as f64 {
+            top
         } else {
-            self.top.clamp(rows - 0.5, 127.5)
+            self.top.clamp(rows - 0.5, top)
         };
         self.t = self.t.max(0.0);
     }
@@ -188,8 +197,8 @@ impl View {
         let span = (hi - lo).max(1.0);
         self.sx = ((self.w - self.kb_w) as f64 / (span * 1.06)).max(0.05);
         self.t = (lo - span * 0.03).max(0.0);
-        self.sy = (self.h - self.ruler_h) as f64 / 128.0;
-        self.top = 127.5;
+        self.sy = (self.h - self.ruler_h) as f64 / self.keys as f64;
+        self.top = self.top_limit();
         self.ready = true;
     }
 
@@ -421,7 +430,7 @@ pub(crate) fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
         b = (b / sb).round() * sb;
         q = q.round();
     }
-    [b.max(0.0), q.clamp(0.0, 127.0)]
+    [b.max(0.0), q.clamp(0.0, (app.keys - 1) as f64)]
 }
 
 /// 选中形状的可拖点 (beat, pitch, 序号)；曲线 / 自定义形状用各自的把手。
@@ -1591,7 +1600,7 @@ fn position_text(app: &App, pos: Pos2) -> String {
         ticks as i64
     );
     let p = app.view.p_of(pos.y).round() as i64;
-    if (0..=127).contains(&p) {
+    if (0..app.keys).contains(&p) {
         text += &format!("     {} ({})", note_name(p), p);
     }
     text
@@ -1654,8 +1663,8 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
             Color32::from_rgb(0xec, 0xec, 0xec),
         );
     }
-    if v.y_of(127.5) > v.ruler_h {
-        let (y0, _) = v.row_y(127.0);
+    if v.y_of(v.keys as f64 - 0.5) > v.ruler_h {
+        let (y0, _) = v.row_y((v.keys - 1) as f64);
         painter.rect_filled(
             Rect::from_min_max(
                 Pos2::new(area.min.x, area.min.y),
@@ -1969,11 +1978,17 @@ fn paint_keyboard(app: &App, painter: &egui::Painter, rect: Rect) {
     );
     let (p_lo, p_hi) = v.visible_pitches();
     let font = FontId::proportional((v.sy as f32 * 0.6).clamp(7.0, 11.0));
+    // 灰显：128 键时是 88 键钢琴之外；256 键时是标准 128 键之外（原版 roll_draw.piano_keys）
+    let keys_128 = v.keys == spiderweb_core::paths::KEYS[0];
     for p in p_lo..=p_hi {
         let (y0, y1) = v.row_y(p as f64);
         let (ry0, ry1) = (rect.min.y + y0, rect.min.y + y1);
         let n = p % 12;
-        let in88 = (PIANO_88_LO..PIANO_88_HI).contains(&p);
+        let in88 = if keys_128 {
+            (PIANO_88_LO..PIANO_88_HI).contains(&p)
+        } else {
+            p < spiderweb_core::paths::KEYS[0]
+        };
         if !in88 {
             painter.rect_filled(
                 Rect::from_min_max(Pos2::new(rect.min.x, ry0), Pos2::new(kb, ry1)),

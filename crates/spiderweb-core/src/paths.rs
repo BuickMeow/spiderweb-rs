@@ -8,6 +8,12 @@ use crate::{Pt, floor_half};
 /// 半个 key 行，稍微靠里一点。
 pub const EDGE: f64 = 0.5 - 1e-6;
 
+/// 工程的按键范围：MIDI 标准的 0-127，或 0-255（256 键 MIDI）（paths.KEYS）。
+pub const KEYS: [i64; 2] = [128, 256];
+
+/// 形状能生成的最高键（paths.TOP_KEY）；工程的范围再把其余滤掉。
+pub const TOP_KEY: i64 = KEYS[1] - 1;
+
 /// (tick, pitch) 的 pitch 取整：`floor(y + 0.5)`。
 pub fn pitch_of(y: f64) -> i64 {
     (y + 0.5).floor() as i64

@@ -44,6 +44,29 @@ fn project_load_vectors() {
 }
 
 #[test]
+fn keys_round_trip() {
+    // 1.2.0 的 256 键设置：256 存得进读得出；没有 / 别的值一律 128
+    let p = Project::from_json(&serde_json::json!({"keys": 256})).expect("读工程");
+    assert_eq!(p.keys, 256);
+    assert_eq!(p.to_json()["keys"], serde_json::json!(256));
+    let text = p.to_project_json();
+    let again = Project::from_json(&serde_json::from_str(&text).expect("JSON")).expect("读回");
+    assert_eq!(again.keys, 256);
+    assert_eq!(
+        Project::from_json(&serde_json::json!({}))
+            .expect("读工程")
+            .keys,
+        128
+    );
+    assert_eq!(
+        Project::from_json(&serde_json::json!({"keys": "256"}))
+            .expect("读工程")
+            .keys,
+        128
+    );
+}
+
+#[test]
 fn read_project_settings() {
     // PPQ / BPM / 拍数是文本框，可以是算式（window/app.py read_project）
     let mut p = Project {

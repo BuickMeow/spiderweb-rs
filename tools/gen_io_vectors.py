@@ -179,6 +179,8 @@ def expected_project(data):
     split = data.get("channel_split")
     split = split if split in E.SPLITS else "key"
     snap = data.get("snap") if data.get("snap") in SNAPS else "1/16"
+    # 1.2.0 的 256 键设置（project_data 写 keys；load 时不是 256 一律 128）
+    keys = 256 if data.get("keys") == 256 else 128
 
     custom_defaults = dict(C.CUSTOM_DEFAULTS)
     custom_shape = "Circle"
@@ -229,6 +231,7 @@ def expected_project(data):
         "output": str(data["output"]) if "output" in data else "",
         "channel_mode": mode,
         "channel_split": split,
+        "keys": keys,
         "snap": snap,
         "defaults": defaults,
         "custom_defaults": dict(custom_defaults, shape=custom_shape),
@@ -270,7 +273,7 @@ def project_cases():
     d = {
         "version": 2, "app_version": "0.9.0",
         "ppq": "960", "bpm": "120", "beats": "4", "output": "out/spiderweb.mid",
-        "channel_mode": "auto", "channel_split": "time", "snap": "1/32",
+        "channel_mode": "auto", "channel_split": "time", "keys": 256, "snap": "1/32",
         "defaults": {"vel0": 100.5, "vel1": 30, "end_dot": True},
         "custom_defaults": {"fill": "spam", "gate": 0.3333333333333, "align": "aligned", "shape": "Circle"},
         "funnel_defaults": {"fill": "long", "gate0": 0.5, "gate1": 0.125, "change": "smooth",
@@ -285,7 +288,7 @@ def project_cases():
     projects.append(("full", d))
 
     d2 = dict(d)
-    d2.pop("defaults"), d2.pop("view")
+    d2.pop("defaults"), d2.pop("view"), d2.pop("keys")  # 1.1.0 的老工程：没有 keys
     d2["auto_channels"] = True
     d2.pop("channel_mode")
     d2["snap"] = "nope"
@@ -303,6 +306,7 @@ def project_cases():
     d3["free_smooth"] = "50"
     d3["playhead"] = -5
     d3["view"] = {"t": 1}
+    d3["keys"] = "256"  # 字符串不算：仍然是 128
     projects.append(("partial", d3))
 
     cases = []
@@ -334,6 +338,8 @@ def midi_cases():
         ("slots", 960, 120.0, 4,
          [[0, 100, 40, 10, 0, 0], [10, 110, 41, 20, 14, 1], [20, 120, 42, 30, 29, 2]]),
         ("weird", 3840, 95.5, 7, [[0, 1, 0, 0, 0, 0], [7, 8, 127, 127, 0, 0]]),
+        # 256 键：>127 的 key 原样写进 key 字节（1.2.0 write_midi 不检查；200 == 0xC8）
+        ("high_keys", 960, 120.0, 4, [[0, 480, 200, 100, 0, 0], [0, 480, 128, 90, 0, 0]]),
     ]
     for name, ppq, bpm, beats, notes in midi_data:
         with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:

@@ -1161,6 +1161,23 @@ impl App {
                             self.on_project_change();
                         }
                         ui.end_row();
+                        // 128 / 256 键（1.2.0 的 Project -> Keys）
+                        ui.label(rust_i18n::t!("panel.project.keys"));
+                        let keys_before = self.keys;
+                        egui::ComboBox::from_id_salt("keys")
+                            .selected_text(self.keys.to_string())
+                            .width(90.0)
+                            .show_ui(ui, |ui| {
+                                for k in spiderweb_core::paths::KEYS {
+                                    ui.selectable_value(&mut self.keys, k, k.to_string());
+                                }
+                            })
+                            .response
+                            .on_hover_text(rust_i18n::t!("panel.project.keys_tip"));
+                        if self.keys != keys_before {
+                            self.on_keys_change();
+                        }
+                        ui.end_row();
                         ui.label(rust_i18n::t!("panel.project.output"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.pvar.output).desired_width(180.0),
@@ -1659,6 +1676,7 @@ impl App {
         }
         let names = spiderweb_core::engine::point_names(&sh);
         let ppq = self.ppq as f64;
+        let max_pitch = (self.keys - 1) as f64;
         let mut pts = sh.pts.clone();
         let mut changed = false;
         egui::CollapsingHeader::new(rust_i18n::t!("panel.points.title"))
@@ -1687,7 +1705,7 @@ impl App {
                                 .add(
                                     egui::DragValue::new(&mut pitch)
                                         .speed(0.1)
-                                        .range(0.0..=127.0),
+                                        .range(0.0..=max_pitch),
                                 )
                                 .changed()
                             {

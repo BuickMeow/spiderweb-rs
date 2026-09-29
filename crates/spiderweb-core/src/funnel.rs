@@ -1095,7 +1095,7 @@ fn keys(ps: &[f64]) -> RangeInclusive<i64> {
         lo = lo.min(y);
         hi = hi.max(y);
     }
-    0.max(pitch_of(lo))..=127.min(pitch_of(hi))
+    0.max(pitch_of(lo))..=crate::paths::TOP_KEY.min(pitch_of(hi))
 }
 
 /// key → 区间列表（保持插入顺序，Python dict；`funnel_cells` 的输出顺序跟着它走）。

@@ -33,7 +33,7 @@ impl NoteInstance {
     pub fn pack(n: &[i64; 6], layer: u32) -> Self {
         let start = n[0].max(0) as u32;
         let end = n[1].max(0) as u32;
-        let key = n[2].clamp(0, 127) as u32;
+        let key = n[2].clamp(0, 255) as u32;
         let vel = n[3].clamp(0, 127) as u32;
         let slot = (n[4].unsigned_abs() as u32) % SLOT_COLORS.len() as u32;
         Self {
@@ -438,12 +438,14 @@ mod tests {
         assert_eq!(inst.slot(), 2); // 17 % 15
         assert_eq!(inst.layer(), 1);
         assert_eq!(inst._pad, 0);
-        // 负 tick、越界音高 / 力度、负 slot 都夹进合法范围
+        // 负 tick、越界音高 / 力度、负 slot 都夹进合法范围（256 键：key 到 255）
         let weird = NoteInstance::pack(&[-5, -1, 200, 300, -16, 0], 0);
         assert_eq!(weird.start, 0);
         assert_eq!(weird.end, 0);
-        assert_eq!(weird.key(), 127);
+        assert_eq!(weird.key(), 200);
         assert_eq!(weird.vel(), 127);
+        let max = NoteInstance::pack(&[0, 10, 999, 300, 0, 0], 0);
+        assert_eq!(max.key(), 255);
         assert_eq!(weird.slot(), 1); // 16 % 15
         assert_eq!(weird.layer(), 0);
     }

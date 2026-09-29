@@ -21,6 +21,37 @@ pub fn devices() -> Vec<String> {
     }
 }
 
+/// 把音符行整理成播放事件 `(tick, is_on, channel, key, velocity)`：只留窗口里的，
+/// 高于 127 的键跳过（256 键模式：合成器只有 128 个键，playback.Player.start），
+/// 同一 tick 上 note-off 在前（先关后开）。
+pub fn build_events(
+    notes: &[[i64; 6]],
+    ppq: f64,
+    from_beat: f64,
+    stop_beat: f64,
+) -> Vec<(i64, bool, u8, u8, u8)> {
+    let from_tick = (from_beat * ppq) as i64;
+    let stop_tick = (stop_beat * ppq) as i64;
+    let mut events: Vec<(i64, bool, u8, u8, u8)> = Vec::with_capacity(notes.len() * 2);
+    for n in notes {
+        if n[2] > 127 {
+            continue;
+        }
+        let (_, ch) = spiderweb_io::midi::slot_track_channel(n[4]);
+        let start = n[0].max(from_tick);
+        let end = n[1].max(start + 1);
+        if end < from_tick || start > stop_tick {
+            continue;
+        }
+        if n[0] >= from_tick {
+            events.push((n[0], true, ch, n[2] as u8, n[3] as u8));
+        }
+        events.push((end.min(stop_tick), false, ch, n[2] as u8, 0));
+    }
+    events.sort_by_key(|e| (e.0, e.1));
+    events
+}
+
 /// 一个播放器：后台线程按时间发送音符，支持暂停/停止与位置查询。
 pub struct Player {
     conn: Option<MidiOutputConnection>,
@@ -78,10 +109,13 @@ impl Player {
         self.device.clear();
     }
 
-    /// 立刻发一个音符（右拖试听）。
-    pub fn note(&mut self, ch: u8, key: u8, vel: u8) {
+    /// 立刻发一个音符（右拖试听）。>127 的键（256 键模式）发不出去：跳过（原版 MidiOut.note）。
+    pub fn note(&mut self, ch: u8, key: i64, vel: u8) {
+        if key > 127 {
+            return;
+        }
         if let Some(c) = self.conn.as_mut() {
-            let _ = c.send(&[0x90 | (ch & 0x0f), key & 0x7f, vel & 0x7f]);
+            let _ = c.send(&[0x90 | (ch & 0x0f), key as u8 & 0x7f, vel & 0x7f]);
         }
     }
 
@@ -104,23 +138,8 @@ impl Player {
         };
         let ppq = ppq.max(1) as f64;
         let from_tick = (from_beat * ppq) as i64;
-        let stop_tick = (stop_beat * ppq) as i64;
         let us_per_tick = 60_000_000.0 / (bpm.max(1e-6) * ppq);
-        // (tick, is_on, channel, key, vel)
-        let mut events: Vec<(i64, bool, u8, u8, u8)> = Vec::with_capacity(notes.len() * 2);
-        for n in notes {
-            let (_, ch) = spiderweb_io::midi::slot_track_channel(n[4]);
-            let start = n[0].max(from_tick);
-            let end = n[1].max(start + 1);
-            if end < from_tick || start > stop_tick {
-                continue;
-            }
-            if n[0] >= from_tick {
-                events.push((n[0], true, ch, n[2] as u8, n[3] as u8));
-            }
-            events.push((end.min(stop_tick), false, ch, n[2] as u8, 0));
-        }
-        events.sort_by_key(|e| (e.0, e.1)); // 同一 tick：先关后开
+        let events = build_events(notes, ppq, from_beat, stop_beat);
         let stop = Arc::new(AtomicBool::new(false));
         let running = Arc::new(AtomicBool::new(true));
         let position = Arc::new(AtomicI64::new(from_tick));
@@ -176,5 +195,45 @@ impl Player {
     /// 播放位置（beat）。
     pub fn position(&self, ppq: i64) -> f64 {
         self.position.load(Ordering::SeqCst) as f64 / ppq.max(1) as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_skip_keys_above_127() {
+        // 256 键模式：>127 的键不发声（合成器只有 128 键），<=127 的照常
+        let notes = [
+            [0, 960, 200, 100, 0, 0],
+            [0, 960, 126, 90, 0, 0],
+            [100, 200, 127, 80, 0, 0],
+        ];
+        let events = build_events(&notes, 960.0, 0.0, 8.0);
+        assert!(events.iter().all(|e| e.3 <= 127));
+        assert_eq!(
+            events,
+            vec![
+                (0, true, 0, 126, 90),
+                (100, true, 0, 127, 80),
+                (200, false, 0, 127, 0),
+                (960, false, 0, 126, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn events_stay_inside_the_window() {
+        // 窗口（0.5..1.5 拍）里开始的音符发声；之后的不发
+        let notes = [
+            [0, 480, 60, 100, 0, 0],
+            [960, 1440, 62, 90, 0, 0],
+            [1920, 2400, 64, 80, 0, 0],
+        ];
+        let events = build_events(&notes, 960.0, 0.5, 1.5);
+        assert!(events.contains(&(960, true, 0, 62, 90)));
+        assert!(events.contains(&(1440, false, 0, 62, 0)));
+        assert!(events.iter().all(|e| e.3 != 64), "窗口后的音符不该发声");
     }
 }
