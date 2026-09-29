@@ -39,11 +39,6 @@ from notes import tumour as TU  # noqa: E402
 APP_VERSION = "1.1.0"  # this port's version (Rust VERSION; upstream 1.2.0's about.VERSION is "1.2.0")
 
 
-def pending_tumour(tm):
-    """The port/tumour12 branch is porting rot / slant; drop these two keys until it lands."""
-    return {k: v for k, v in tm.items() if k not in ("rot", "slant")}
-
-
 def write(module, cases):
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, f"{module}.json")
@@ -162,8 +157,6 @@ def compat_shapes():
     for i, sh in enumerate(cases):
         try:
             cleaned = E.clean_shape(sh)
-            if isinstance(cleaned, dict) and isinstance(cleaned.get("tumour"), dict):
-                cleaned = dict(cleaned, tumour=pending_tumour(cleaned["tumour"]))
             case = {"name": f"shape{i}", "input": tolist(sh), "clean": tolist(cleaned)}
             if cleaned is not None:
                 try:  # Python 不转换 vel0/vel1，坏值会原样留下；Rust 的 Shape 是 f64，只能报错

@@ -205,9 +205,16 @@ pub struct App {
     pub rendered: Vec<[i64; 6]>,
     pub note_counts: Vec<usize>,
     pub slot_count: usize,
-    pub undo_stack: Vec<String>,
-    pub redo_stack: Vec<String>,
+    /// Named undo steps: `(shapes as JSON, name)` (upstream App.undo_stack).
+    pub undo_stack: Vec<crate::history::Step>,
+    /// The steps undone, still there for redo (upstream App.redo_stack).
+    pub redo_stack: Vec<crate::history::Step>,
     pub edit_key: Option<String>,
+    /// The History panel (off on a fresh start). Session-only, like the velocity pane: the autosave
+    /// window state isn't restored here.
+    pub show_history: bool,
+    /// The History list is undocked (its own window) (upstream app.history_undocked).
+    pub history_undocked: bool,
     pub view: View,
     /// 力度面板状态（原版 app.vel_tool + VelocityPane 的现场）
     pub vel: VelocityState,
@@ -326,6 +333,8 @@ impl App {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             edit_key: None,
+            show_history: false,
+            history_undocked: false,
             view: View::default(),
             vel: VelocityState::default(),
             status: String::new(),
@@ -761,7 +770,8 @@ impl App {
     }
 
     pub fn add_shape(&mut self, sh: Shape) {
-        self.push_undo();
+        let name = rust_i18n::t!("app.draw", shape_label = self.shape_label(&sh)).to_string();
+        self.push_undo(&name);
         self.shapes.push(sh);
         self.select(Some(self.shapes.len() - 1), false);
         self.shapes_changed();
@@ -772,7 +782,7 @@ impl App {
             return;
         }
         crate::roll_text::end_typing(self);
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.shapes.delete"));
         for i in self.sels.iter().rev() {
             self.shapes.remove(*i);
         }
@@ -802,7 +812,7 @@ impl App {
     /// 确认后真正清空（原版 delete_all 的确认部分之后）。
     fn do_delete_all(&mut self) {
         self.cancel_draft();
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.shapes.delete_all"));
         self.shapes.clear();
         self.select(None, false);
         self.shapes_changed();
@@ -814,11 +824,11 @@ impl App {
         }
         let shift = self.snap_beats().unwrap_or(1.0);
         let shapes: Vec<Shape> = self.sels.iter().map(|&i| self.shapes[i].clone()).collect();
-        self.add_copies(&shapes, shift);
+        self.add_copies(&shapes, shift, &rust_i18n::t!("panel.shapes.duplicate"));
     }
 
-    pub fn add_copies(&mut self, shapes: &[Shape], shift: f64) {
-        self.push_undo();
+    pub fn add_copies(&mut self, shapes: &[Shape], shift: f64, name: &str) {
+        self.push_undo(name);
         let first = self.shapes.len();
         for sh in shapes {
             let mut new = sh.clone();
@@ -852,7 +862,11 @@ impl App {
             return;
         };
         let mid2 = lo + hi;
-        self.push_undo();
+        self.push_undo(&if sideways {
+            rust_i18n::t!("menu.flip_sideways")
+        } else {
+            rust_i18n::t!("menu.flip_upside_down")
+        });
         for &i in &idx {
             let sh = &mut self.shapes[i];
             for p in &mut sh.pts {
@@ -907,7 +921,7 @@ impl App {
         let cp = (plo + phi) / 2.0;
         let r = self.view.sy / self.view.sx;
         let sign = if clockwise { 1.0 } else { -1.0 };
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("app.turn_90"));
         for &i in &idx {
             let sh = &mut self.shapes[i];
             for p in &mut sh.pts {
@@ -961,7 +975,7 @@ impl App {
             at = (at / sb).round() * sb;
         }
         let shapes = self.clipboard.clone();
-        self.add_copies(&shapes, at - start);
+        self.add_copies(&shapes, at - start, &rust_i18n::t!("app.paste"));
     }
 
     // ------------------------------------------------------------ Domino 剪贴板
@@ -1071,7 +1085,7 @@ impl App {
                                 None => self.playhead,
                             };
                             self.cancel_draft();
-                            self.add_copies(&[sh], at);
+                            self.add_copies(&[sh], at, &rust_i18n::t!("app.paste"));
                             let n = rows.len();
                             let note = match their_ppq {
                                 Some(p) if i64::from(p) != self.ppq => {
@@ -1109,13 +1123,11 @@ impl App {
         serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_default()
     }
 
-    pub fn push_undo(&mut self) {
-        self.undo_stack.push(self.snapshot());
-        if self.undo_stack.len() > 300 {
-            let cut = self.undo_stack.len() - 300;
-            self.undo_stack.drain(..cut);
-        }
-        self.redo_stack.clear();
+    /// Remember the shapes for Ctrl+Z; `name` is what the step does (the History panel)
+    /// (upstream push_undo).
+    pub fn push_undo(&mut self, name: &str) {
+        let state = self.snapshot();
+        crate::history::push(&mut self.undo_stack, &mut self.redo_stack, state, name);
         self.edit_key = None;
     }
 
@@ -1133,22 +1145,33 @@ impl App {
 
     fn restore(&mut self, from_undo: bool) {
         crate::roll_text::end_typing(self);
-        let src = if from_undo {
-            &mut self.undo_stack
+        let current = self.snapshot();
+        let (src, dst) = if from_undo {
+            (&mut self.undo_stack, &mut self.redo_stack)
         } else {
-            &mut self.redo_stack
+            (&mut self.redo_stack, &mut self.undo_stack)
         };
-        let Some(snap) = src.pop() else {
+        let Some((snap, _)) = crate::history::take(src, dst, current) else {
             return;
         };
-        let current = self.snapshot();
-        if from_undo {
-            self.redo_stack.push(current);
-        } else {
-            self.undo_stack.push(current);
-        }
+        self.apply_snapshot(&snap);
+    }
+
+    /// Go back / forward to step `row` (upstream history_jump): undo / redo until it is the current
+    /// one. The steps on the way keep their names in the other stack.
+    pub fn history_jump(&mut self, row: usize) {
+        self.cancel_draft();
+        let mut undo = std::mem::take(&mut self.undo_stack);
+        let mut redo = std::mem::take(&mut self.redo_stack);
+        crate::history::jump(&mut undo, &mut redo, row, self);
+        self.undo_stack = undo;
+        self.redo_stack = redo;
+    }
+
+    /// Show one step's shapes (upstream `_restore` after the stacks moved).
+    fn apply_snapshot(&mut self, snap: &str) {
         let value: serde_json::Value =
-            serde_json::from_str(&snap).unwrap_or(serde_json::Value::Array(Vec::new()));
+            serde_json::from_str(snap).unwrap_or(serde_json::Value::Array(Vec::new()));
         let mut shapes = Vec::new();
         if let Some(arr) = value.as_array() {
             for v in arr {
@@ -1169,7 +1192,19 @@ impl App {
         }
         self.shapes_changed();
     }
+}
 
+impl crate::history::HistoryHost for App {
+    fn snapshot(&mut self) -> String {
+        App::snapshot(self)
+    }
+
+    fn apply(&mut self, state: &str) {
+        self.apply_snapshot(state);
+    }
+}
+
+impl App {
     // ------------------------------------------------------------ 吸附
 
     /// The snap step in beats (quarter notes), None when snapping is off (upstream `snap_beats`).
@@ -1573,6 +1608,8 @@ impl eframe::App for App {
         // 帮助窗口与首次使用 tip（help.rs）
         crate::help::help_ui(self, &ctx);
         crate::help::tips_ui(self, &ctx);
+        // the History panel's own window, when it's undocked (history.rs)
+        crate::history::history_window_ui(self, &ctx);
 
         crate::drawer::drawer_ui(self, &ctx);
 

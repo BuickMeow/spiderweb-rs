@@ -162,7 +162,15 @@ fn begin_group(app: &mut App, key: &str, fresh: bool) {
     }
     let edit = format!("tumour:{}:{:?}", key, app.sels);
     if app.edit_key.as_deref() != Some(edit.as_str()) {
-        app.push_undo();
+        // the History name: a number box names its setting, the rest are just "Tumours"
+        // (upstream tumour_window.set: group=True for the number boxes, edit_name for the rest)
+        let name = match key {
+            "size" | "length" | "dist" | "rot" | "slant" | "ease" | "start" | "end" => {
+                rust_i18n::t!("history.tumour", key = key)
+            }
+            _ => rust_i18n::t!("history.tumours"),
+        };
+        app.push_undo(&name);
         app.edit_key = Some(edit);
     }
 }
@@ -784,7 +792,7 @@ impl GraphWindow {
                 // something else changed in between: Cancel can only put the graph back
                 self.exact = false;
             }
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("graph_window.tumour_graph"));
             self.step = Some(app.undo_stack.len());
         }
         app.edit_key = None;
@@ -896,7 +904,7 @@ impl GraphWindow {
                 app.shapes_changed();
             } else {
                 // other changes since then: just this graph goes back
-                app.push_undo();
+                app.push_undo(&rust_i18n::t!("graph_window.tumour_graph"));
                 for (&i, g) in self.targets.iter().zip(self.session_graphs.iter()) {
                     let Some(sh) = app.shapes.get_mut(i) else {
                         continue;

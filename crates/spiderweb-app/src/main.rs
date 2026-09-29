@@ -11,6 +11,7 @@ mod drawer_tools;
 mod errors;
 mod help;
 mod help_texts;
+mod history;
 #[cfg(test)]
 mod i18n_check;
 mod join_split;

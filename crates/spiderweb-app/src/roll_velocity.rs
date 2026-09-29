@@ -665,7 +665,7 @@ fn on_release(app: &mut App) {
     if ed.owners.is_empty() {
         return;
     }
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("velocity.draw_velocity"));
     let kind = match ed.kind {
         EditKind::Drag(t) => t,
         EditKind::Handle(_) => app.vel.tool,

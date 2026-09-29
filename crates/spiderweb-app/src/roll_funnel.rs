@@ -390,7 +390,7 @@ fn add_funnel_line(app: &mut App) -> bool {
         return false; // 画出来的墙跟原来的不一样：不算同一条线
     }
     app.cancel_draft();
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("roll_funnel.add_a_funnel_line"));
     if let Some(sh) = app.shapes.get_mut(sel) {
         sh.pts.push(arr[0]);
         sh.pts.push(arr[1]);
@@ -605,7 +605,7 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
             let Some(st) = funnel::new_start(&sh, at, line) else {
                 return false;
             };
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("roll_funnel.funnel_curve"));
             if let Some(shm) = app.shapes.get_mut(sel) {
                 shm.starts.push(st);
             }
@@ -713,7 +713,7 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
             }
         }
     }
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("roll_funnel.funnel_curve"));
     app.shapes[sel] = sh;
     app.shapes_changed();
     true
@@ -803,7 +803,7 @@ pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
         if k >= sh0.starts.len() {
             return false;
         }
-        app.push_undo();
+        app.push_undo(&rust_i18n::t!("roll_funnel.remove_a_funnel_point"));
         if let Some(sh) = app.shapes.get_mut(sel) {
             sh.starts.remove(k);
         }
@@ -860,7 +860,7 @@ pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
         }
         HandleId::Start(_) => return false,
     }
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("roll_funnel.remove_a_funnel_point"));
     if let Some(dst) = app.shapes.get_mut(sel) {
         *dst = sh;
     }
@@ -966,7 +966,7 @@ impl App {
         }
         let lines: Vec<usize> = lines.into_iter().collect();
         let curves: Vec<(usize, usize)> = curves.into_iter().collect();
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("roll_funnel.delete_highlighted"));
         if let Some(sh) = self.shapes.get_mut(sel) {
             funnel::remove_funnel_parts(sh, &lines, &curves);
         }
@@ -989,7 +989,7 @@ impl App {
             return;
         }
         if undo {
-            self.push_undo();
+            self.push_undo(&rust_i18n::t!("roll_funnel.change_curves"));
         }
         let Some(mut sh) = self.shapes.get(sel).cloned() else {
             return;
