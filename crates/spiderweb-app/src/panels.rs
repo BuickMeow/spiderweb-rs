@@ -4,7 +4,7 @@ use eframe::egui;
 
 use spiderweb_core::funnel::{self, CURVE_PRESETS, FunnelSettings};
 use spiderweb_core::shape::{
-    Align, Fill, FunnelCurve, FunnelFill, GateChange, GateFollow, Kind, Stroke, TextAlign,
+    Align, Ends, Fill, FunnelCurve, FunnelFill, GateChange, GateFollow, Kind, Stroke, TextAlign,
     TextSettings, TextUnit, Tumour, TumourShape, TumourSide, TumourWrap, WallMode,
 };
 use spiderweb_core::smooth::clean_level;
@@ -852,17 +852,38 @@ impl App {
             .show(ui, |ui| self.custom_body_ui(ui, &placed));
     }
 
+    fn custom_ends_label(ends: Ends) -> String {
+        match ends {
+            Ends::Round => rust_i18n::t!("panel.custom.ends_round"),
+            Ends::Keep => rust_i18n::t!("panel.custom.ends_keep"),
+            Ends::Drop => rust_i18n::t!("panel.custom.ends_drop"),
+            Ends::Min => rust_i18n::t!("panel.custom.ends_min"),
+            Ends::Stretch => rust_i18n::t!("panel.custom.ends_stretch"),
+        }
+        .to_string()
+    }
+
     fn custom_body_ui(&mut self, ui: &mut egui::Ui, placed: &[usize]) {
         let placed_mode = !placed.is_empty();
-        let (fill, align, name) = if placed_mode {
+        let (fill, align, ends, union, apart, name) = if placed_mode {
             match self.shapes.get(placed[0]) {
-                Some(sh) => (sh.fill, sh.align, sh.name.clone()),
+                Some(sh) => (
+                    sh.fill,
+                    sh.align,
+                    sh.ends,
+                    sh.union,
+                    sh.apart,
+                    sh.name.clone(),
+                ),
                 None => return,
             }
         } else {
             (
                 self.custom_defaults.fill,
                 self.custom_defaults.align,
+                self.custom_defaults.ends,
+                self.custom_defaults.union,
+                self.custom_defaults.apart,
                 self.custom_defaults.shape.clone(),
             )
         };
@@ -870,31 +891,30 @@ impl App {
             && placed
                 .iter()
                 .any(|&i| self.shapes.get(i).is_some_and(|s| s.notes.is_some()));
+        // 轮廓的缺口数（1.2.0：Fill / Spam 会用直线全部补上，这里只用于提示）
         let gaps = if placed_mode {
             placed
                 .iter()
                 .filter_map(|&i| self.shapes.get(i))
-                .map(|s| spiderweb_core::custom::open_paths(&s.strokes).len())
+                .map(|s| spiderweb_core::custom::gap_lines(s).len())
                 .max()
                 .unwrap_or(0)
+        } else if self.tool != Tool::Custom {
+            0
         } else {
             crate::roll_live::builtin_template(&self.library_dir, &name)
                 .map(|(st, _)| spiderweb_core::custom::open_paths(&st).len())
-                .unwrap_or(2)
+                .unwrap_or(0)
         };
-        let fillable = gaps <= 1;
-        let spam = matches!(fill, Fill::Spam | Fill::OutlineSpam)
-            && (fillable || fill == Fill::OutlineSpam);
-        // 缺口太多时面板显示 Empty（原版 fill_var.set 的兜底）
-        let shown_fill = if fillable || fill == Fill::OutlineSpam {
-            fill
-        } else {
-            Fill::Empty
-        };
+        let spam = matches!(fill, Fill::Spam | Fill::OutlineSpam);
+        let alignable = spam && ends != Ends::Stretch; // 拉伸的门限正好填满每段：起点无所谓
 
         let mut pick: Option<String> = None;
         let mut new_fill: Option<Fill> = None;
         let mut new_align: Option<Align> = None;
+        let mut new_ends: Option<Ends> = None;
+        let mut new_union: Option<bool> = None;
+        let mut new_apart: Option<bool> = None;
         let mut apply_gate = false;
         let lib_names = crate::drawer::library_names(&self.library_dir);
 
@@ -935,11 +955,7 @@ impl App {
                     Fill::OutlineSpam,
                 ),
             ] {
-                let enabled = fillable || matches!(value, Fill::Empty | Fill::OutlineSpam);
-                if ui
-                    .add_enabled(enabled, egui::RadioButton::new(shown_fill == value, label))
-                    .clicked()
-                {
+                if ui.radio(fill == value, label).clicked() {
                     new_fill = Some(value);
                 }
             }
@@ -957,32 +973,97 @@ impl App {
             });
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(spam, |ui| {
+                    ui.label(rust_i18n::t!("panel.custom.ends"));
+                    egui::ComboBox::from_id_salt("custom_ends")
+                        .selected_text(Self::custom_ends_label(ends))
+                        .width(120.0)
+                        .show_ui(ui, |ui| {
+                            for e in spiderweb_core::custom::ENDS {
+                                if ui
+                                    .selectable_label(ends == e, Self::custom_ends_label(e))
+                                    .clicked()
+                                {
+                                    new_ends = Some(e);
+                                }
+                            }
+                        });
+                })
+                .response
+                .on_hover_text(rust_i18n::t!("panel.custom.ends_tip"));
+            });
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(alignable, |ui| {
                     ui.label(rust_i18n::t!("panel.custom.start"));
-                    if ui
-                        .add_enabled(
-                            align != Align::Auto,
-                            egui::RadioButton::new(
-                                align == Align::Auto,
-                                rust_i18n::t!("panel.custom.auto"),
-                            ),
-                        )
-                        .clicked()
-                    {
-                        new_align = Some(Align::Auto);
-                    }
-                    if ui
-                        .add_enabled(
-                            align != Align::Aligned,
-                            egui::RadioButton::new(
-                                align == Align::Aligned,
-                                rust_i18n::t!("panel.custom.aligned"),
-                            ),
-                        )
-                        .clicked()
-                    {
-                        new_align = Some(Align::Aligned);
+                    for (label, value, hover) in [
+                        (
+                            rust_i18n::t!("panel.custom.auto"),
+                            Align::Auto,
+                            rust_i18n::t!("panel.custom.auto_tip"),
+                        ),
+                        (
+                            rust_i18n::t!("panel.custom.aligned"),
+                            Align::Aligned,
+                            rust_i18n::t!("panel.custom.aligned_tip"),
+                        ),
+                        (
+                            rust_i18n::t!("panel.custom.centred"),
+                            Align::Centred,
+                            rust_i18n::t!("panel.custom.centred_tip"),
+                        ),
+                    ] {
+                        if ui
+                            .radio(align == value, label)
+                            .on_hover_text(hover)
+                            .clicked()
+                        {
+                            new_align = Some(value);
+                        }
                     }
                 });
+            });
+            let mut cancel = !union;
+            let resp = ui.add_enabled(
+                matches!(fill, Fill::Fill | Fill::Spam),
+                egui::Checkbox::new(
+                    &mut cancel,
+                    rust_i18n::t!("panel.custom.overlaps_cancel_out"),
+                ),
+            );
+            if resp.changed() {
+                new_union = Some(!cancel);
+            }
+            resp.on_hover_text(rust_i18n::t!(
+                "panel.custom.fill_and_spam_where_outlines_overlap"
+            ));
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(matches!(fill, Fill::Fill | Fill::Spam), |ui| {
+                    ui.label(rust_i18n::t!("panel.custom.normal_outline"));
+                    egui::ComboBox::from_id_salt("custom_apart")
+                        .selected_text(if apart {
+                            rust_i18n::t!("panel.custom.outline")
+                        } else {
+                            rust_i18n::t!("panel.custom.normal")
+                        })
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(!apart, rust_i18n::t!("panel.custom.normal"))
+                                .clicked()
+                            {
+                                new_apart = Some(false);
+                            }
+                            if ui
+                                .selectable_label(apart, rust_i18n::t!("panel.custom.outline"))
+                                .clicked()
+                            {
+                                new_apart = Some(true);
+                            }
+                        });
+                })
+                .response
+                .on_hover_text(rust_i18n::t!(
+                    "panel.custom.normal_all_its_notes_together_outline"
+                ));
             });
         }
 
@@ -996,13 +1077,16 @@ impl App {
                 .sum();
             let mut info =
                 rust_i18n::t!("panel.custom.info_notes", total = total.to_string()).to_string();
-            if gaps == 1 && matches!(fill, Fill::Fill | Fill::Spam) {
-                info += &format!("  {}", rust_i18n::t!("panel.custom.info_one_gap"));
-            } else if gaps > 1 {
-                info += &format!(
-                    "  {}",
-                    rust_i18n::t!("panel.custom.info_gaps", gaps = gaps.to_string())
-                );
+            if gaps > 0 && matches!(fill, Fill::Fill | Fill::Spam) {
+                if gaps == 1 {
+                    info += &format!("  {}", rust_i18n::t!("panel.custom.info_one_gap"));
+                } else {
+                    info += &format!(
+                        "  {}",
+                        rust_i18n::t!("panel.custom.info_gaps", gaps = gaps.to_string())
+                    );
+                }
+                info += rust_i18n::t!("panel.custom.ends_that_nearly_touch_1_64").as_ref();
             }
             if let Some(k) = self.stroke
                 && placed.len() == 1
@@ -1047,6 +1131,15 @@ impl App {
         }
         if let Some(align) = new_align {
             self.set_custom_align(align, placed);
+        }
+        if let Some(ends) = new_ends {
+            self.set_custom_ends(ends, placed);
+        }
+        if let Some(union) = new_union {
+            self.set_custom_union(union, placed);
+        }
+        if let Some(apart) = new_apart {
+            self.set_custom_apart(apart, placed);
         }
         if apply_gate {
             self.apply_custom_gate(placed);
@@ -1099,6 +1192,52 @@ impl App {
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.align = align;
+            }
+        }
+        self.shapes_changed();
+    }
+
+    fn set_custom_ends(&mut self, ends: Ends, placed: &[usize]) {
+        if placed.is_empty() {
+            self.custom_defaults.ends = ends;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.ends = ends;
+            }
+        }
+        self.shapes_changed();
+    }
+
+    /// "Overlaps cancel out"：勾上 = union 关（重叠抵消，even-odd）。
+    fn set_custom_union(&mut self, union: bool, placed: &[usize]) {
+        if placed.is_empty() {
+            self.custom_defaults.union = union;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.union = union;
+            }
+        }
+        self.shapes_changed();
+    }
+
+    fn set_custom_apart(&mut self, apart: bool, placed: &[usize]) {
+        if placed.is_empty() {
+            self.custom_defaults.apart = apart;
+            self.schedule_autosave();
+            return;
+        }
+        self.push_undo();
+        for &i in placed {
+            if let Some(sh) = self.shapes.get_mut(i) {
+                sh.apart = apart;
             }
         }
         self.shapes_changed();

@@ -16,9 +16,15 @@
 //! - `notes_shape` 的行数为 0 时返回 None；
 //! - `unpack_notes` / `block_notes` 用 [`NotesError`] 报坏数据（Python 抛异常）；
 //! - `clean_strokes` / `clean_curve` 接受 JSON 值，`int` / `float` 的边角（下划线数字、
-//!   容器 repr）不复刻，坏值一律按原版跳过。
+//!   容器 repr）不复刻，坏值一律按原版跳过；
+//! - `fill_plan` 不做 Python 的按框记忆（只影响速度，不影响结果）；
+//! - 笔画还没有 `src`（convert.py 的 "Turn into live shape" 属于后续波次），所以
+//!   [`stroke_groups`] 现在总是 None（所有笔画一组）。
+//!
+//! 1.2.0 的 `TOP_KEY` 是 256 键工程的一部分，这里暂用 127（另一个 agent 在做键域参数化）。
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::sync::LazyLock;
 
@@ -31,17 +37,30 @@ use serde_json::Value;
 use crate::arc::{STEP as ARC_STEP, arc_points, clean_k, ellipse_bezier};
 use crate::bezier::sample as bezier_sample;
 use crate::paths::{dedupe, keep_longest, line_notes, loop_from_left, pitch_of, stretch_ends};
-use crate::shape::{Align, Fill, Kind, Shape, Stroke, Sym};
+use crate::shape::{Align, Ends, Fill, Kind, Shape, Stroke, Sym};
 use crate::smooth::{clean_level, smooth_path};
 use crate::text::{text_polys, threshold_spans};
 use crate::{Pt, dist, floor_half, hypot2, round_half_even, round_i64};
+
+/// 形状能到的最高 key；1.2.0 用工程键域（128 / 256），这里先按 MIDI 标准。
+pub const TOP_KEY: i64 = 127;
 
 /// 填充方式（custom.FILLS）。
 pub const FILLS: [Fill; 4] = [Fill::Empty, Fill::Fill, Fill::Spam, Fill::OutlineSpam];
 /// 用门限与 spam 起点的填充（custom.SPAM_FILLS）。
 pub const SPAM_FILLS: [Fill; 2] = [Fill::Spam, Fill::OutlineSpam];
 /// spam 起点对齐（custom.ALIGNS）。
-pub const ALIGNS: [Align; 2] = [Align::Auto, Align::Aligned];
+pub const ALIGNS: [Align; 3] = [Align::Auto, Align::Aligned, Align::Centred];
+/// spam 收尾（custom.ENDS），按面板下拉的顺序。
+pub const ENDS: [Ends; 5] = [
+    Ends::Round,
+    Ends::Keep,
+    Ends::Drop,
+    Ends::Min,
+    Ends::Stretch,
+];
+/// 只在打开时才存在的开关（custom.CUSTOM_FLAGS）。
+pub const CUSTOM_FLAGS: [&str; 2] = ["union", "apart"];
 
 /// 自定义形状的默认设置（custom.CUSTOM_DEFAULTS）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +68,9 @@ pub struct CustomDefaults {
     pub fill: Fill,
     pub gate: f64,
     pub align: Align,
+    pub ends: Ends,
+    pub union: bool,
+    pub apart: bool,
 }
 
 impl Default for CustomDefaults {
@@ -57,15 +79,35 @@ impl Default for CustomDefaults {
             fill: Fill::Empty,
             gate: 0.0625,
             align: Align::Auto,
+            ends: Ends::Round,
+            union: false,
+            apart: false,
         }
     }
 }
 
-/// CUSTOM_DEFAULTS 的值（fill = empty，gate = 1/16 拍 = PPQ 960 的 60 ticks，align = auto）。
+impl CustomDefaults {
+    /// 新自定义形状从默认设置里拿到的填充设置（custom.custom_settings）：
+    /// ends 与 fill / gate / align 一样总是有，union / apart 只在打开时才有。
+    pub fn apply(&self, sh: &mut Shape) {
+        sh.fill = self.fill;
+        sh.gate = self.gate;
+        sh.align = self.align;
+        sh.ends = self.ends;
+        sh.union = self.union;
+        sh.apart = self.apart;
+    }
+}
+
+/// CUSTOM_DEFAULTS 的值（fill = empty，gate = 1/16 拍 = PPQ 960 的 60 ticks，align = auto，
+/// ends = round：1.2.0 起新形状的默认；旧形状没有 ends，读作 drop）。
 pub const CUSTOM_DEFAULTS: CustomDefaults = CustomDefaults {
     fill: Fill::Empty,
     gate: 0.0625,
     align: Align::Auto,
+    ends: Ends::Round,
+    union: false,
+    apart: false,
 };
 
 /// 椭圆采样点数（custom.ELLIPSE_STEPS）。
@@ -467,27 +509,161 @@ pub fn strokes_closed(strokes: &[Stroke]) -> bool {
     !strokes.is_empty() && open_paths(strokes).is_empty()
 }
 
-/// Fill / Spam 能用：轮廓闭合，或只有一个缺口（custom.fillable）。
+/// Fill / Spam 能用（任何画都行：缺口用直线补上，见 [`fill_plan`]）（custom.fillable）。
 pub fn fillable(strokes: &[Stroke]) -> bool {
-    !strokes.is_empty() && open_paths(strokes).len() <= 1
+    !strokes.is_empty()
 }
 
-/// 只有一个缺口的形状：把它补上的直线，两点 (beat, pitch)（从终点回起点）。
-/// 文本形状或缺口数不为 1 时为 None（custom.gap_line）。
-pub fn gap_line(sh: &Shape) -> Option<[Pt; 2]> {
+// 轮廓的缺口，供 Fill / Spam 用（拍 / key，不是屏幕，缩放不会改变音符）：
+/// 松着的端最多差这么远就算相接（直线连起来）。
+pub const TOUCH_BEATS: f64 = 1.0 / 64.0;
+/// 同上，key 方向。
+pub const TOUCH_KEYS: f64 = 1.0;
+/// 开放段离收尾直线最远不超过半个 key（上下）或 1/64 拍（左右）就没有值得填的里面。
+pub const FLAT_KEYS: f64 = 0.5;
+/// 同上，拍方向。
+pub const FLAT_BEATS: f64 = 1.0 / 64.0;
+
+/// 两个端算不算相接（custom.near_ends）。
+pub fn near_ends(p: Pt, q: Pt) -> bool {
+    (p[0] - q[0]).abs() <= TOUCH_BEATS + 1e-9 && (p[1] - q[1]).abs() <= TOUCH_KEYS + 1e-9
+}
+
+/// 开放路径离它两端的连线从未超过半个 key（上下）或 1/64 拍（左右）：没有值得填的里面
+/// （一条直线、很缓的曲线）（custom.flat_path）。
+pub fn flat_path(path: &[Pt]) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    let (b0, p0) = (path[0][0], path[0][1]);
+    let (b1, p1) = (path[path.len() - 1][0], path[path.len() - 1][1]);
+    let (db, dp) = (b1 - b0, p1 - p0);
+    for (along, across, lim, d_along, d_across, s) in [
+        (0usize, 1usize, FLAT_KEYS, db, dp, b0),
+        (1usize, 0usize, FLAT_BEATS, dp, db, p0),
+    ] {
+        if d_along.abs() < 1e-12 {
+            continue;
+        }
+        if path
+            .iter()
+            .any(|q| (q[along] - s) / d_along < -1e-9 || (q[along] - s) / d_along > 1.0 + 1e-9)
+        {
+            continue; // （越过了自己的两端）
+        }
+        let ok = path.iter().all(|q| {
+            let t = (q[along] - s) / d_along;
+            let line = path[0][across] + t * d_across;
+            (q[across] - line).abs() <= lim + 1e-9
+        });
+        if ok {
+            return true;
+        }
+    }
+    db.abs() < 1e-12 && dp.abs() < 1e-12
+}
+
+/// Fill / Spam 眼里的自定义形状轮廓（拍 / pitch）（custom.fill_plan）：
+/// `polys` = 组成里面的闭合环，`closers` = 补缺口加的直线（几乎相接的松端直接接上，
+/// 剩下的每个开放段从终点直线连回起点），`flat` = 扁得没有里面的开放段（只保留轮廓音符）。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FillPlan {
+    pub polys: Vec<Vec<Pt>>,
+    pub closers: Vec<[Pt; 2]>,
+    pub flat: Vec<Vec<Pt>>,
+}
+
+/// 算出 [`FillPlan`]（custom.fill_plan）。Python 版按框记住结果，这里只影响速度，不缓存。
+pub fn fill_plan(sh: &Shape) -> FillPlan {
+    let paths = join_paths(&custom_strokes(sh));
+    let mut polys: Vec<Vec<Pt>> = paths.iter().filter(|p| path_closed(p)).cloned().collect();
+    let mut opens: Vec<Vec<Pt>> = paths.iter().filter(|p| !path_closed(p)).cloned().collect();
+    let mut closers: Vec<[Pt; 2]> = Vec::new();
+    loop {
+        // 最接近的一对相接的松端，接上，直到没有
+        let mut best: Option<(f64, usize, usize, u8, Pt, Pt)> = None;
+        for i in 0..opens.len() {
+            for j in i..opens.len() {
+                let a = &opens[i];
+                let b = &opens[j];
+                if a.is_empty() || b.is_empty() {
+                    continue;
+                }
+                let pairs: Vec<(Pt, Pt, u8)> = if i == j {
+                    if a.len() < 3 {
+                        Vec::new()
+                    } else {
+                        vec![(a[a.len() - 1], a[0], 0)]
+                    }
+                } else {
+                    vec![
+                        (a[a.len() - 1], b[0], 1),
+                        (a[a.len() - 1], b[b.len() - 1], 2),
+                        (a[0], b[0], 3),
+                        (a[0], b[b.len() - 1], 4),
+                    ]
+                };
+                for (p, q, how) in pairs {
+                    if near_ends(p, q) {
+                        let d = ((p[0] - q[0]).abs() / TOUCH_BEATS)
+                            .max((p[1] - q[1]).abs() / TOUCH_KEYS);
+                        if best.as_ref().is_none_or(|b| d < b.0) {
+                            best = Some((d, i, j, how, p, q));
+                        }
+                    }
+                }
+            }
+        }
+        let Some((_, i, j, how, p, q)) = best else {
+            break;
+        };
+        closers.push([p, q]);
+        if how == 0 {
+            let mut a = opens[i].clone();
+            let first = a[0];
+            a.push(first);
+            polys.push(a);
+            opens.remove(i);
+            continue;
+        }
+        let mut a = opens[i].clone();
+        let mut b = opens[j].clone();
+        if !(how == 1 || how == 2) {
+            a.reverse();
+        }
+        if !(how == 1 || how == 3) {
+            b.reverse();
+        }
+        a.extend_from_slice(&b);
+        opens[i] = a;
+        opens.remove(j);
+    }
+    let mut flat = Vec::new();
+    for path in opens {
+        if flat_path(&path) {
+            flat.push(path);
+        } else {
+            let mut p = path.clone();
+            let first = p[0];
+            p.push(first);
+            polys.push(p);
+            closers.push([path[path.len() - 1], path[0]]);
+        }
+    }
+    FillPlan {
+        polys,
+        closers,
+        flat,
+    }
+}
+
+/// 缺口补上的直线（虚线画）（custom.gap_lines）。
+pub fn gap_lines(sh: &Shape) -> Vec<[Pt; 2]> {
     if sh.text.is_some() {
-        return None;
+        Vec::new()
+    } else {
+        fill_plan(sh).closers
     }
-    let paths = open_paths(&sh.strokes);
-    if paths.len() != 1 {
-        return None;
-    }
-    let to_bp = frame_to_bp(&sh.pts)?;
-    let path = &paths[0];
-    Some([
-        to_bp(path[path.len() - 1][0], path[path.len() - 1][1]),
-        to_bp(path[0][0], path[0][1]),
-    ])
 }
 
 /// 首尾相接的开放折线连成一条（曲线与圆保持原样，custom.join_strokes）。
@@ -760,9 +936,52 @@ fn stroke_k(st: &Stroke) -> f64 {
     }
 }
 
+/// [`uv_k`] 反着算：屏幕上每 key k 拍时框里一个 v 是几个 u（为了从框里取出笔画的 k）；
+/// 没有就 1（custom.bp_k）。
+pub fn bp_k(pts: &[Pt], k: f64) -> f64 {
+    let Some([a, b, c]) = frame3(pts) else {
+        return 1.0;
+    };
+    let (b0, p0) = (a[0], a[1]);
+    let (ub, up, vb, vp) = (b[0] - b0, b[1] - p0, c[0] - b0, c[1] - p0);
+    // uv_k = hypot(vb / K, vp) / hypot(ub / K, up) = k，解出 x = 1 / K²
+    let num = k * k * up * up - vp * vp;
+    let den = vb * vb - k * k * ub * ub;
+    let x = if den.abs() > 1e-18 { num / den } else { -1.0 };
+    if x > 1e-18 { 1.0 / x.sqrt() } else { 1.0 }
+}
+
+/// 自定义形状 sh 的第 k 条笔画，换成拍 / pitch（像画在卷轴上的一条，供 [`add_stroke`] 用）：
+/// 转过框里的椭圆变成曲线；弧 / 自由笔画的 k 换成每 key 几拍（custom.stroke_bp）。
+pub fn stroke_bp(sh: &Shape, k: usize) -> Option<Stroke> {
+    let mut st = sh.strokes.get(k)?.clone();
+    let to_bp = frame_to_bp(&sh.pts)?;
+    if matches!(st, Stroke::Ellipse { .. }) && !frame_upright(&sh.pts) {
+        let Stroke::Ellipse { box_ } = &st else {
+            return None;
+        };
+        st = Stroke::Curve {
+            pts: ellipse_bezier(*box_),
+            sharp: Vec::new(),
+            sym: None,
+        };
+    }
+    let has_k = matches!(st, Stroke::Poly { free: true, .. } | Stroke::Arc { .. });
+    let k_in = stroke_k(&st);
+    let mut new = map_stroke(&st, to_bp, 1.0, 1.0);
+    if has_k {
+        match &mut new {
+            Stroke::Poly { k, .. } | Stroke::Arc { k, .. } => *k = bp_k(&sh.pts, k_in),
+            _ => {}
+        }
+    }
+    Some(new)
+}
+
 /// 把在卷轴上画的笔画 st 放进形状 sh 并重新套框（custom.add_stroke）；
-/// 端点落在别的笔画点上的精确吸附过去。返回新笔画的编号；框退化时 None。
-pub fn add_stroke(sh: &mut Shape, st: &Stroke) -> Option<usize> {
+/// 端点落在别的笔画点上的精确吸附过去。at：新笔画的编号（默认排在最后）。
+/// 返回新笔画的编号；框退化时 None。
+pub fn add_stroke(sh: &mut Shape, st: &Stroke, at: Option<usize>) -> Option<usize> {
     let to_uv = frame_to_uv(&sh.pts)?;
     let converted;
     let st = if matches!(st, Stroke::Ellipse { .. }) && !frame_upright(&sh.pts) {
@@ -779,8 +998,14 @@ pub fn add_stroke(sh: &mut Shape, st: &Stroke) -> Option<usize> {
         st
     };
     let mut new = map_stroke(st, to_uv, 1.0, 1.0);
-    if let Stroke::Poly { free: true, k, .. } = &mut new {
-        *k = uv_k(&sh.pts, stroke_k(st));
+    // 它的 k：屏幕上每 key 几拍 -> 框里一个 v 是几个 u（自由笔画与弧都有）
+    let has_k = matches!(new, Stroke::Poly { free: true, .. } | Stroke::Arc { .. });
+    let k_in = stroke_k(st);
+    if has_k {
+        match &mut new {
+            Stroke::Poly { k, .. } | Stroke::Arc { k, .. } => *k = uv_k(&sh.pts, k_in),
+            _ => {}
+        }
     }
     let is_poly = matches!(new, Stroke::Poly { .. });
     let pts = match &mut new {
@@ -819,9 +1044,11 @@ pub fn add_stroke(sh: &mut Shape, st: &Stroke) -> Option<usize> {
             pts[last] = first;
         }
     }
-    sh.strokes.push(new);
+    // Python 的 list.insert：越界的编号插在最后，但返回的还是传来的编号
+    let at = at.unwrap_or(sh.strokes.len());
+    sh.strokes.insert(at.min(sh.strokes.len()), new);
     refit(sh);
-    Some(sh.strokes.len() - 1)
+    Some(at)
 }
 
 /// 空的自定义形状（现场画用）：1 拍 × 1 key 的框在 (0, 0)，画了东西再套框（custom.new_live_shape）。
@@ -830,9 +1057,7 @@ pub fn new_live_shape(defaults: &Shape, custom_defaults: &CustomDefaults) -> Sha
     sh.kind = Kind::Custom;
     sh.name = "Live drawing".to_string();
     sh.strokes = Vec::new();
-    sh.fill = custom_defaults.fill;
-    sh.gate = custom_defaults.gate;
-    sh.align = custom_defaults.align;
+    custom_defaults.apply(&mut sh);
     sh.pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
     sh
 }
@@ -841,10 +1066,22 @@ pub fn new_live_shape(defaults: &Shape, custom_defaults: &CustomDefaults) -> Sha
 
 /// 自定义形状每条笔画上的音符，像线条一样（custom.outline_notes）。
 pub fn outline_notes(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
+    paths_outline(&join_paths(&custom_strokes(sh)), ppq)
+}
+
+/// 同上，只要这些编号的笔画（custom.outline_notes 的 only；越界的编号跳过）。
+pub fn outline_notes_only(sh: &Shape, ppq: f64, only: &[usize]) -> Vec<[i64; 3]> {
+    let paths = custom_strokes(sh);
+    let picked: Vec<Vec<Pt>> = only.iter().filter_map(|&k| paths.get(k).cloned()).collect();
+    paths_outline(&join_paths(&picked), ppq)
+}
+
+/// 这些（接好的）路径上的音符，像线条一样（custom.paths_outline）。
+pub fn paths_outline(paths: &[Vec<Pt>], ppq: f64) -> Vec<[i64; 3]> {
     let mut raw: Vec<[i64; 3]> = Vec::new();
-    for path in join_paths(&custom_strokes(sh)) {
-        let closed = path_closed(&path);
-        let path = dedupe(&path);
+    for path in paths {
+        let closed = path_closed(path);
+        let path = dedupe(path);
         if path.is_empty() {
             continue;
         }
@@ -942,16 +1179,52 @@ pub fn row_spans(polys: &[Vec<Pt>], q: f64) -> Vec<[f64; 2]> {
     merged
 }
 
-/// 形状内每个 key 的每段 `[pitch, start tick, end tick]`（custom.inside_spans 的顺序：
-/// 按 pitch 递增，每个 pitch 内按 [`row_spans`] 的顺序）。一个缺口用直线补上。
-pub fn inside_spans(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
-    let mut polys = custom_strokes(sh);
-    if let Some(gap) = gap_line(sh) {
-        polys.push(gap.to_vec());
+/// [`row_spans`]，但任意一个环的里面都算（重叠处也填，洞也填）（custom.union_spans）。
+pub fn union_spans(polys: &[Vec<Pt>], q: f64) -> Vec<[f64; 2]> {
+    let mut spans: Vec<[f64; 2]> = Vec::new();
+    for poly in polys {
+        spans.extend(row_spans(std::slice::from_ref(poly), q));
     }
+    spans.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap_or(Ordering::Equal)
+            .then(a[1].partial_cmp(&b[1]).unwrap_or(Ordering::Equal))
+    });
+    let mut merged: Vec<[f64; 2]> = Vec::new();
+    for s in spans {
+        if let Some(last) = merged.last_mut()
+            && s[0] <= last[1]
+        {
+            last[1] = last[1].max(s[1]);
+        } else {
+            merged.push(s);
+        }
+    }
+    merged
+}
+
+/// 形状内每个 key 的每段 `[pitch, start tick, end tick]`（custom.inside_spans 的顺序：
+/// 按 pitch 递增，每个 pitch 内按 [`row_spans`] 的顺序）。文本：nonzero 规则与阈值（text.py）。
+/// 轮廓的缺口用直线补上（[`fill_plan`]）。
+pub fn inside_spans(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
+    let text_strokes = if sh.text.is_some() {
+        Some(custom_strokes(sh))
+    } else {
+        None
+    };
+    let plan = if sh.text.is_none() {
+        Some(fill_plan(sh))
+    } else {
+        None
+    };
+    let polys: &[Vec<Pt>] = match (&text_strokes, &plan) {
+        (Some(v), _) => v,
+        (_, Some(p)) => &p.polys,
+        _ => &[],
+    };
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
-    for p in &polys {
+    for p in polys {
         for q in p {
             lo = lo.min(q[1]);
             hi = hi.max(q[1]);
@@ -960,14 +1233,16 @@ pub fn inside_spans(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
     if !lo.is_finite() || !hi.is_finite() {
         return Vec::new();
     }
+    let union = sh.union && sh.text.is_none();
     let first = 0.max(pitch_of(lo));
-    let last = 127.min(pitch_of(hi));
+    let last = TOP_KEY.min(pitch_of(hi));
     let mut out = Vec::new();
     for q in first..=last {
         let qf = q as f64;
         let spans = match &sh.text {
-            Some(tx) => threshold_spans(&polys, qf, tx.threshold),
-            None => row_spans(&polys, qf),
+            Some(tx) => threshold_spans(polys, qf, tx.threshold),
+            None if union => union_spans(polys, qf),
+            None => row_spans(polys, qf),
         };
         for [a, b] in spans {
             let s = floor_half(a * ppq);
@@ -982,100 +1257,415 @@ pub fn spam_gate(sh: &Shape, ppq: f64) -> i64 {
     1.max(floor_half(sh.gate * ppq))
 }
 
-/// 一段从 s 到 e 的第一个音符起点与能放几个整门限（custom.spam_starts）。
-pub fn spam_starts(sh: &Shape, s: i64, e: i64, g: i64) -> (i64, i64) {
-    let s = if sh.align == Align::Aligned && g > 0 {
-        div_ceil_pos(s, g) * g
-    } else {
-        s
-    };
-    let n = if g > 0 { (e - s).max(0) / g } else { 0 };
-    (s, n)
-}
-
-/// stretches: (start, end, key) 行（ticks）→ 每段用门限 g 铺满的音符（custom.chop）。
-/// 放不下一个整门限的丢掉；keep_short：短于一个门限的段保持原样。
-pub fn chop(sh: &Shape, stretches: &[[i64; 3]], g: i64, keep_short: bool) -> Vec<[i64; 3]> {
+/// stretches：(start, end, key) 行（ticks）→ 每段用门限 g 铺满背靠背的音符（custom.chop）。
+/// 从哪儿开始看 ALIGNS，放不下整门限的零头看 ENDS。
+fn chop_core(
+    sh: &Shape,
+    stretches: &[[i64; 3]],
+    g: i64,
+    want_notes: bool,
+) -> (Vec<i64>, Vec<[i64; 3]>) {
     if g <= 0 {
-        return Vec::new();
+        return (vec![0; stretches.len()], Vec::new());
     }
+    let ends = sh.ends;
+    let align = sh.align;
+    let mut counts = Vec::with_capacity(stretches.len());
     let mut out = Vec::new();
     for &[s0, e0, q] in stretches {
-        let s = if sh.align == Align::Aligned {
-            div_ceil_pos(s0, g) * g
-        } else {
-            s0
-        };
-        let n = (e0 - s).max(0) / g;
-        if n == 0 {
-            if keep_short {
-                out.push([s0, e0, q]);
+        let size = e0 - s0;
+        if matches!(ends, Ends::Round | Ends::Stretch) {
+            let n = 1.max((2 * size + g).div_euclid(2 * g)); // 整门限数，四舍五入（半进）
+            if ends == Ends::Stretch {
+                counts.push(n);
+                if want_notes {
+                    for k in 0..n {
+                        out.push([
+                            s0 + (size * k).div_euclid(n),
+                            s0 + (size * (k + 1)).div_euclid(n),
+                            q,
+                        ]);
+                    }
+                }
+                continue;
+            }
+            let (n, first) = if align == Align::Aligned {
+                // 门限网格里至少装了半个门限的格子
+                let lo = -((g - 2 * s0).div_euclid(2 * g));
+                let n = (2 * e0 + g).div_euclid(2 * g) - lo;
+                if n <= 0 {
+                    // （一个都没装：段中间所在的格子）
+                    (1, (s0 + e0).div_euclid(2).div_euclid(g) * g)
+                } else {
+                    (n, lo * g)
+                }
+            } else if align == Align::Centred {
+                (n, s0 + (size - n * g).div_euclid(2))
+            } else {
+                (n, s0)
+            };
+            counts.push(n);
+            if want_notes {
+                for k in 0..n {
+                    let start = first + k * g;
+                    out.push([start, start + g, q]);
+                }
             }
             continue;
         }
-        for k in 0..n {
-            let start = s + k * g;
-            out.push([start, start + g, q]);
+        let s = match align {
+            Align::Aligned => div_ceil_pos(s0, g) * g, // s0 起第一条门限线
+            Align::Centred => s0 + size.rem_euclid(g).div_euclid(2),
+            Align::Auto => s0,
+        };
+        let n = 0.max((e0 - s).div_euclid(g));
+        if ends == Ends::Keep {
+            // 第一个整门限前 / 最后一个后的零头留成短线（aligned / centred）
+            let head_end = s.min(e0);
+            let head = i64::from(head_end > s0);
+            let tail = i64::from(if s < e0 { s + n * g } else { e0 } < e0);
+            let c = n + head + tail;
+            counts.push(c);
+            if want_notes {
+                for k in 0..c {
+                    let first = head == 1 && k == 0;
+                    let last = tail == 1 && k == c - 1;
+                    let mut start = s + (k - head) * g;
+                    let mut stop = start + g;
+                    if first {
+                        start = s0;
+                        stop = head_end;
+                    } else if last {
+                        stop = e0;
+                    }
+                    out.push([start, stop, q]);
+                }
+            }
+            continue;
+        }
+        let short = n == 0; // 短于一个门限：原样留一个音符（"min"：至少四分之一门限）
+        let n = if short { 1 } else { n };
+        counts.push(n);
+        if want_notes {
+            if short {
+                let (mut a, mut b) = (s0, e0);
+                if ends == Ends::Min {
+                    let least = 1.max(div_ceil_pos(g, 4));
+                    if b - a < least {
+                        a += (b - a - least).div_euclid(2);
+                        b = a + least;
+                    }
+                }
+                out.push([a, b, q]);
+            } else {
+                for k in 0..n {
+                    let start = s + k * g;
+                    out.push([start, start + g, q]);
+                }
+            }
         }
     }
-    out
+    (counts, out)
 }
 
-/// 轮廓的音符按 spam 门限切成背靠背的音符（custom.outline_spam）。
+/// stretches：(start, end, key) 行（ticks）→ 每段用门限 g 铺满的音符（custom.chop）。
+pub fn chop(sh: &Shape, stretches: &[[i64; 3]], g: i64) -> Vec<[i64; 3]> {
+    chop_core(sh, stretches, g, true).1
+}
+
+/// chop 会把 stretches 切成多少个音符（custom.chop_count）。
+pub fn chop_count(sh: &Shape, stretches: &[[i64; 3]], g: i64) -> i64 {
+    if stretches.is_empty() {
+        return 0;
+    }
+    chop_core(sh, stretches, g, false).0.iter().sum()
+}
+
+/// 形状笔画的分组 `{组: [笔画编号]}`，来自不同形状的笔画（convert.py：每个形状的笔画各自出
+/// 自己的音符）（custom.stroke_groups）；全是一组时 None。
+///
+/// 我们的 [`Stroke`] 还没有 `src`（"Turn into live shape" 属于后续波次），所以现在总是 None；
+/// 分组的消费逻辑（[`outline_groups`] / [`custom_notes_groups`]）已经就位。
+pub fn stroke_groups(sh: &Shape) -> Option<Vec<Vec<usize>>> {
+    let _ = sh;
+    None
+}
+
+/// 轮廓的音符（spam：像 Outline spam 那样切断）和每个音符属于哪个笔画组（笔画全一组时 None，
+/// 见 [`stroke_groups`]）（custom.outline_groups）。
+pub fn outline_groups(sh: &Shape, ppq: f64, spam: bool) -> (Vec<[i64; 3]>, Option<Vec<i64>>) {
+    match stroke_groups(sh) {
+        None => {
+            let notes = outline_notes(sh, ppq);
+            let notes = if spam {
+                chop_outline(sh, &notes, ppq)
+            } else {
+                notes
+            };
+            (notes, None)
+        }
+        Some(groups) => {
+            let mut parts: Vec<[i64; 3]> = Vec::new();
+            let mut ids: Vec<i64> = Vec::new();
+            for (n, strokes) in groups.iter().enumerate() {
+                let mut notes = outline_notes_only(sh, ppq, strokes);
+                if spam {
+                    notes = chop_outline(sh, &notes, ppq);
+                }
+                ids.extend(std::iter::repeat_n(n as i64, notes.len()));
+                parts.extend(notes);
+            }
+            (parts, Some(ids))
+        }
+    }
+}
+
+/// 轮廓的音符切成 spam 门限的背靠背音符（spam 起点与收尾同 Spam；短于一个门限的音符不会
+/// 消失，陡的轮廓段还在）（custom.chop_outline）。
+pub fn chop_outline(sh: &Shape, notes: &[[i64; 3]], ppq: f64) -> Vec<[i64; 3]> {
+    chop(sh, notes, spam_gate(sh, ppq))
+}
+
+/// 轮廓按 spam 门限出的音符（custom.outline_spam）。
 pub fn outline_spam(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
-    chop(sh, &outline_notes(sh, ppq), spam_gate(sh, ppq), true)
+    outline_groups(sh, ppq, true).0
 }
 
-/// 形状会出多少个音符，不真的生成（custom.custom_note_count）；不确定时 None。
+/// 填充的形状里扁得没法填的开放段自己的轮廓音符（fill_plan 的 flat），让它们不消失
+/// （custom.flat_notes）。
+pub fn flat_notes(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
+    let flat = if sh.text.is_some() {
+        Vec::new()
+    } else {
+        fill_plan(sh).flat
+    };
+    if flat.is_empty() {
+        Vec::new()
+    } else {
+        paths_outline(&flat, ppq)
+    }
+}
+
+/// 形状会出多少个音符，不真的生成（spam 可能上百万）（custom.custom_note_count）；不确定时 None。
 pub fn custom_note_count(sh: &Shape, ppq: f64) -> Option<i64> {
     if let Some(text) = &sh.notes {
         return unpack_notes(text).ok().map(|rows| rows.len() as i64);
     }
+    if sh.apart && matches!(sh.fill, Fill::Fill | Fill::Spam) {
+        return None; // （生成出来再数）
+    }
     if sh.fill == Fill::OutlineSpam {
-        let g = spam_gate(sh, ppq);
-        let total = outline_notes(sh, ppq)
-            .iter()
-            .map(|[s, e, _]| 1.max(spam_starts(sh, *s, *e, g).1))
-            .sum();
-        return Some(total);
+        return Some(chop_count(
+            sh,
+            &outline_groups(sh, ppq, false).0,
+            spam_gate(sh, ppq),
+        ));
     }
     if sh.fill == Fill::Empty || !fillable(&sh.strokes) {
         return None;
     }
+    let flat = flat_notes(sh, ppq);
     if sh.fill == Fill::Fill {
-        return Some(inside_spans(sh, ppq).len() as i64);
+        return Some(inside_spans(sh, ppq).len() as i64 + flat.len() as i64);
     }
     let g = spam_gate(sh, ppq);
-    let total = inside_spans(sh, ppq)
+    let spans: Vec<[i64; 3]> = inside_spans(sh, ppq)
         .iter()
-        .map(|[_, s, e]| spam_starts(sh, *s, *e, g).1)
-        .sum();
-    Some(total)
+        .map(|&[q, s, e]| [s, e, q])
+        .collect();
+    Some(chop_count(sh, &spans, g) + chop_count(sh, &flat, g))
 }
 
 /// 形状的音符 (start, end, key)（custom.custom_notes）：
 /// empty = 轮廓；fill = 每个 key 的每段一个；spam = 每段填满门限；outline_spam = 轮廓切断。
 pub fn custom_notes(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
+    custom_notes_groups(sh, ppq).0
+}
+
+/// custom_notes，以及每个音符属于哪组（None = 全一组：见 [`outline_groups`]）。
+pub fn custom_notes_groups(sh: &Shape, ppq: f64) -> (Vec<[i64; 3]>, Option<Vec<i64>>) {
     if sh.notes.is_some() {
-        return block_notes(sh, ppq)
+        let rows = block_notes(sh, ppq)
             .map(|rows| rows.iter().map(|r| [r[0], r[1], r[2]]).collect())
             .unwrap_or_default();
+        return (rows, None);
     }
     if sh.fill == Fill::OutlineSpam {
-        return outline_spam(sh, ppq);
+        return outline_groups(sh, ppq, true);
     }
     if sh.fill == Fill::Empty || !fillable(&sh.strokes) {
-        return outline_notes(sh, ppq);
+        return outline_groups(sh, ppq, false);
     }
     let spans: Vec<[i64; 3]> = inside_spans(sh, ppq)
         .iter()
         .map(|&[q, s, e]| [s, e, q])
-        .collect();
+        .collect(); // (start, end, key)
+    let flat = flat_notes(sh, ppq); // （Spam 里像 Outline spam）
     if sh.fill == Fill::Fill {
-        spans
-    } else {
-        chop(sh, &spans, spam_gate(sh, ppq), false)
+        let mut notes = spans;
+        notes.extend(flat);
+        if sh.apart {
+            // 边缘的音符，和它们之间里面的长音符
+            let outline = edge_parts(&notes);
+            let inside = cut_out(&notes, &outline);
+            let mut ids = vec![0i64; outline.len()];
+            ids.extend(std::iter::repeat_n(1i64, inside.len()));
+            let mut all = outline;
+            all.extend(inside);
+            return (all, Some(ids));
+        }
+        return (notes, None);
     }
+    let mut notes = chop(sh, &spans, spam_gate(sh, ppq));
+    notes.extend(chop_outline(sh, &flat, ppq));
+    if sh.apart {
+        // 同样的 spam；填出来的边缘上的音符算轮廓的
+        let ids = on_edge(&notes)
+            .into_iter()
+            .map(|edge| if edge { 0 } else { 1 })
+            .collect();
+        return (notes, Some(ids));
+    }
+    (notes, None)
+}
+
+/// Fill / Spam 带 "Outline"：轮廓和里面要各走各的通道（custom.outline_apart）。
+pub fn outline_apart(sh: &Shape) -> bool {
+    sh.kind == Kind::Custom
+        && sh.apart
+        && matches!(sh.fill, Fill::Fill | Fill::Spam)
+        && sh.notes.is_none()
+}
+
+/// (start, end, key) 音符 → 每个 key 覆盖的段：(key, start, end) 数组，按 key 与 start 排序、
+/// 互不重叠（custom.merged_by_key）。
+pub fn merged_by_key(notes: &[[i64; 3]]) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    if notes.is_empty() {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+    let mut a: Vec<[i64; 3]> = notes.to_vec();
+    a.sort_by(|x, y| x[2].cmp(&y[2]).then(x[0].cmp(&y[0])));
+    let mut keys: Vec<i64> = Vec::new();
+    let mut starts: Vec<i64> = Vec::new();
+    let mut ends: Vec<i64> = Vec::new();
+    let mut run = 0i64;
+    for (i, r) in a.iter().enumerate() {
+        let new = i == 0 || r[2] != a[i - 1][2] || r[0] > run;
+        if new {
+            keys.push(r[2]);
+            starts.push(r[0]);
+            ends.push(r[1]);
+            run = r[1];
+        } else {
+            run = run.max(r[1]);
+            if let Some(last) = ends.last_mut() {
+                *last = (*last).max(r[1]);
+            }
+        }
+    }
+    (keys, starts, ends)
+}
+
+/// 哪些音符整个在 others 覆盖的同一 key 范围里（custom.covered）。
+pub fn covered(notes: &[[i64; 3]], others: &[[i64; 3]]) -> Vec<bool> {
+    let (ks, ss, es) = merged_by_key(others);
+    if ks.is_empty() || notes.is_empty() {
+        return vec![false; notes.len()];
+    }
+    let big = 1i64 << 40;
+    notes
+        .iter()
+        .map(|n| {
+            let target = n[2].wrapping_mul(big).wrapping_add(n[0]);
+            // searchsorted(..., "right")：起点在它之前（或同时）的最后一段
+            let (mut lo, mut hi) = (0usize, ks.len());
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if ks[mid].wrapping_mul(big).wrapping_add(ss[mid]) <= target {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            if lo == 0 {
+                return false;
+            }
+            let i = lo - 1;
+            ks[i] == n[2] && es[i] >= n[1]
+        })
+        .collect()
+}
+
+/// 音符的 key 平移 keys（custom.shifted）。
+pub fn shifted(notes: &[[i64; 3]], keys: i64) -> Vec<[i64; 3]> {
+    notes.iter().map(|n| [n[0], n[1], n[2] + keys]).collect()
+}
+
+/// Fill / Spam "Outline"：哪些 (start, end, key) 音符在它们填的区域的边缘上：不是整个被上面
+/// 或下面 key 的音符盖住，或者在自己 key 上第一个 / 最后一个。所以只有填出来的区域自己的
+/// 边缘算数：它里面的轮廓（重叠填上的）被排除；重叠抵消的地方每个填出来的小块的每条边都是
+/// 轮廓，不管往哪斜（custom.on_edge）。
+pub fn on_edge(notes: &[[i64; 3]]) -> Vec<bool> {
+    let up = covered(notes, &shifted(notes, -1));
+    let down = covered(notes, &shifted(notes, 1));
+    let before: Vec<[i64; 3]> = notes.iter().map(|n| [n[0] - 1, n[0], n[2]]).collect();
+    let after: Vec<[i64; 3]> = notes.iter().map(|n| [n[1], n[1] + 1, n[2]]).collect();
+    let b = covered(&before, notes);
+    let a = covered(&after, notes);
+    (0..notes.len())
+        .map(|i| !(up[i] && down[i] && b[i] && a[i]))
+        .collect()
+}
+
+/// Fill "Outline"：填出来的 (start, end, key) 长音符在区域边缘上的部分：上面或下面 key 没盖
+/// 住的时间，以及每段的第一个和最后一个 tick（像线条的竖段），作为 (start, end, key) 音符
+/// （custom.edge_parts）。
+pub fn edge_parts(notes: &[[i64; 3]]) -> Vec<[i64; 3]> {
+    let (ks, ss, es) = merged_by_key(notes);
+    let mut ends: Vec<[i64; 3]> = Vec::with_capacity(2 * ks.len());
+    for i in 0..ks.len() {
+        ends.push([ss[i], ss[i] + 1, ks[i]]);
+    }
+    for i in 0..ks.len() {
+        ends.push([es[i] - 1, es[i], ks[i]]);
+    }
+    let mut parts = cut_out(notes, &shifted(notes, -1));
+    parts.extend(cut_out(notes, &shifted(notes, 1)));
+    parts.extend(ends);
+    let (ks, ss, es) = merged_by_key(&parts);
+    (0..ks.len()).map(|i| [ss[i], es[i], ks[i]]).collect()
+}
+
+/// (start, end, key) 段去掉 others 在同一 key 上盖住的时间（custom.cut_out）。
+pub fn cut_out(spans: &[[i64; 3]], others: &[[i64; 3]]) -> Vec<[i64; 3]> {
+    let (ks, ss, es) = merged_by_key(others);
+    let mut by_key: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
+    for i in 0..ks.len() {
+        by_key.entry(ks[i]).or_default().push((ss[i], es[i]));
+    }
+    let mut out: Vec<[i64; 3]> = Vec::new();
+    for &[s0, e0, k] in spans {
+        let mut s = s0;
+        let e = e0;
+        if let Some(ranges) = by_key.get(&k) {
+            for &(os, oe) in ranges {
+                if oe <= s || os >= e {
+                    continue;
+                }
+                if os > s {
+                    out.push([s, os, k]);
+                }
+                s = s.max(oe);
+                if s >= e {
+                    break;
+                }
+            }
+        }
+        if s < e {
+            out.push([s, e, k]);
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------- 粘贴的音符
@@ -1222,4 +1812,186 @@ pub fn block_notes(sh: &Shape, ppq: f64) -> Result<Vec<[i64; 5]>, NotesError> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn poly(pts: &[[f64; 2]]) -> Stroke {
+        Stroke::Poly {
+            pts: pts.to_vec(),
+            free: false,
+            smooth: 0,
+            k: 1.0,
+        }
+    }
+
+    fn square() -> Stroke {
+        poly(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]])
+    }
+
+    fn shape(fill: Fill, align: Align, ends: Ends, union: bool, strokes: Vec<Stroke>) -> Shape {
+        let mut sh = Shape {
+            kind: Kind::Custom,
+            strokes,
+            fill,
+            align,
+            ends,
+            union,
+            pts: vec![[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]],
+            ..Shape::default()
+        };
+        sh.gate = 0.0625;
+        sh
+    }
+
+    /// "centred"：放不下整门限的零头两端各分一半。
+    #[test]
+    fn centred_shares_the_leftover() {
+        let sh = shape(
+            Fill::Spam,
+            Align::Centred,
+            Ends::Round,
+            false,
+            vec![square()],
+        );
+        let got = chop(&sh, &[[0, 100, 60]], 60);
+        assert_eq!(got, vec![[-10, 50, 60], [50, 110, 60]]);
+        let auto = shape(Fill::Spam, Align::Auto, Ends::Round, false, vec![square()]);
+        assert_eq!(
+            chop(&auto, &[[0, 100, 60]], 60),
+            vec![[0, 60, 60], [60, 120, 60]]
+        );
+    }
+
+    /// ENDS 的五种收尾：round 至少一个、stretch 正好铺满、keep 留零头、drop / min 短段。
+    #[test]
+    fn ends_round_and_stretch() {
+        let round = shape(Fill::Spam, Align::Auto, Ends::Round, false, vec![square()]);
+        assert_eq!(
+            chop(&round, &[[0, 30, 60]], 60),
+            vec![[0, 60, 60]],
+            "round：半个门限算一个"
+        );
+        let stretch = shape(
+            Fill::Spam,
+            Align::Aligned,
+            Ends::Stretch,
+            false,
+            vec![square()],
+        );
+        assert_eq!(
+            chop(&stretch, &[[5, 200, 60]], 60),
+            vec![[5, 70, 60], [70, 135, 60], [135, 200, 60]]
+        );
+    }
+
+    #[test]
+    fn ends_keep_and_min() {
+        let keep = shape(
+            Fill::Spam,
+            Align::Aligned,
+            Ends::Keep,
+            false,
+            vec![square()],
+        );
+        assert_eq!(
+            chop(&keep, &[[5, 200, 60], [0, 3, 61]], 60),
+            vec![
+                [5, 60, 60],
+                [60, 120, 60],
+                [120, 180, 60],
+                [180, 200, 60],
+                [0, 3, 61]
+            ]
+        );
+        let min = shape(Fill::Spam, Align::Aligned, Ends::Min, false, vec![square()]);
+        assert_eq!(
+            chop(&min, &[[0, 3, 61]], 60),
+            vec![[-6, 9, 61]],
+            "min：长到四分之一门限，居中"
+        );
+        let drop = shape(
+            Fill::Spam,
+            Align::Aligned,
+            Ends::Drop,
+            false,
+            vec![square()],
+        );
+        assert_eq!(
+            chop(&drop, &[[0, 3, 61]], 60),
+            vec![[0, 3, 61]],
+            "drop：短于一个门限的段原样留着"
+        );
+    }
+
+    /// union：轮廓重叠处也填上（不开时重叠互相抵消，洞留空）。
+    #[test]
+    fn union_fills_where_outlines_overlap() {
+        let b = poly(&[[0.5, 0.0], [1.5, 0.0], [1.5, 1.0], [0.5, 1.0], [0.5, 0.0]]);
+        let even = shape(
+            Fill::Fill,
+            Align::Auto,
+            Ends::Drop,
+            false,
+            vec![square(), b.clone()],
+        );
+        let got = inside_spans(&even, 960.0);
+        assert_eq!(got.len(), 6, "重叠抵消：中间留空");
+        assert_eq!(got[0], [60, 0, 960]);
+        assert_eq!(got[1], [60, 1920, 2880]);
+        let union = shape(Fill::Fill, Align::Auto, Ends::Drop, true, vec![square(), b]);
+        assert_eq!(
+            inside_spans(&union, 960.0),
+            vec![[60, 0, 2880], [61, 0, 2880], [62, 0, 2880]]
+        );
+        assert_eq!(custom_note_count(&union, 960.0), Some(3));
+    }
+
+    /// 几乎相接的松端直接接上（补线也算一条虚线），剩下的开放段从终点直线连回起点。
+    #[test]
+    fn fill_plan_joins_ends_that_nearly_touch() {
+        let near = vec![
+            poly(&[[0.0, 0.0], [0.5, 0.5]]),
+            poly(&[[0.5 + 1e-4, 0.5], [1.0, 1.0]]),
+        ];
+        let sh = shape(Fill::Fill, Align::Auto, Ends::Drop, false, near);
+        let plan = fill_plan(&sh);
+        assert!(plan.polys.is_empty(), "接上后是扁的");
+        assert_eq!(plan.flat.len(), 1);
+        assert_eq!(plan.closers.len(), 1);
+        assert!(near_ends(plan.closers[0][0], plan.closers[0][1]));
+        // 两条对角线（单位框）：差一个 key 的松端也算相接，接完还剩两个缺口
+        let two = vec![
+            poly(&[[0.0, 0.0], [1.0, 1.0]]),
+            poly(&[[0.0, 1.0], [1.0, 0.0]]),
+        ];
+        let mut sh = shape(Fill::Fill, Align::Auto, Ends::Drop, false, two);
+        sh.pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let plan = fill_plan(&sh);
+        assert_eq!(plan.closers.len(), 2, "两个缺口两条虚线");
+        assert_eq!(plan.polys.len(), 1);
+        assert!(plan.flat.is_empty());
+    }
+
+    /// 没有 src 时笔画全是一组（convert 的 groups 属于后续波次）。
+    #[test]
+    fn groups_are_one_without_src() {
+        let sh = shape(Fill::Empty, Align::Auto, Ends::Drop, false, vec![square()]);
+        assert!(stroke_groups(&sh).is_none());
+        let (notes, ids) = outline_groups(&sh, 960.0, false);
+        assert!(!notes.is_empty());
+        assert!(ids.is_none());
+        assert!(!outline_apart(&shape(
+            Fill::Fill,
+            Align::Auto,
+            Ends::Drop,
+            false,
+            vec![square()]
+        )));
+        let mut apart = shape(Fill::Fill, Align::Auto, Ends::Drop, false, vec![square()]);
+        apart.apart = true;
+        assert!(outline_apart(&apart));
+    }
 }

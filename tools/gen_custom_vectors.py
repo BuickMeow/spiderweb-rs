@@ -4,6 +4,9 @@ Python 原版（notes/custom.py）直接跑，输出写到
 crates/spiderweb-core/tests/vectors/custom.json，Rust 测试逐用例对照。
 打包音符（pack_notes）因为压缩实现不同，向量给出 Python 的文本，
 Rust 侧验证两边解出的行完全一致（zlib 流本身互通）。
+
+用 1.2.0 的源码生成（ends / union / apart / fill_plan / chop 等新语义）：
+    SPIDERWEB_SRC=/path/to/Spiderweb-1.2.0/scripts python3 tools/gen_custom_vectors.py
 """
 
 import copy
@@ -58,12 +61,18 @@ def ell(box):
     return {"kind": "ellipse", "box": [float(x) for x in box]}
 
 
-def shape(strokes, pts=None, fill="empty", gate=0.0625, align="auto", notes=None,
-          own_vel=False, text=None, vel0=None, vel1=None, end_dot=None):
+def shape(strokes, pts=None, fill="empty", gate=0.0625, align="auto", ends=None, union=None, apart=None,
+          notes=None, own_vel=False, text=None, vel0=None, vel1=None, end_dot=None):
     if pts is None:
         pts = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
     d = {"kind": "custom", "pts": [[float(b), float(p)] for b, p in pts],
          "strokes": [copy.deepcopy(s) for s in strokes], "fill": fill, "gate": gate, "align": align}
+    if ends is not None:
+        d["ends"] = ends
+    if union is not None:
+        d["union"] = bool(union)
+    if apart is not None:
+        d["apart"] = bool(apart)
     if notes is not None:
         d["notes"] = notes
     if own_vel:
@@ -272,16 +281,38 @@ def gen():
     add("fillable", [[poly(SQUARE)]], C.fillable([poly(SQUARE)]))
     add("fillable", [[]], C.fillable([]))
 
-    # ------------------------------------------------------------ gap_line
-    add("gap_line", [shape([gap_shape])], C.gap_line(shape([gap_shape])))
-    add("gap_line", [shape([poly(SQUARE)])], C.gap_line(shape([poly(SQUARE)])))
-    add("gap_line", [shape(two_gaps)], C.gap_line(shape(two_gaps)))
-    add("gap_line", [shape([gap_shape], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []})],
-        C.gap_line(shape([gap_shape], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []})))
-    add("gap_line", [shape([gap_shape], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])],
-        C.gap_line(shape([gap_shape], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])))
-    add("gap_line", [shape([gap_shape], pts=[[0.0, 0.0], [1.0, 1.0], [-1.0, 1.0]])],
-        C.gap_line(shape([gap_shape], pts=[[0.0, 0.0], [1.0, 1.0], [-1.0, 1.0]])))
+    # ------------------------------------------------------------ near_ends / flat_path / fill_plan / gap_lines
+    add("near_ends", [[0.0, 60.0], [1 / 64, 61.0]], C.near_ends([0.0, 60.0], [1 / 64, 61.0]))
+    add("near_ends", [[0.0, 60.0], [1 / 64 + 1e-6, 61.0]], C.near_ends([0.0, 60.0], [1 / 64 + 1e-6, 61.0]))
+    add("near_ends", [[0.0, 60.0], [0.0, 61.0000001]], C.near_ends([0.0, 60.0], [0.0, 61.0000001]))
+    add("flat_path", [[[0.0, 60.0], [2.0, 60.0]]], C.flat_path([[0.0, 60.0], [2.0, 60.0]]))
+    add("flat_path", [[[0.0, 60.0], [1.0, 62.0], [2.0, 64.0]]], C.flat_path([[0.0, 60.0], [1.0, 62.0], [2.0, 64.0]]))
+    add("flat_path", [[[0.0, 60.0], [1.0, 60.4], [2.0, 61.0]]], C.flat_path([[0.0, 60.0], [1.0, 60.4], [2.0, 61.0]]))
+    add("flat_path", [[[0.0, 60.0], [1.0, 62.0], [1.5, 61.0], [2.0, 64.0]]],
+        C.flat_path([[0.0, 60.0], [1.0, 62.0], [1.5, 61.0], [2.0, 64.0]]))
+    add("flat_path", [[[0.0, 60.0], [0.01, 61.0]]], C.flat_path([[0.0, 60.0], [0.01, 61.0]]))
+    near_touch = [poly([[0.0, 0.0], [0.5, 0.5]]), poly([[0.5 + 1e-4, 0.5], [1.0, 1.0]])]
+    add("fill_plan", [shape([poly(SQUARE)])], C.fill_plan(shape([poly(SQUARE)])))
+    add("fill_plan", [shape([gap_shape])], C.fill_plan(shape([gap_shape])))
+    add("fill_plan", [shape(two_gaps)], C.fill_plan(shape(two_gaps)))
+    add("fill_plan", [shape([poly(SQUARE), poly([[0.0, 0.5], [1.0, 0.5]])])],
+        C.fill_plan(shape([poly(SQUARE), poly([[0.0, 0.5], [1.0, 0.5]])])))
+    add("fill_plan", [shape([poly([[0.0, 0.0], [0.5, 0.5]]), poly([[0.5, 0.5], [0.5, 1.0], [1.0, 1.0]])])],
+        C.fill_plan(shape([poly([[0.0, 0.0], [0.5, 0.5]]), poly([[0.5, 0.5], [0.5, 1.0], [1.0, 1.0]])])))
+    add("fill_plan", [shape(near_touch, pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])],
+        C.fill_plan(shape(near_touch, pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])))
+    # 闭合不了的一个开放段（不是扁的）：从终点直线连回起点
+    open_curve = [poly(SQUARE), poly([[0.2, 0.2], [0.5, 0.8], [0.8, 0.2]])]
+    add("fill_plan", [shape(open_curve)], C.fill_plan(shape(open_curve)))
+    add("gap_lines", [shape([gap_shape])], C.gap_lines(shape([gap_shape])))
+    add("gap_lines", [shape([poly(SQUARE)])], C.gap_lines(shape([poly(SQUARE)])))
+    add("gap_lines", [shape(two_gaps)], C.gap_lines(shape(two_gaps)))
+    add("gap_lines", [shape([gap_shape], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []})],
+        C.gap_lines(shape([gap_shape], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []})))
+    add("gap_lines", [shape([gap_shape], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])],
+        C.gap_lines(shape([gap_shape], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])))
+    add("gap_lines", [shape([gap_shape], pts=[[0.0, 0.0], [1.0, 1.0], [-1.0, 1.0]])],
+        C.gap_lines(shape([gap_shape], pts=[[0.0, 0.0], [1.0, 1.0], [-1.0, 1.0]])))
 
     # ------------------------------------------------------------ join_strokes
     add("join_strokes", [tri_strokes], C.join_strokes(tri_strokes))
@@ -390,10 +421,23 @@ def gen():
         C.stroke_ends([arc([[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]]), ell([0, 0, 1, 1])]))
     add("stroke_ends", [[ell([0, 0, 1, 1])]], C.stroke_ends([ell([0, 0, 1, 1])]))
 
+    # ------------------------------------------------------------ bp_k / stroke_bp
+    frames_bp = [[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                 [[0.0, 60.0], [2.0, 62.0], [1.0, 65.0]],
+                 [[1.0, 60.0], [3.0, 60.0], [1.0, 62.0]]]
+    for fr in frames_bp:
+        for k in [0.5, 1.0, 2.0, 3.0]:
+            add("bp_k", [fr, k], C.bp_k(fr, k))
+    bp_shape = shape([poly(SQUARE), arc([[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]], k=2.0),
+                      poly([[0.0, 0.0], [1.0, 1.0]], free=True, smooth=30, k=1.5),
+                      ell([0.1, 0.2, 0.7, 0.9])], pts=[[0.0, 60.0], [2.0, 62.0], [1.0, 65.0]])
+    for k in range(4):
+        add("stroke_bp", [bp_shape, k], C.stroke_bp(bp_shape, k))
+
     # ------------------------------------------------------------ add_stroke
-    def add_case(sh, st):
+    def add_case(sh, st, at=None):
         target = copy.deepcopy(sh)
-        k = C.add_stroke(target, st)
+        k = C.add_stroke(target, st, at)
         return [k, target]
 
     base = shape([poly([[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])])
@@ -414,12 +458,21 @@ def gen():
         add_case(base, arc([[0.2, 0.2], [0.5, 0.8], [0.8, 0.2]], k=1.0)))
     empty = shape([])
     add("add_stroke", [empty, poly([[1.0, 2.0], [3.0, 4.0]])], add_case(empty, poly([[1.0, 2.0], [3.0, 4.0]])))
+    # at：插到别的笔画前面 / 排到最后
+    add("add_stroke", [base, poly([[1.0, 0.0], [1.5, 1.0]]), 0],
+        add_case(base, poly([[1.0, 0.0], [1.5, 1.0]]), 0))
+    add("add_stroke", [base, poly([[0.5, 0.0], [1.0, 0.5]]), 1],
+        add_case(base, poly([[0.5, 0.0], [1.0, 0.5]]), 1))
+    add("add_stroke", [base, poly([[0.5, 0.5], [1.0, 0.5], [1.5, 0.5]], free=True, smooth=40, k=2.0), 99],
+        add_case(base, poly([[0.5, 0.5], [1.0, 0.5], [1.5, 0.5]], free=True, smooth=40, k=2.0), 99))
 
     # ------------------------------------------------------------ new_live_shape
     defaults = {"kind": "line", "vel0": 100.0, "vel1": 80.0, "end_dot": True}
     add("new_live_shape", [defaults, dict(C.CUSTOM_DEFAULTS)], C.new_live_shape(defaults, dict(C.CUSTOM_DEFAULTS)))
-    add("new_live_shape", [defaults, {"fill": "spam", "gate": 0.125, "align": "aligned"}],
-        C.new_live_shape(defaults, {"fill": "spam", "gate": 0.125, "align": "aligned"}))
+    add("new_live_shape", [defaults, {"fill": "spam", "gate": 0.125, "align": "centred", "ends": "keep",
+                                      "union": True, "apart": True}],
+        C.new_live_shape(defaults, {"fill": "spam", "gate": 0.125, "align": "centred", "ends": "keep",
+                                    "union": True, "apart": True}))
 
     # ------------------------------------------------------------ outline_notes
     add("outline_notes", [shape([poly(SQUARE)]), 960.0], C.outline_notes(shape([poly(SQUARE)]), 960.0))
@@ -435,6 +488,19 @@ def gen():
         C.outline_notes(shape([poly([[0.0, 0.0], [1.0, 2.0]], free=True, smooth=50, k=1.0)]), 960.0))
     add("outline_notes", [shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]]), 960.0],
         C.outline_notes(shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]]), 960.0))
+    # only：只要这些编号的笔画
+    many = shape([poly([[0.0, 0.0], [1.0, 0.0]]), poly([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]),
+                  ell([0.2, 0.2, 0.8, 0.8])])
+    add("outline_notes_only", [many, 960.0, [0]], C.outline_notes(many, 960.0, only=[0]))
+    add("outline_notes_only", [many, 960.0, [1, 2]], C.outline_notes(many, 960.0, only=[1, 2]))
+
+    # ------------------------------------------------------------ stroke_groups / outline_apart
+    add("stroke_groups", [many], C.stroke_groups(many))
+    add("outline_apart", [shape([poly(SQUARE)], fill="fill", apart=True)], C.outline_apart(shape([poly(SQUARE)], fill="fill", apart=True)))
+    add("outline_apart", [shape([poly(SQUARE)], fill="spam")], C.outline_apart(shape([poly(SQUARE)], fill="spam")))
+    add("outline_apart", [shape([poly(SQUARE)], fill="empty", apart=True)], C.outline_apart(shape([poly(SQUARE)], fill="empty", apart=True)))
+    add("outline_apart", [shape([poly(SQUARE)], fill="fill", apart=True, notes=C.pack_notes(np.array([[0, 10, 60, 100, 0]], np.int64)))],
+        C.outline_apart(shape([poly(SQUARE)], fill="fill", apart=True, notes=C.pack_notes(np.array([[0, 10, 60, 100, 0]], np.int64)))))
 
     # ------------------------------------------------------------ row_spans
     square = [[0.0, 60.0], [2.0, 60.0], [2.0, 63.0], [0.0, 63.0], [0.0, 60.0]]
@@ -468,28 +534,48 @@ def gen():
         add("inside_spans", [s, 960.0], C.inside_spans(s, 960.0))
     add("inside_spans", [shape(two_gaps), 960.0], C.inside_spans(shape(two_gaps), 960.0))
 
-    # ------------------------------------------------------------ spam_gate / spam_starts / chop
+    # ------------------------------------------------------------ spam_gate / chop / chop_count
     for gate in [0.0625, 0.1, 0.5, 0.0001, 1.0, 0.25]:
         add("spam_gate", [shape([poly(SQUARE)], gate=gate), 960.0], C.spam_gate(shape([poly(SQUARE)], gate=gate), 960.0))
-    for align in ["auto", "aligned"]:
-        sh = shape([poly(SQUARE)], align=align)
-        for s, e, g in [(0, 1000, 60), (5, 1000, 60), (-5, 1000, 60), (61, 1000, 60), (0, 59, 60),
-                        (-61, -1, 60), (100, 100, 16)]:
-            add("spam_starts", [sh, s, e, g], C.spam_starts(sh, s, e, g))
-    for keep in [False, True]:
-        add("chop", [shape([poly(SQUARE)]), [[0, 1000, 60], [0, 30, 61], [100, 90, 62]], 60, keep],
-            C.chop(shape([poly(SQUARE)]), np.array([[0, 1000, 60], [0, 30, 61], [100, 90, 62]]), 60, keep))
-        add("chop", [shape([poly(SQUARE)], align="aligned"), [[5, 200, 60], [-5, 200, 61]], 60, keep],
-            C.chop(shape([poly(SQUARE)], align="aligned"), np.array([[5, 200, 60], [-5, 200, 61]]), 60, keep))
-    add("chop", [shape([poly(SQUARE)]), [], 60, False], C.chop(shape([poly(SQUARE)]), np.zeros((0, 3), np.int64), 60))
+    chop_rows = [[0, 1000, 60], [0, 30, 61], [100, 90, 62], [5, 200, 63], [-61, -1, 64], [100, 100, 65]]
+    for align in ["auto", "aligned", "centred"]:
+        for ends in ["round", "keep", "drop", "min", "stretch"]:
+            sh = shape([poly(SQUARE)], align=align, ends=ends)
+            add("chop", [sh, chop_rows, 60], C.chop(sh, np.array(chop_rows, np.int64), 60))
+            add("chop_count", [sh, chop_rows, 60], C.chop_count(sh, chop_rows, 60))
+    # 没有 ends 键的旧形状按 drop 读
+    add("chop", [shape([poly(SQUARE)]), chop_rows, 60],
+        C.chop(shape([poly(SQUARE)]), np.array(chop_rows, np.int64), 60))
+    # 空表
+    add("chop", [shape([poly(SQUARE)]), [], 60], C.chop(shape([poly(SQUARE)]), np.zeros((0, 3), np.int64), 60))
+    add("chop_count", [shape([poly(SQUARE)]), [], 60], C.chop_count(shape([poly(SQUARE)]), [], 60))
+    # 极小的段：round 至少一个；drop / min / keep / stretch 的零头
+    tiny = [[0, 5, 60], [0, 8, 61], [0, 12, 62], [0, 14, 63], [0, 15, 64], [0, 16, 65], [5, 23, 66]]
+    for ends in ["round", "drop", "min", "keep", "stretch"]:
+        sh = shape([poly(SQUARE)], ends=ends)
+        add("chop", [sh, tiny, 16], C.chop(sh, np.array(tiny, np.int64), 16))
+    # aligned / centred 下 16 ticks 门限的零头
+    for align in ["aligned", "centred"]:
+        for ends in ["round", "keep", "drop", "min", "stretch"]:
+            sh = shape([poly(SQUARE)], align=align, ends=ends)
+            add("chop", [sh, tiny, 16], C.chop(sh, np.array(tiny, np.int64), 16))
 
-    # ------------------------------------------------------------ outline_spam
-    add("outline_spam", [shape([poly(SQUARE)]), 960.0], C.outline_spam(shape([poly(SQUARE)]), 960.0))
+    # ------------------------------------------------------------ outline_spam / flat_notes
+    for ends in ["round", "keep", "drop", "min", "stretch"]:
+        sh = shape([poly(SQUARE)], ends=ends)
+        add("outline_spam", [sh, 960.0], C.outline_spam(sh, 960.0))
     add("outline_spam", [shape([gap_shape], gate=0.25), 960.0], C.outline_spam(shape([gap_shape], gate=0.25), 960.0))
     add("outline_spam", [shape([poly([[0.0, 0.0], [3.0, 4.0]])], gate=0.5), 480.0],
         C.outline_spam(shape([poly([[0.0, 0.0], [3.0, 4.0]])], gate=0.5), 480.0))
     add("outline_spam", [shape([poly([[0.0, 0.0], [0.01, 0.2]])], gate=0.5), 480.0],
         C.outline_spam(shape([poly([[0.0, 0.0], [0.01, 0.2]])], gate=0.5), 480.0))
+    # 扁的开放段保留自己的轮廓音符
+    flat_shape = shape([poly(SQUARE), poly([[0.0, 0.5], [1.0, 0.5]])])
+    add("flat_notes", [flat_shape, 960.0], C.flat_notes(flat_shape, 960.0))
+    add("flat_notes", [shape([poly(SQUARE)]), 960.0], C.flat_notes(shape([poly(SQUARE)]), 960.0))
+    add("flat_notes", [shape([poly(SQUARE)], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []}), 960.0],
+        C.flat_notes(shape([poly(SQUARE)], text={"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []}), 960.0))
+    add("flat_notes", [shape(two_gaps), 960.0], C.flat_notes(shape(two_gaps), 960.0))
 
     # ------------------------------------------------------------ custom_note_count
     shapes_count = [
@@ -497,23 +583,89 @@ def gen():
         shape([poly(SQUARE)], fill="fill"),
         shape([poly(SQUARE)], fill="spam"),
         shape([poly(SQUARE)], fill="spam", align="aligned"),
+        shape([poly(SQUARE)], fill="spam", align="centred"),
         shape([poly(SQUARE)], fill="outline_spam"),
         shape([gap_shape], fill="spam"),
         shape(two_gaps, fill="fill"),
         shape([]),
+        shape([poly(SQUARE)], fill="spam", ends="keep"),
+        shape([poly(SQUARE)], fill="spam", ends="min"),
+        shape([poly(SQUARE)], fill="spam", ends="stretch"),
+        flat_shape,
+        shape([flat_shape["strokes"][0], flat_shape["strokes"][1]], fill="fill"),
+        shape([flat_shape["strokes"][0], flat_shape["strokes"][1]], fill="spam"),
     ]
     for s in shapes_count:
         add("custom_note_count", [s, 960.0], C.custom_note_count(s, 960.0))
     ns_rows = [[0, 240, 60, 100, 0], [240, 480, 62, 110, 1], [480, 720, 64, 90, 0]]
     ns = C.notes_shape(np.array(ns_rows, np.int64), 960.0, "Pasted notes")
     add("custom_note_count", [ns, 960.0], C.custom_note_count(ns, 960.0))
+    # apart 的 Fill / Spam 不数（生成出来再数）
+    add("custom_note_count", [shape([poly(SQUARE)], fill="fill", apart=True), 960.0],
+        C.custom_note_count(shape([poly(SQUARE)], fill="fill", apart=True), 960.0))
+    add("custom_note_count", [shape([poly(SQUARE)], fill="spam", apart=True), 960.0],
+        C.custom_note_count(shape([poly(SQUARE)], fill="spam", apart=True), 960.0))
 
-    # ------------------------------------------------------------ custom_notes
-    for s in [shape([poly(SQUARE)]), shape([poly(SQUARE)], fill="fill"), shape([poly(SQUARE)], fill="spam"),
-              shape([poly(SQUARE)], fill="outline_spam"), shape([gap_shape], fill="spam"),
-              shape(two_gaps, fill="fill"), shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])]:
+    # ------------------------------------------------------------ custom_notes / custom_notes_groups
+    sh_union = shape([poly(SQUARE), poly([[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75], [0.25, 0.25]])],
+                     pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])
+    sh_union2 = dict(sh_union, union=True)
+    notes_shapes = [
+        shape([poly(SQUARE)]),
+        shape([poly(SQUARE)], fill="fill"),
+        shape([poly(SQUARE)], fill="spam"),
+        shape([poly(SQUARE)], fill="outline_spam"),
+        shape([gap_shape], fill="spam"),
+        shape(two_gaps, fill="fill"),
+        shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]]),
+        sh_union, sh_union2,
+        flat_shape,
+        dict(flat_shape, fill="fill"),
+        dict(flat_shape, fill="spam"),
+        shape([poly(SQUARE)], fill="fill", apart=True),
+        shape([poly(SQUARE)], fill="spam", apart=True),
+        shape([poly(SQUARE)], fill="spam", apart=True, ends="keep", align="centred"),
+        shape([poly(SQUARE)], fill="spam", ends="stretch"),
+        sh_union2,
+    ]
+    for poses in [sh_union, sh_union2]:
+        add("inside_spans", [poses, 960.0], C.inside_spans(poses, 960.0))
+    for s in notes_shapes:
         add("custom_notes", [s, 960.0], C.custom_notes(s, 960.0))
+        add("custom_note_count", [s, 960.0], C.custom_note_count(s, 960.0))
     add("custom_notes", [ns, 960.0], C.custom_notes(ns, 960.0))
+    for s in [shape([poly(SQUARE)]), shape([poly(SQUARE)], fill="fill", apart=True),
+              shape([poly(SQUARE)], fill="spam", apart=True), shape([gap_shape], fill="outline_spam"),
+              flat_shape]:
+        add("custom_notes_groups", [s, 960.0], C.custom_notes_groups(s, 960.0))
+        add("outline_groups", [s, 960.0, False], C.outline_groups(s, 960.0))
+        add("outline_groups", [s, 960.0, True], C.outline_groups(s, 960.0, spam=True))
+
+    # ------------------------------------------------------------ union_spans / merged_by_key / covered / cut_out / on_edge / edge_parts
+    hole = [[0.5, 61.0], [1.5, 61.0], [1.5, 62.0], [0.5, 62.0], [0.5, 61.0]]
+    for q in [59, 60, 61, 62, 63, 64]:
+        add("union_spans", [[square, hole], float(q)], C.union_spans([square, hole], q))
+        add("union_spans", [[square], float(q)], C.union_spans([square], q))
+        add("union_spans", [[], float(q)], C.union_spans([], q))
+    mk_notes = [[0, 10, 60], [5, 15, 60], [20, 30, 60], [0, 10, 61], [80, 90, 59], [15, 25, 61]]
+    add("merged_by_key", [mk_notes], C.merged_by_key(np.array(mk_notes, np.int64)))
+    add("merged_by_key", [[]], C.merged_by_key(np.zeros((0, 3), np.int64)))
+    cov_notes = [[0, 10, 60], [2, 4, 60], [5, 25, 60], [15, 25, 61], [12, 18, 61]]
+    add("covered", [cov_notes, mk_notes], C.covered(np.array(cov_notes, np.int64), np.array(mk_notes, np.int64)))
+    add("covered", [[], mk_notes], C.covered(np.zeros((0, 3), np.int64), np.array(mk_notes, np.int64)))
+    add("covered", [cov_notes, []], C.covered(np.array(cov_notes, np.int64), np.zeros((0, 3), np.int64)))
+    add("cut_out", [cov_notes, mk_notes], C.cut_out(np.array(cov_notes, np.int64), np.array(mk_notes, np.int64)))
+    add("cut_out", [cov_notes, []], C.cut_out(np.array(cov_notes, np.int64), np.zeros((0, 3), np.int64)))
+    add("on_edge", [mk_notes], C.on_edge(np.array(mk_notes, np.int64)))
+    add("on_edge", [cov_notes], C.on_edge(np.array(cov_notes, np.int64)))
+    add("on_edge", [[]], C.on_edge(np.zeros((0, 3), np.int64)))
+    add("edge_parts", [mk_notes], C.edge_parts(np.array(mk_notes, np.int64)))
+    add("edge_parts", [[]], C.edge_parts(np.zeros((0, 3), np.int64)))
+    # apart 的 edge_parts / cut_out 用真实形状的长音符
+    for s in [sh_union, dict(sh_union, fill="fill"), dict(sh_union, apart=True)]:
+        spans = np.asarray(C.inside_spans(s, 960.0), np.int64).reshape(-1, 3)[:, [1, 2, 0]]
+        add("edge_parts", [spans], C.edge_parts(spans))
+        add("cut_out", [spans, C.edge_parts(spans)], C.cut_out(spans, C.edge_parts(spans)))
 
     # ------------------------------------------------------------ pack / unpack / check
     rows5 = [[0, 240, 60, 100, 0], [240, 480, 62, 110, 1], [480, 720, 64, 90, 0]]

@@ -119,7 +119,8 @@ fn main() {
     // render：把 spam 的音符跑一遍重叠处理 + 通道分配
     let notes = engine::shape_notes(&spam, PPQ);
     bench("render_single_100k", 10, || {
-        let (rendered, _) = engine::render(&[notes.clone()], Mode::Single, Split::Key, None);
+        let (rendered, _) =
+            engine::render(std::slice::from_ref(&notes), Mode::Single, Split::Key, None);
         rendered.len()
     });
 }

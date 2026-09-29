@@ -14,8 +14,8 @@ use serde_json::{Map, Value};
 use spiderweb_core::arc::clean_k as arc_k;
 use spiderweb_core::custom::{BOX_STROKE, check_notes, clean_curve, clean_strokes};
 use spiderweb_core::shape::{
-    Align, Fill, FunnelCurve, FunnelFill, FunnelStart, GateChange, GateFollow, Kind, Shape, Stroke,
-    Sym, TextSettings, Tumour, WallMode,
+    Align, Ends, Fill, FunnelCurve, FunnelFill, FunnelStart, GateChange, GateFollow, Kind, Shape,
+    Stroke, Sym, TextSettings, Tumour, WallMode,
 };
 use spiderweb_core::smooth::{SMOOTH_DEFAULT, clean_level};
 use spiderweb_core::text::clean_text;
@@ -46,7 +46,7 @@ pub const SHAPE_DEFAULTS: ShapeDefaults = ShapeDefaults {
 /// 形状种子的四种填充方式（custom.FILLS）。
 pub const FILLS: [Fill; 4] = [Fill::Empty, Fill::Fill, Fill::Spam, Fill::OutlineSpam];
 /// 种子的 spam 起点（custom.ALIGNS）。
-pub const ALIGNS: [Align; 2] = [Align::Auto, Align::Aligned];
+pub const ALIGNS: [Align; 3] = [Align::Auto, Align::Aligned, Align::Centred];
 /// 能长肿瘤的形状种类（tumour.LINE_KINDS）。
 pub const LINE_KINDS: [Kind; 5] = [Kind::Line, Kind::Poly, Kind::Free, Kind::Curve, Kind::Arc];
 
@@ -227,6 +227,29 @@ pub fn align_str(a: Align) -> &'static str {
     match a {
         Align::Auto => "auto",
         Align::Aligned => "aligned",
+        Align::Centred => "centred",
+    }
+}
+
+/// ends -> Python 名（custom.ENDS）。
+pub fn ends_str(e: Ends) -> &'static str {
+    match e {
+        Ends::Round => "round",
+        Ends::Keep => "keep",
+        Ends::Drop => "drop",
+        Ends::Min => "min",
+        Ends::Stretch => "stretch",
+    }
+}
+
+/// Python 名 -> ends；不认识的按旧形状的 drop（`clean_shape`）。
+pub fn ends_from_str(s: &str) -> Ends {
+    match s {
+        "round" => Ends::Round,
+        "keep" => Ends::Keep,
+        "min" => Ends::Min,
+        "stretch" => Ends::Stretch,
+        _ => Ends::Drop,
     }
 }
 
@@ -348,8 +371,17 @@ fn custom_shape(sh: &Map<String, Value>, mut out: Shape) -> Result<Option<Shape>
     out.gate = gate.max(1e-6);
     out.align = match sh.get("align").and_then(Value::as_str) {
         Some("aligned") => Align::Aligned,
+        Some("centred") => Align::Centred,
         _ => Align::Auto,
     };
+    // 旧形状没有 ends，读作 drop（它们的音符保持原样）；union / apart 只在正好是 true 时才有
+    // （Python `sh.get(k) is True`）
+    out.ends = sh
+        .get("ends")
+        .and_then(Value::as_str)
+        .map_or(Ends::Drop, ends_from_str);
+    out.union = matches!(sh.get("union"), Some(Value::Bool(true)));
+    out.apart = matches!(sh.get("apart"), Some(Value::Bool(true)));
     if let Some(tx) = sh.get("text").filter(|v| v.is_object()) {
         out.text = clean_text(tx);
     }
@@ -803,6 +835,16 @@ pub fn shape_to_json(sh: &Shape) -> Value {
             o.insert("fill".into(), Value::from(fill_str(sh.fill)));
             o.insert("gate".into(), num_value(sh.gate));
             o.insert("align".into(), Value::from(align_str(sh.align)));
+            // ends = drop 是旧形状的默认（1.2.0 `clean_shape` 里没有 ends 键就是 drop），省略不写
+            if sh.ends != Ends::Drop {
+                o.insert("ends".into(), Value::from(ends_str(sh.ends)));
+            }
+            if sh.union {
+                o.insert("union".into(), Value::Bool(true));
+            }
+            if sh.apart {
+                o.insert("apart".into(), Value::Bool(true));
+            }
             if let Some(tx) = &sh.text {
                 o.insert("text".into(), text_value(tx));
             }
@@ -861,3 +903,71 @@ pub(crate) fn round4(x: f64) -> f64 {
 
 /// 默认灵敏度的重导出（`smooth.SMOOTH_DEFAULT`）。
 pub const FREE_SMOOTH_DEFAULT: i64 = SMOOTH_DEFAULT;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom_json(extra: Value) -> Value {
+        let mut v = serde_json::json!({
+            "kind": "custom",
+            "pts": [[0, 60], [2, 60], [0, 62]],
+            "strokes": [{"kind": "poly", "pts": [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]}],
+            "fill": "fill",
+            "gate": 60,
+            "align": "centred",
+            "name": "x",
+        });
+        if let Some(o) = extra.as_object() {
+            for (k, val) in o {
+                v[k] = val.clone();
+            }
+        }
+        v
+    }
+
+    /// 1.2.0 工程里的 ends / union / apart 能读进来。
+    #[test]
+    fn reads_new_custom_keys() {
+        let sh = shape_from_json(&custom_json(serde_json::json!({
+            "ends": "stretch", "union": true, "apart": true
+        })))
+        .expect("能读")
+        .expect("有效");
+        assert_eq!(sh.align, Align::Centred);
+        assert_eq!(sh.ends, Ends::Stretch);
+        assert!(sh.union && sh.apart);
+    }
+
+    /// 旧形状没有这些键：ends 读作 drop，union / apart 关着（只有正好是 true 才算）。
+    #[test]
+    fn old_custom_keys_are_default() {
+        let sh = shape_from_json(&custom_json(
+            serde_json::json!({"union": 1, "apart": "yes"}),
+        ))
+        .expect("能读")
+        .expect("有效");
+        assert_eq!(sh.ends, Ends::Drop);
+        assert!(
+            !sh.union && !sh.apart,
+            "Python 的 `is True`：1 / \"yes\" 都不算"
+        );
+    }
+
+    /// 写出去：ends = drop 与关着的开关省略（1.2.0 读不到时同样是 drop / false）。
+    #[test]
+    fn writes_new_custom_keys() {
+        let mut sh = shape_from_json(&custom_json(serde_json::json!({})))
+            .expect("能读")
+            .expect("有效");
+        let out = shape_to_json(&sh);
+        assert!(out.get("ends").is_none() && out.get("union").is_none());
+        sh.ends = Ends::Min;
+        sh.union = true;
+        let out = shape_to_json(&sh);
+        assert_eq!(out["ends"], Value::from("min"));
+        assert_eq!(out["union"], Value::Bool(true));
+        let again = shape_from_json(&out).expect("能读").expect("有效");
+        assert_eq!(shape_to_json(&again), out);
+    }
+}
