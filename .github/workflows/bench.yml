@@ -24,13 +24,37 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libasound2-dev pkg-config
       - name: Run benchmarks
         run: cargo bench -p spiderweb-core --bench engine -- --output-format bencher | tee output.txt
+      - name: Ensure the gh-pages branch exists
+        if: github.event_name == 'push'
+        run: |
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git worktree add --detach ../gh-pages-init
+            cd ../gh-pages-init
+            git checkout --orphan gh-pages
+            git rm -rf --quiet .
+            printf '<!doctype html><meta charset="utf-8"><title>Spiderweb benchmarks</title>\n' > index.html
+            git add index.html
+            git -c user.name='github-actions[bot]' \
+                -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                commit -m "init gh-pages"
+            git push origin gh-pages
+          fi
+      - name: Does gh-pages exist?
+        id: ghpages
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+          fi
       - name: Store benchmark result (gh-pages + PR comment)
+        if: steps.ghpages.outputs.exists == '1'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: cargo
           output-file-path: output.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # PR 上只比较并评论，不写历史；main 上记录数据点
+          # PRs only compare and comment; main records data points
           auto-push: ${{ github.event_name == 'push' }}
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
