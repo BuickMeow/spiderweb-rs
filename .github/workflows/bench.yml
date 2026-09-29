@@ -28,16 +28,16 @@ jobs:
         if: github.event_name == 'push'
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
-            git worktree add --detach ../gh-pages-init
-            cd ../gh-pages-init
-            git checkout --orphan gh-pages
-            git rm -rf --quiet .
-            printf '<!doctype html><meta charset="utf-8"><title>Spiderweb benchmarks</title>\n' > index.html
-            git add index.html
-            git -c user.name='github-actions[bot]' \
-                -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-                commit -m "init gh-pages"
-            git push origin gh-pages
+            # Build an orphan commit with plumbing only: no checkout and no
+            # worktree, so the benchmark action can still fetch into
+            # refs/heads/gh-pages afterwards.
+            blob=$(printf '<!doctype html><meta charset="utf-8"><title>Spiderweb benchmarks</title>\n' \
+              | git hash-object -w --stdin)
+            tree=$(printf '100644 blob %s\tindex.html\n' "$blob" | git mktree)
+            commit=$(git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit-tree "$tree" -m "init gh-pages")
+            git push origin "$commit:refs/heads/gh-pages"
           fi
       - name: Does gh-pages exist?
         id: ghpages
