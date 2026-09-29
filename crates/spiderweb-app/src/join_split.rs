@@ -1,9 +1,9 @@
 //! Join (selected lines / polylines / freehand strokes / curves / arcs -> one curve) and Split (a joined
 //! curve back into pieces, any of those cut in two where it was right-clicked, a custom shape into its
-//! separate drawings). Port of upstream `window/join_split.py`; the maths is in `notes/joined.py`
-//! (`spiderweb_core::joined`).
+//! separate drawings, or a live shape back into the shapes it was made of). Port of upstream
+//! `window/join_split.py`; the maths is in `notes/joined.py` (`spiderweb_core::joined`).
 //!
-//! "Turn into live shape" (upstream's third button, convert.py) belongs to another port and is left out.
+//! "Turn into live shape" (upstream's third button, convert.py) lives in `convert_ui.rs`.
 
 use std::collections::BTreeSet;
 
@@ -13,6 +13,7 @@ use egui::Pos2;
 use spiderweb_core::Pt;
 use spiderweb_core::arc::{arc_circle, arc_points};
 use spiderweb_core::bezier;
+use spiderweb_core::convert;
 use spiderweb_core::engine;
 use spiderweb_core::joined::{
     self, join_shapes, join_velocity, piece_velocity, sections, split_at, split_custom,
@@ -108,6 +109,43 @@ pub fn split_parts(sh: &Shape) -> Option<Vec<Shape>> {
     }
 }
 
+/// What "Split into separate shapes" does to a shape (upstream `split_pieces`): a live shape whose
+/// drawing wasn't changed goes back to the shapes it was made of ([`SplitPlan::Back`]); anything
+/// else splits into pieces ([`SplitPlan::Parts`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplitPlan {
+    /// The old shapes a live shape was made of, as they were (`convert.originals`).
+    Back(Vec<Shape>),
+    /// The shape's own pieces (a joined curve) or drawings (a custom shape's touching groups).
+    Parts(Vec<Shape>),
+}
+
+/// Whether shape i can be split into separate shapes: a joined curve with more than one piece, or a
+/// custom drawing that goes back to its old shapes or has separate parts (`can_split_pieces`).
+pub fn can_split_shape(sh: &Shape) -> bool {
+    if sh.kind == Kind::Custom && convert::originals(sh).is_some() {
+        return true;
+    }
+    if sh.kind == Kind::Curve {
+        return sections(sh).len() > 1;
+    }
+    sh.kind == Kind::Custom
+        && sh.text.is_none()
+        && sh.notes.is_none()
+        && joined::custom_groups(sh).len() > 1
+}
+
+/// The plan [`can_split_shape`] promises: the old shapes first (when they can come back), otherwise
+/// the shape's own pieces. None when there's nothing to split.
+pub fn split_plan(sh: &Shape) -> Option<SplitPlan> {
+    if sh.kind == Kind::Custom
+        && let Some(back) = convert::originals(sh)
+    {
+        return Some(SplitPlan::Back(back));
+    }
+    split_parts(sh).map(SplitPlan::Parts)
+}
+
 impl App {
     /// Why the selection can't be joined (None = it can).
     pub fn join_problem(&self) -> Option<String> {
@@ -181,15 +219,10 @@ impl App {
         None
     }
 
-    /// A joined curve with more than one piece / section in it, or a custom drawing with separate parts.
+    /// A joined curve with more than one piece / section in it, a live shape that can go back to the
+    /// shapes it was made of, or a custom drawing with separate parts.
     pub fn can_split_pieces(&self, sh: &Shape) -> bool {
-        if sh.kind == Kind::Curve {
-            return sections(sh).len() > 1;
-        }
-        sh.kind == Kind::Custom
-            && sh.text.is_none()
-            && sh.notes.is_none()
-            && joined::custom_groups(sh).len() > 1
+        can_split_shape(sh)
     }
 
     /// Shape i replaced by parts (selected), their velocities kept where they were.
@@ -248,8 +281,8 @@ impl App {
         }
     }
 
-    /// Shape i into its pieces (upstream split_pieces; the live-shape "back to the old shapes" part
-    /// is another port and skipped here).
+    /// Shape i into its pieces (upstream split_pieces). A live shape whose drawing wasn't changed
+    /// (moved only) goes back to the shapes it was made of instead.
     pub fn split_pieces_shape(&mut self, i: usize) {
         let Some(sh) = self.shapes.get(i).cloned() else {
             return;
@@ -257,12 +290,27 @@ impl App {
         if !self.can_split_pieces(&sh) {
             return;
         }
-        let Some(parts) = split_parts(&sh) else {
+        let Some(plan) = split_plan(&sh) else {
             return;
         };
-        let n = parts.len();
-        self.replace_shape(i, parts, true, &rust_i18n::t!("join_split.split"));
-        self.status = rust_i18n::t!("join.split_into", n = n.to_string()).to_string();
+        match plan {
+            SplitPlan::Back(back) => {
+                // The shapes it was made of (Turn into live shape), as they were.
+                let n = back.len();
+                self.replace_shape(i, back, false, &rust_i18n::t!("menu.split_back"));
+                self.status = if n == 1 {
+                    rust_i18n::t!("join.back_to_the_shape_it_was").to_string()
+                } else {
+                    rust_i18n::t!("join.back_to_the_shapes_it_was", n = n.to_string()).to_string()
+                };
+                self.tips.show_waiting("turn_live");
+            }
+            SplitPlan::Parts(parts) => {
+                let n = parts.len();
+                self.replace_shape(i, parts, true, &rust_i18n::t!("join_split.split"));
+                self.status = rust_i18n::t!("join.split_into", n = n.to_string()).to_string();
+            }
+        }
     }
 
     /// Cut a line kind in two where it was right-clicked (upstream split_here; `at` is on the roll).
@@ -572,6 +620,41 @@ mod tests {
     fn join_problem_wants_two_line_kinds() {
         // pure logic: no App needed for the kinds list check
         assert!(JOIN_KINDS.contains("curves and arcs"));
+    }
+
+    /// A live shape that still matches its `from` goes back to the old shapes; changing the drawing
+    /// falls back to the custom shape's own pieces (convert.originals).
+    #[test]
+    fn split_plan_restores_the_old_shapes() {
+        use spiderweb_core::custom::CustomDefaults;
+
+        let src = vec![
+            line(vec![[0.0, 60.0], [4.0, 60.0]]),
+            line(vec![[6.0, 60.0], [10.0, 62.0]]),
+        ];
+        let paths = convert::paths_of(&src);
+        let live = convert::to_live(&src, &paths, &Shape::default(), &CustomDefaults::default());
+        match split_plan(&live) {
+            Some(SplitPlan::Back(back)) => assert_eq!(back, src),
+            other => panic!("a live shape should give its old shapes back: {other:?}"),
+        }
+        let mut moved = live.clone();
+        for p in &mut moved.pts {
+            p[0] += 1.0;
+            p[1] += 1.0;
+        }
+        match split_plan(&moved) {
+            Some(SplitPlan::Back(back)) => {
+                assert_eq!(back[0].pts[0], [1.0, 61.0]);
+            }
+            other => panic!("a plain move keeps the old shapes: {other:?}"),
+        }
+        // resized: the drawing changed, so the custom shape's touching groups split instead
+        let mut resized = live.clone();
+        resized.pts[2][1] += 1.0;
+        assert!(matches!(split_plan(&resized), Some(SplitPlan::Parts(_))));
+        assert!(can_split_shape(&live));
+        assert!(can_split_shape(&resized));
     }
 
     /// Splitting a joined curve gives each piece the velocity it had as part of the whole.

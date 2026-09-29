@@ -204,6 +204,10 @@ pub struct Drawer {
     /// 点一下后没拖：笔画跟着鼠标，下一次点击定下来（原版 follow）
     pub follow: Option<(Pt, DrawerTool)>,
     pub undo_stack: Vec<Vec<Stroke>>,
+    /// Undone steps, until something new is drawn (upstream redo_stack).
+    pub redo_stack: Vec<Vec<Stroke>>,
+    /// The redo steps before the last push_undo (a click that moved nothing gets them back).
+    pub redo_kept: Vec<Vec<Stroke>>,
     pub clipboard: Option<Vec<Stroke>>,
     pub pastes: i64,
     pub name: String,
@@ -232,6 +236,8 @@ impl Default for Drawer {
             drag: None,
             follow: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            redo_kept: Vec::new(),
             clipboard: None,
             pastes: 0,
             name: String::new(),
@@ -257,6 +263,8 @@ impl Drawer {
     pub fn open_shape(&mut self, name: &str, strokes: Vec<Stroke>) {
         self.strokes = strokes;
         self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.redo_kept.clear();
         self.draft = None;
         self.sel = None;
         self.drag = None;
@@ -324,11 +332,14 @@ impl Drawer {
 
     // ------------------------------------------------------------ 编辑
 
+    /// A step to undo: the strokes as they were, and the redo steps are dropped
+    /// (upstream push_undo; the undone steps stay in redo_kept for a click that moves nothing).
     fn push_undo(&mut self) {
         self.undo_stack.push(self.strokes.clone());
         if self.undo_stack.len() > 200 {
             self.undo_stack.remove(0);
         }
+        self.redo_kept = std::mem::take(&mut self.redo_stack);
     }
 
     fn undo(&mut self) {
@@ -337,7 +348,21 @@ impl Drawer {
             return;
         }
         if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.strokes.clone());
             self.strokes = prev;
+            self.sel = None;
+            self.changed();
+        }
+    }
+
+    fn redo(&mut self) {
+        if self.draft.is_some() {
+            self.cancel_draft();
+            return;
+        }
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.strokes.clone());
+            self.strokes = next;
             self.sel = None;
             self.changed();
         }
@@ -831,9 +856,11 @@ impl Drawer {
             | BoardDrag::Points { .. }
             | BoardDrag::Corner { .. }
             | BoardDrag::Pen { .. } => {
-                // 没真动过：撤销这次按下的快照（原版 select_release）
+                // Clicked without moving anything: drop this press's snapshot (upstream select_release;
+                // the undone steps stay redoable).
                 if self.undo_stack.last() == Some(&self.strokes) {
                     self.undo_stack.pop();
+                    self.redo_stack = std::mem::take(&mut self.redo_kept);
                 } else {
                     self.changed();
                 }
@@ -1515,6 +1542,9 @@ fn drawer_keys(d: &mut Drawer, ctx: &egui::Context) {
         if i.consume_key(Modifiers::COMMAND, Key::Z) || i.consume_key(Modifiers::CTRL, Key::Z) {
             d.undo();
         }
+        if i.consume_key(Modifiers::COMMAND, Key::Y) || i.consume_key(Modifiers::CTRL, Key::Y) {
+            d.redo();
+        }
         if i.consume_key(Modifiers::NONE, Key::Escape) {
             d.cancel_draft();
             d.sel = None;
@@ -1622,7 +1652,7 @@ impl Drawer {
                 )
                 .to_string(),
             );
-            if ui.button(rust_i18n::t!("drawer.copy")).clicked() {
+            if ui.button(rust_i18n::t!("drawer.copy_stroke")).clicked() {
                 self.copy_strokes();
             }
             let can_paste = self.clipboard.is_some() && self.draft.is_none();
@@ -1960,6 +1990,31 @@ mod tests {
             k: 1.0,
             src: None,
         }
+    }
+
+    /// Upstream drawer undo/redo: undo keeps the step for redo, a new edit drops it, and a click
+    /// that moved nothing gets the undone steps back.
+    #[test]
+    fn undo_and_redo_keep_the_steps() {
+        let mut d = Drawer::new();
+        d.strokes = vec![poly(vec![[0.0, 0.0], [1.0, 0.0]])];
+        d.push_undo();
+        d.strokes.push(poly(vec![[0.0, 1.0], [1.0, 1.0]]));
+        d.push_undo();
+        d.strokes.push(poly(vec![[0.0, 2.0], [1.0, 2.0]]));
+        d.undo();
+        assert_eq!(d.strokes.len(), 2);
+        assert_eq!(d.redo_stack.len(), 1);
+        d.redo();
+        assert_eq!(d.strokes.len(), 3);
+        assert!(d.redo_stack.is_empty());
+        // Undo, then an edit: the undone step is dropped from redo (but kept for a click that
+        // moved nothing, upstream redo_kept).
+        d.undo();
+        assert_eq!(d.redo_stack.len(), 1);
+        d.push_undo();
+        assert!(d.redo_stack.is_empty());
+        assert_eq!(d.redo_kept.len(), 1);
     }
 
     #[test]

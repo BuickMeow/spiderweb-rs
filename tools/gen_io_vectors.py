@@ -336,6 +336,39 @@ def project_cases():
     return cases
 
 
+# ---------------------------------------------------------------- short_shape
+
+def short_cases():
+    """files/project.py short_shape: the number rounding the project writer does (tumour graphs too)."""
+    noisy = 0.1000000000000001
+    tm = {"on": 1, "shape": "parabola", "size": 3.2999999999999998, "length": 0.12500000000000003,
+          "dist": 0.1000000000000001, "side": "right", "wrap": "bent", "start": 0.0, "end": 1.0,
+          "ease": 0.30000000000000004, "rot": -0.12500000000000003, "slant": 0.20000000000000004,
+          "graphs": {"size": [[0.0, noisy], [0.5, 2.5000000000000004], [1.0, 1]],
+                     "dist": [[0.0, 0.20000000000000004], [1.0, 0.30000000000000004]]},
+          "fit": 0, "seed": 7, "mirror": 1, "k": 0.24999999999999997}
+    cases = [
+        ("tumour", {"kind": "poly", "pts": [[0.0, 60.0], [4.0, 62.5]], "tumour": tm}),
+        ("tumour_no_graphs", {"kind": "line", "pts": [[0.0, 60.0], [1.0, 60.0]],
+                              "tumour": {"on": True, "size": noisy, "seed": 3}}),
+        ("joined_tumours", {"kind": "curve", "pts": [[0.0, 0.0], [1.0, 0.0], [2.0, 1.0], [3.0, 1.0]],
+                            "tumours": [tm, None, {"on": True, "size": 2.9999999999999996}],
+                            "splits": [1]}),
+        ("from_passthrough", {"kind": "custom", "pts": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                              "strokes": [{"kind": "poly", "pts": [[0.1, 0.1], [0.9, 0.1]]}],
+                              "from": {"shapes": [{"kind": "line", "pts": [[0.1, 0.1], [0.9, 0.1]]}],
+                                       "strokes": [{"kind": "poly", "pts": [[0.1, 0.1], [0.9, 0.1]]}],
+                                       "pts": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]}}),
+        ("strokes_starts_text", {"kind": "funnel", "pts": [[0.0, 60.0], [4.0, 60.0], [4.0, 72.0], [4.0, 52.0]],
+                                 "starts": [{"line": 0, "at": 0.1000000000000001,
+                                             "ends": [{"pts": [[0.0, noisy], [1.0, 0.0]], "sharp": [0]}, None]}],
+                                 "text": {"bbox": [noisy, 0.0, 1.0, 1.0], "size": 23.999999999999996},
+                                 "strokes": [{"kind": "ellipse", "box": [noisy, 0.0, 1.0, 1.0]}],
+                                 "gate": noisy, "gate0": 0.06249999999999999, "k": 1.0000000000000002}),
+    ]
+    return [{"name": name, "input": tolist(sh), "saved": short_shape(tolist(sh))} for name, sh in cases]
+
+
 # ---------------------------------------------------------------- snap
 
 def snap_cases():
@@ -538,6 +571,7 @@ def mathexpr_cases():
 def main():
     write("compat", compat_shapes())
     write("project", project_cases())
+    write("short", short_cases())
     write("snap", snap_cases())
     write("midi", midi_cases())
     write("mathexpr", [mathexpr_cases()])

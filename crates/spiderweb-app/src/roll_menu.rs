@@ -77,6 +77,8 @@ pub struct MenuTarget {
     pub live: bool,
     /// The hit shape can be split into separate shapes
     pub can_split: bool,
+    /// The hit shape can go back to the shapes it was made of ("Split back into the old shapes")
+    pub split_back: bool,
 }
 
 fn item(label: impl Into<String>, action: MenuAction, enabled: bool) -> MenuEntry {
@@ -107,6 +109,7 @@ pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
         can_join: app.can_join(),
         live: crate::convert_ui::live_problem(app).is_none(),
         can_split: app.can_split_pieces(sh),
+        split_back: sh.kind == Kind::Custom && spiderweb_core::convert::originals(sh).is_some(),
     })
 }
 
@@ -191,7 +194,11 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
     }
     if one && t.can_split {
         out.push(item(
-            rust_i18n::t!("menu.split_separate"),
+            if t.split_back {
+                rust_i18n::t!("menu.split_back")
+            } else {
+                rust_i18n::t!("menu.split_separate")
+            },
             MenuAction::SplitPieces,
             true,
         ));
@@ -434,6 +441,7 @@ mod tests {
             can_join: false,
             live: false,
             can_split: false,
+            split_back: false,
         }
     }
 
@@ -542,6 +550,18 @@ mod tests {
         let mut curve = target(Kind::Curve);
         curve.can_split = true;
         assert!(enabled(&menu_entries_for(&curve), MenuAction::SplitPieces));
+        assert!(matches!(
+            find(&menu_entries_for(&curve), MenuAction::SplitPieces),
+            Some(MenuEntry::Item { label, .. }) if label == "Split into separate shapes"
+        ));
+        // a live shape that still matches its "from": Split back into the old shapes
+        let mut live = target(Kind::Custom);
+        live.can_split = true;
+        live.split_back = true;
+        assert!(matches!(
+            find(&menu_entries_for(&live), MenuAction::SplitPieces),
+            Some(MenuEntry::Item { label, .. }) if label == "Split back into the old shapes"
+        ));
     }
 
     #[test]

@@ -18,6 +18,11 @@ use crate::roll_funnel;
 /// The order of the Project -> Domino start dropdown (upstream `DOMINO_STARTS`).
 const DOMINO_STARTS: [DominoStart; 2] = [DominoStart::Note, DominoStart::Bar];
 
+/// A shape spread over more channels than this is shown orange in the shape list (upstream MANY_CHANNELS).
+const MANY_CHANNELS: usize = 15;
+/// The orange for that (upstream panel_custom.GAP_COLOR).
+const GAP_COLOR: egui::Color32 = egui::Color32::from_rgb(0xc0, 0x60, 0x00);
+
 /// The dropdown labels (the tr texts of upstream `DOMINO_STARTS`).
 fn domino_start_text(start: DominoStart) -> String {
     match start {
@@ -601,22 +606,44 @@ impl App {
                 .filter_map(|&i| self.shapes.get(i))
                 .map(|s| self.note_count(s))
                 .sum();
-            ui.label(rust_i18n::t!(
+            let own = placed
+                .iter()
+                .all(|&i| self.shapes.get(i).is_some_and(|s| s.own_vel));
+            let mut info = rust_i18n::t!(
                 "panel.custom.info_pasted",
-                total = total.to_string()
-            ));
+                total = crate::app::fmt_int(total)
+            )
+            .to_string();
+            if own {
+                info += rust_i18n::t!("panel.custom.they_keep_their_own_velocities").as_ref();
+            }
+            info += rust_i18n::t!("panel.custom.info_pasted_drag").as_ref();
+            ui.label(info);
         } else {
             ui.label(rust_i18n::t!("panel.custom.inside"));
-            for (label, value) in [
-                (rust_i18n::t!("panel.custom.empty"), Fill::Empty),
-                (rust_i18n::t!("panel.custom.fill"), Fill::Fill),
-                (rust_i18n::t!("panel.custom.spam"), Fill::Spam),
+            for (label, tip, value) in [
+                (
+                    rust_i18n::t!("panel.custom.empty"),
+                    rust_i18n::t!("panel.custom.empty_tip"),
+                    Fill::Empty,
+                ),
+                (
+                    rust_i18n::t!("panel.custom.fill"),
+                    rust_i18n::t!("panel.custom.fill_tip"),
+                    Fill::Fill,
+                ),
+                (
+                    rust_i18n::t!("panel.custom.spam"),
+                    rust_i18n::t!("panel.custom.spam_tip"),
+                    Fill::Spam,
+                ),
                 (
                     rust_i18n::t!("panel.custom.outline_spam"),
+                    rust_i18n::t!("panel.custom.outline_spam_tip"),
                     Fill::OutlineSpam,
                 ),
             ] {
-                if ui.radio(fill == value, label).clicked() {
+                if ui.radio(fill == value, label).on_hover_text(tip).clicked() {
                     new_fill = Some(value);
                 }
             }
@@ -736,8 +763,11 @@ impl App {
                 .filter_map(|&i| self.shapes.get(i))
                 .map(|s| self.note_count(s))
                 .sum();
-            let mut info =
-                rust_i18n::t!("panel.custom.info_notes", total = total.to_string()).to_string();
+            let mut info = rust_i18n::t!(
+                "panel.custom.info_notes",
+                total = crate::app::fmt_int(total)
+            )
+            .to_string();
             if gaps > 0 && matches!(fill, Fill::Fill | Fill::Spam) {
                 if gaps == 1 {
                     info += &format!("  {}", rust_i18n::t!("panel.custom.info_one_gap"));
@@ -1040,21 +1070,26 @@ impl App {
                     }
                 });
                 ui.label(rust_i18n::t!("panel.project.channels"));
-                ui.radio_value(
-                    &mut self.channel_mode,
-                    ChannelMode::Raw,
-                    rust_i18n::t!("panel.project.mode_raw"),
-                );
-                ui.radio_value(
-                    &mut self.channel_mode,
-                    ChannelMode::Single,
-                    rust_i18n::t!("panel.project.mode_single"),
-                );
-                ui.radio_value(
-                    &mut self.channel_mode,
-                    ChannelMode::Auto,
-                    rust_i18n::t!("panel.project.mode_auto"),
-                );
+                for (value, label, tip) in [
+                    (
+                        ChannelMode::Raw,
+                        rust_i18n::t!("panel.project.mode_raw"),
+                        rust_i18n::t!("panel.project.mode_raw_tip"),
+                    ),
+                    (
+                        ChannelMode::Single,
+                        rust_i18n::t!("panel.project.mode_single"),
+                        rust_i18n::t!("panel.project.mode_single_tip"),
+                    ),
+                    (
+                        ChannelMode::Auto,
+                        rust_i18n::t!("panel.project.mode_auto"),
+                        rust_i18n::t!("panel.project.mode_auto_tip"),
+                    ),
+                ] {
+                    ui.radio_value(&mut self.channel_mode, value, label)
+                        .on_hover_text(tip);
+                }
                 if self.channel_mode == ChannelMode::Auto {
                     ui.horizontal(|ui| {
                         ui.label(rust_i18n::t!("panel.project.split"));
@@ -1062,12 +1097,14 @@ impl App {
                             &mut self.channel_split,
                             ChannelSplit::Key,
                             rust_i18n::t!("panel.project.split_key"),
-                        );
+                        )
+                        .on_hover_text(rust_i18n::t!("panel.project.split_tip"));
                         ui.radio_value(
                             &mut self.channel_split,
                             ChannelSplit::Time,
                             rust_i18n::t!("panel.project.split_time"),
-                        );
+                        )
+                        .on_hover_text(rust_i18n::t!("panel.project.split_tip"));
                     });
                 }
                 ui.horizontal(|ui| {
@@ -1100,29 +1137,47 @@ impl App {
                     .max_height(220.0)
                     .id_salt("shapes_list")
                     .show(ui, |ui| {
-                        let labels: Vec<(usize, String)> = self
+                        let labels: Vec<(usize, String, bool)> = self
                             .shapes
                             .iter()
                             .enumerate()
                             .map(|(i, sh)| {
                                 let count = self.note_counts.get(i).copied().unwrap_or(0);
+                                let chans = self.shape_channels.get(i).copied().unwrap_or(1);
+                                let uses = if chans > 1 {
+                                    rust_i18n::t!(
+                                        "panel.shapes.channels",
+                                        chans = chans.to_string()
+                                    )
+                                    .to_string()
+                                } else {
+                                    String::new()
+                                };
                                 (
                                     i,
                                     rust_i18n::t!(
                                         "panel.shapes.item",
                                         i = (i + 1).to_string(),
                                         label = self.shape_label(sh),
-                                        notes = count.to_string()
+                                        notes = crate::app::fmt_int(count as i64),
+                                        uses = uses
                                     )
                                     .to_string(),
+                                    chans > MANY_CHANNELS,
                                 )
                             })
                             .collect();
                         let mut clicked: Option<usize> = None;
                         let mut toggle = false;
-                        for (i, label) in labels {
+                        for (i, label, many) in labels {
                             let selected = self.sels.contains(&i);
-                            let resp = ui.selectable_label(selected, label);
+                            // Past 15 channels the note colours and channel numbers repeat: orange.
+                            let text = if many {
+                                egui::RichText::new(label).color(GAP_COLOR)
+                            } else {
+                                egui::RichText::new(label)
+                            };
+                            let resp = ui.selectable_label(selected, text);
                             if resp.clicked() {
                                 clicked = Some(i);
                                 toggle =
@@ -1651,8 +1706,11 @@ impl App {
         let info = if waiting_wall {
             rust_i18n::t!("panel.funnel.info_waiting_wall").to_string()
         } else if placed {
-            let mut s =
-                rust_i18n::t!("panel.funnel.info_notes", n = note_total.to_string()).to_string();
+            let mut s = rust_i18n::t!(
+                "panel.funnel.info_notes",
+                n = crate::app::fmt_int(note_total)
+            )
+            .to_string();
             if !parts_text.is_empty() {
                 s += rust_i18n::t!("panel.funnel.info_highlighted", parts = parts_text).as_ref();
             } else if targets.len() == 1 {

@@ -34,6 +34,13 @@ pub struct Typing {
     pub axes: Option<Axes>,
     /// 这个形状的输入是否已经压过撤销步
     pub undo: bool,
+    /// What the text was when typing started (upstream ty["was"]), for the Erase text: name.
+    pub was: String,
+    /// The shapes snapshot of this typing's undo step, so its name can follow the text
+    /// (upstream ty["step"]; None = no step of its own yet).
+    pub step: Option<String>,
+    /// This typing made the shape (Draw:), rather than editing an existing one (upstream ty["new"]).
+    pub new: bool,
 }
 
 // ---------------------------------------------------------------- 纯逻辑（可单测）
@@ -292,6 +299,9 @@ fn press(app: &mut App, pos: Pos2, pt: Pt, shift: bool) {
                 tx: None,
                 axes: None,
                 undo: false,
+                was: String::new(),
+                step: None,
+                new: false,
             });
             let caret = caret_at(app, pos);
             if let Some(ty) = app.typing.as_mut() {
@@ -313,6 +323,9 @@ fn press(app: &mut App, pos: Pos2, pt: Pt, shift: bool) {
                 tx: Some(tx),
                 axes: Some(axes),
                 undo: false,
+                was: String::new(),
+                step: None,
+                new: false,
             });
         }
     }
@@ -417,9 +430,13 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
                     .map(|sh| sh.name.clone())
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| "?".to_string());
-                app.push_undo(&rust_i18n::t!("roll_text.type", text = was));
+                app.push_undo(&rust_i18n::t!("roll_text.type", text = was.clone()));
+                let step = app.undo_stack.last().map(|(state, _)| state.clone());
                 if let Some(ty) = app.typing.as_mut() {
                     ty.undo = true;
+                    ty.was = was;
+                    ty.step = step;
+                    ty.new = false;
                 }
             }
             let Some(sh) = app.shapes.get_mut(i) else {
@@ -456,8 +473,11 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
                     app.shapes_changed();
                 } else {
                     app.add_shape(sh);
+                    let step = app.undo_stack.last().map(|(state, _)| state.clone());
                     if let Some(ty) = app.typing.as_mut() {
                         ty.undo = true;
+                        ty.step = step;
+                        ty.new = true;
                     }
                 }
             } else if let Some(ty) = app.typing.as_mut() {
@@ -465,6 +485,66 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
                 ty.axes = Some(axes);
             }
         }
+    }
+    name_typing_step(app);
+}
+
+/// The History name of this typing's undo step follows the text (upstream name_typing_step):
+/// a new text is "Draw: ...", editing is "Type: ..." and erasing it all is "Erase text: ...".
+fn name_typing_step(app: &mut App) {
+    let Some(ty) = app.typing.as_ref() else {
+        return;
+    };
+    let (Some(step), i, new, was) = (ty.step.clone(), ty.i, ty.new, ty.was.clone()) else {
+        return;
+    };
+    let Some((state, _)) = app.undo_stack.last().cloned() else {
+        return;
+    };
+    if state != step {
+        return; // (another step came after it)
+    }
+    let (text_name, label) = match i.and_then(|i| app.shapes.get(i)) {
+        Some(sh) => (
+            if sh.name.is_empty() {
+                "?".to_string()
+            } else {
+                sh.name.clone()
+            },
+            app.shape_label(sh),
+        ),
+        None if i.is_some() => return,
+        None => (String::new(), String::new()),
+    };
+    // (a new text typed and erased again: the step changes nothing)
+    let Some(name) = typing_step_name(i, new, &was, &text_name, label) else {
+        return;
+    };
+    if let Some(top) = app.undo_stack.last_mut() {
+        top.1 = name;
+    }
+}
+
+/// The History name this typing's step should have: "Draw: ..." for a text this typing made,
+/// "Type: ..." when editing one, "Erase text: ..." when it was erased (upstream name_typing_step).
+/// None = the step stays as it is.
+pub fn typing_step_name(
+    i: Option<usize>,
+    new: bool,
+    was: &str,
+    text_name: &str,
+    label: String,
+) -> Option<String> {
+    if i.is_some() {
+        Some(if new {
+            label
+        } else {
+            rust_i18n::t!("roll_text.type", text = text_name).to_string()
+        })
+    } else if new {
+        None
+    } else {
+        Some(rust_i18n::t!("roll_text.erase", text = was).to_string())
     }
 }
 
@@ -829,6 +909,28 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
 mod tests {
     use super::*;
     use spiderweb_core::shape::{TextAlign, TextUnit};
+
+    /// The History step names of typing (upstream roll_text.name_typing_step).
+    #[test]
+    fn typing_names_its_history_step() {
+        // a text this typing made: Draw: <label>
+        assert_eq!(
+            typing_step_name(Some(0), true, "?", "hi", "Draw: Text: hi".to_string()).as_deref(),
+            Some("Draw: Text: hi")
+        );
+        // editing an old text: Type: <what it was>
+        assert_eq!(
+            typing_step_name(Some(0), false, "old", "new", String::new()).as_deref(),
+            Some("Type: new")
+        );
+        // erased again (not new): Erase text: <what it was>
+        assert_eq!(
+            typing_step_name(None, false, "old", "", String::new()).as_deref(),
+            Some("Erase text: old")
+        );
+        // a new text typed and erased again: the step changes nothing
+        assert_eq!(typing_step_name(None, true, "?", "", String::new()), None);
+    }
 
     /// 打字编辑：在光标处插入（字符下标，中文也一样）并写进 Shape.text。
     #[test]

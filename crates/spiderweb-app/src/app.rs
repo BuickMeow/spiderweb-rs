@@ -204,6 +204,8 @@ pub struct App {
     pub playhead: f64,
     pub rendered: Vec<[i64; 6]>,
     pub note_counts: Vec<usize>,
+    /// Multi channel: how many channels each shape's notes are spread over (upstream `chans`).
+    pub shape_channels: Vec<usize>,
     pub slot_count: usize,
     /// Named undo steps: `(shapes as JSON, name)` (upstream App.undo_stack).
     pub undo_stack: Vec<crate::history::Step>,
@@ -329,6 +331,7 @@ impl App {
             playhead: 0.0,
             rendered: Vec::new(),
             note_counts: Vec::new(),
+            shape_channels: Vec::new(),
             slot_count: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -588,7 +591,7 @@ impl App {
                 }
                 self.status = rust_i18n::t!(
                     "status.saved_midi",
-                    notes = self.rendered.len().to_string(),
+                    notes = fmt_int(self.rendered.len() as i64),
                     channels = channels.to_string(),
                     path = path.display().to_string(),
                     note = note
@@ -680,6 +683,22 @@ impl App {
             }
         }
         self.note_counts = counts;
+        // Multi channel: how many channels each shape spreads over (upstream shapes_changed).
+        let mut chans = vec![1usize; self.shapes.len()];
+        if self.channel_mode == ChannelMode::Auto && !self.rendered.is_empty() {
+            let mut seen: Vec<std::collections::BTreeSet<i64>> =
+                vec![std::collections::BTreeSet::new(); self.shapes.len()];
+            for n in &self.rendered {
+                let owner = n[5] as usize;
+                if owner < seen.len() {
+                    seen[owner].insert(n[4]);
+                }
+            }
+            for (i, s) in seen.iter().enumerate() {
+                chans[i] = s.len();
+            }
+        }
+        self.shape_channels = chans;
         // 音符变了：note_gpu 下一帧重建 instance buffer
         self.notes_revision = self.notes_revision.wrapping_add(1);
         self.schedule_autosave();
@@ -1013,11 +1032,12 @@ impl App {
             Ok(raw) => {
                 if spiderweb_domino::put_on_clipboard(&raw) {
                     let what = if self.sels.is_empty() {
-                        rust_i18n::t!("status.all_notes", n = notes.len().to_string()).to_string()
+                        rust_i18n::t!("status.all_notes", n = fmt_int(notes.len() as i64))
+                            .to_string()
                     } else {
                         rust_i18n::t!(
                             "status.notes_count",
-                            n = notes.len().to_string(),
+                            n = fmt_int(notes.len() as i64),
                             s = if notes.len() == 1 { "" } else { "s" }
                         )
                         .to_string()
@@ -1044,7 +1064,7 @@ impl App {
                     if high > 0 {
                         copied.push_str(&rust_i18n::t!(
                             "status.notes_above_127_left_out",
-                            high = high.to_string()
+                            high = fmt_int(high as i64)
                         ));
                     }
                     self.status = copied;
@@ -1096,7 +1116,7 @@ impl App {
                             };
                             self.status = rust_i18n::t!(
                                 "status.pasted_domino",
-                                n = n.to_string(),
+                                n = fmt_int(n as i64),
                                 s = if n == 1 { "" } else { "s" },
                                 note = note
                             )
@@ -1359,6 +1379,11 @@ impl App {
         if self.drawer.as_ref().is_some_and(|d| d.focus) {
             return;
         }
+        // The Help window is open: its keys type into the search box (upstream type_to_search; the
+        // main window doesn't get keys while it has the keyboard).
+        if self.help.open {
+            return;
+        }
         // 正在打字：按键都归文本（原版 on_key 的 typing 优先级），快捷键让路
         if self.typing.is_some() || ctx.egui_wants_keyboard_input() {
             return;
@@ -1506,7 +1531,7 @@ impl App {
             rust_i18n::t!(
                 "status.shapes_notes",
                 shapes = self.shapes.len().to_string(),
-                notes = self.rendered.len().to_string()
+                notes = fmt_int(self.rendered.len() as i64)
             )
             .to_string(),
         );
@@ -1525,8 +1550,12 @@ impl App {
                 String::new()
             };
             parts.push(
-                rust_i18n::t!("status.selected", shapes = shapes, notes = n.to_string())
-                    .to_string(),
+                rust_i18n::t!(
+                    "status.selected",
+                    shapes = shapes,
+                    notes = fmt_int(n as i64)
+                )
+                .to_string(),
             );
         }
         if !self.status.is_empty() {
@@ -1534,6 +1563,20 @@ impl App {
         }
         parts.join("     ")
     }
+}
+
+/// A whole number with thousands separators, like Python's `{n:,}` in the original status lines
+/// ("Saved 1,234 notes ...", "all 10,000 notes").
+pub fn fmt_int(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 /// 右拖扫过 tick `t_from..t_to` 时该响的音符（原版 app.scrub 的 `now`）：
@@ -1621,7 +1664,7 @@ impl eframe::App for App {
                 .resizable(false)
                 .show(&ctx, |ui| {
                     ui.label(
-                        rust_i18n::t!("confirm.big", total = pending.total.to_string()).to_string(),
+                        rust_i18n::t!("confirm.big", total = fmt_int(pending.total)).to_string(),
                     );
                     ui.horizontal(|ui| {
                         if ui.button(rust_i18n::t!("common.yes").to_string()).clicked() {
@@ -1713,6 +1756,17 @@ fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> [i64; 6] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Python `{n:,}` number formatting in the status lines.
+    #[test]
+    fn integers_get_thousands_separators() {
+        assert_eq!(fmt_int(0), "0");
+        assert_eq!(fmt_int(7), "7");
+        assert_eq!(fmt_int(999), "999");
+        assert_eq!(fmt_int(1000), "1,000");
+        assert_eq!(fmt_int(1234567), "1,234,567");
+        assert_eq!(fmt_int(-1234), "-1,234");
+    }
 
     #[test]
     fn scrub_hits_takes_notes_under_and_swept() {

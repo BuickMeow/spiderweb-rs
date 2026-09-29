@@ -51,8 +51,8 @@ pub struct Tips {
     pub on: bool,
     /// 正在弹的主题 id。
     pub popup: Option<String>,
-    /// 等当前弹窗关掉再弹的主题 id（原版 waiting）。
-    pub waiting: Option<String>,
+    /// (topic, force) shown one after another once the open tip is closed (upstream waiting).
+    pub waiting: Vec<(String, bool)>,
     /// 启动后到点弹欢迎 tip（None = 已经试过了）。
     pub welcome_at: Option<Instant>,
     path: PathBuf,
@@ -70,7 +70,7 @@ impl Tips {
             seen: file.seen.into_iter().collect(),
             on: file.on,
             popup: None,
-            waiting: None,
+            waiting: Vec::new(),
             welcome_at: None,
             path,
         }
@@ -92,26 +92,39 @@ impl Tips {
         }
     }
 
-    /// 弹这个主题的 tip（看过了 / 关掉了就不弹）。正弹着别的主题时直接换掉。
+    /// 弹这个主题的 tip（看过了 / 关掉了就不弹）。正弹着别的主题时直接换掉（被换掉的稍后补弹）。
     pub fn show(&mut self, topic: &str) {
-        self.show_ex(topic, false);
+        self.show_ex(topic, false, false, false);
     }
 
     /// 同 [`Tips::show`]，但正弹着别的主题时排队等它关掉（原版 wait=True）。
     pub fn show_waiting(&mut self, topic: &str) {
-        self.show_ex(topic, true);
+        self.show_ex(topic, true, false, false);
     }
 
-    fn show_ex(&mut self, topic: &str, wait: bool) {
-        if help_texts::by_id(topic).is_none() || !self.on || self.seen.contains(topic) {
+    fn show_ex(&mut self, topic: &str, wait: bool, force: bool, done: bool) {
+        if help_texts::by_id(topic).is_none() || (!force && (!self.on || self.seen.contains(topic)))
+        {
             return;
         }
-        if wait && self.popup.as_deref().is_some_and(|p| p != topic) {
-            self.waiting = Some(topic.to_string());
+        let open_now = self.popup.is_some();
+        if wait && open_now && self.popup.as_deref() != Some(topic) {
+            if !self.waiting.iter().any(|(t, _)| t == topic) {
+                self.waiting.push((topic.to_string(), force));
+            }
             return;
         }
-        if self.waiting.as_deref() == Some(topic) {
-            self.waiting = None;
+        self.waiting.retain(|(t, _)| t != topic);
+        if open_now
+            && !done
+            && self.popup.as_deref() != Some(topic)
+            && !is_tool_tip(self.popup.as_deref().unwrap_or(""))
+        {
+            // A tip pushed aside (by a tool's tip, say) comes back next; one tool's tip replacing
+            // another's doesn't.
+            if let Some(old) = self.popup.clone() {
+                self.waiting.insert(0, (old, true));
+            }
         }
         self.seen.insert(topic.to_string());
         self.popup = Some(topic.to_string());
@@ -125,16 +138,17 @@ impl Tips {
             .as_deref()
             .and_then(|p| help_texts::next(p).map(str::to_string));
         match next {
-            Some(n) if self.on && !self.seen.contains(&n) => self.show(&n),
+            Some(n) if self.on && !self.seen.contains(&n) => self.show_ex(&n, false, false, true),
             _ => self.close(),
         }
     }
 
-    /// 关掉当前 tip（窗口 X / Esc），排队的接着来。
+    /// 关掉当前 tip（窗口 X / Esc），排队的接着来（看过的不再弹）。
     pub fn close(&mut self) {
         self.popup = None;
-        if let Some(w) = self.waiting.take() {
-            self.show(&w);
+        while self.popup.is_none() && !self.waiting.is_empty() {
+            let (topic, force) = self.waiting.remove(0);
+            self.show_ex(&topic, false, force, false);
         }
     }
 
@@ -169,6 +183,24 @@ pub fn filter_topics(query: &str) -> Vec<&'static Topic> {
 }
 
 // ---------------------------------------------------------------- 工具 / 侧栏
+
+/// The topics a tool's tip uses (upstream TOOL_TIPS: TOOL_TOPICS + DRAWER_TOOL_TOPICS). A tool tip
+/// replacing another tip doesn't come back later.
+fn is_tool_tip(id: &str) -> bool {
+    help_texts::TOOL_TOPICS.iter().any(|(_, t)| *t == id)
+        || matches!(
+            id,
+            "drawer_select"
+                | "drawer_line"
+                | "drawer_poly"
+                | "drawer_free"
+                | "drawer_curve"
+                | "drawer_arc"
+                | "drawer_square"
+                | "drawer_circle"
+                | "drawer_erase"
+        )
+}
 
 /// 工具 -> tip 主题 id（原版 TOOL_TOPICS；Square / Circle / Triangle 共用 box）。
 pub fn tool_topic(tool: Tool) -> &'static str {
@@ -245,10 +277,33 @@ pub fn open_help(app: &mut App, topic: Option<&str>) {
 
 // ---------------------------------------------------------------- 界面
 
+/// Typing anywhere in the Help window types into the search box (upstream HelpWindow.type_to_search):
+/// printable characters go in, Backspace takes the last one off.
+fn type_query(query: &mut String, events: &[egui::Event]) {
+    for ev in events {
+        match ev {
+            egui::Event::Text(t) if !t.chars().any(char::is_control) => query.push_str(t),
+            egui::Event::Key {
+                key: egui::Key::Backspace,
+                pressed: true,
+                ..
+            } => {
+                query.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 帮助窗口的界面（每帧调用；没打开就什么都不做）。
 pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     if !app.help.open {
         return;
+    }
+    // No box has the keyboard: whatever is typed is a search (upstream type_to_search).
+    if ctx.memory(|m| m.focused().is_none()) {
+        let events = ctx.input(|i| i.events.clone());
+        type_query(&mut app.help.query, &events);
     }
     let found = filter_topics(&app.help.query);
     // 当前主题被搜索滤掉 / 还没选过：选第一个（原版 fill_list）。
@@ -465,7 +520,7 @@ pub fn tips_ui(app: &mut App, ctx: &egui::Context) {
         app.tips.save();
     }
     if more {
-        app.tips.popup = None;
+        app.tips.close(); // (the next waiting tip comes up, like upstream closed())
         open_help(app, Some(&topic_id));
     } else if got_it {
         app.tips.got_it();
@@ -496,6 +551,27 @@ mod tests {
         assert!(topic_matches(funnel, "FUNNEL"));
         assert!(topic_matches(funnel, "  wall   gate "));
         assert!(!topic_matches(funnel, "wall tunisia"));
+    }
+
+    #[test]
+    fn typing_anywhere_fills_the_search_box() {
+        let mut query = String::new();
+        type_query(
+            &mut query,
+            &[
+                egui::Event::Text("fur".to_string()),
+                egui::Event::Text(" ".to_string()),
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Text("n".to_string()),
+            ],
+        );
+        assert_eq!(query, "furn");
     }
 
     #[test]
@@ -547,7 +623,7 @@ mod tests {
         tips.show("line");
         tips.show_waiting("funnel");
         assert_eq!(tips.popup.as_deref(), Some("line"));
-        assert_eq!(tips.waiting.as_deref(), Some("funnel"));
+        assert_eq!(tips.waiting, vec![("funnel".to_string(), false)]);
         tips.close();
         assert_eq!(tips.popup.as_deref(), Some("funnel"));
 
@@ -562,5 +638,44 @@ mod tests {
         // reset：全都没看过
         tips.reset();
         assert!(tips.on && tips.seen.is_empty());
+    }
+
+    /// Upstream 1.2.0 tips queue: a tip pushed aside comes back next (a tool's tip doesn't),
+    /// and "Got it" going on to the next one doesn't queue the old one again.
+    #[test]
+    fn tips_queue_comes_back_and_got_it_goes_on() {
+        let tmp = crate::test_support::TempDir::new("tips-queue");
+        let mut tips = Tips::new(tmp.path());
+
+        // A non-tool tip pushed aside by another comes back next.
+        tips.show("view");
+        tips.show("history");
+        assert_eq!(tips.popup.as_deref(), Some("history"));
+        assert_eq!(
+            tips.waiting,
+            vec![("view".to_string(), true)],
+            "the pushed-aside tip comes back"
+        );
+        tips.close();
+        assert_eq!(tips.popup.as_deref(), Some("view"));
+        tips.close();
+        assert!(tips.popup.is_none());
+
+        // A tool tip replaced by another doesn't come back.
+        tips.show("funnel"); // a tool tip (Funnel)
+        tips.show("undo");
+        assert_eq!(tips.popup.as_deref(), Some("undo"));
+        assert!(
+            !tips.waiting.iter().any(|(t, _)| t == "funnel"),
+            "a replaced tool tip stays gone"
+        );
+
+        // "Got it" on welcome goes to view (NEXT) without queueing welcome again.
+        let tmp2 = crate::test_support::TempDir::new("tips-next2");
+        let mut t2 = Tips::new(tmp2.path());
+        t2.show("welcome");
+        t2.got_it();
+        assert_eq!(t2.popup.as_deref(), Some("view"));
+        assert!(t2.waiting.is_empty(), "welcome isn't queued back");
     }
 }

@@ -866,6 +866,31 @@ fn short_starts(v: &Value) -> Value {
     )
 }
 
+/// Python `short_tumour`: a tumour's own numbers rounded; the `graphs` setting is a
+/// point list per setting name, so each of its points is rounded too.
+fn short_tumour(v: &Value) -> Value {
+    let Some(d) = v.as_object() else {
+        return v.clone();
+    };
+    let mut o = Map::new();
+    for (k, b) in d {
+        let nv = if k == "graphs" {
+            match b.as_object() {
+                Some(g) => Value::Object(
+                    g.iter()
+                        .map(|(a, pts)| (a.clone(), short_pts(pts)))
+                        .collect(),
+                ),
+                None => b.clone(),
+            }
+        } else {
+            short_num12(b)
+        };
+        o.insert(k.clone(), nv);
+    }
+    Value::Object(o)
+}
+
 fn short_text(v: &Value) -> Value {
     let Some(d) = v.as_object() else {
         return v.clone();
@@ -902,12 +927,18 @@ pub fn short_shape_value(sh: &Value) -> Value {
                     .map_or_else(Vec::new, |a| a.iter().map(short_stroke).collect()),
             ),
             "starts" => short_starts(v),
-            "tumour" => match v.as_object() {
-                Some(t) => {
-                    Value::Object(t.iter().map(|(a, b)| (a.clone(), short_num12(b))).collect())
-                }
-                None => v.clone(),
-            },
+            "tumour" => short_tumour(v),
+            "tumours" => Value::Array(v.as_array().map_or_else(Vec::new, |a| {
+                a.iter()
+                    .map(|t| {
+                        if py_bool(t) {
+                            short_tumour(t)
+                        } else {
+                            Value::Null
+                        }
+                    })
+                    .collect()
+            })),
             "text" => short_text(v),
             "gate" | "gate0" | "gate1" | "k" => short_num12(v),
             _ => v.clone(),
