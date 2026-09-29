@@ -1,8 +1,9 @@
-//! 字体选择窗口（原版 window/font_dialog.py）：输入字体名（列表跟着过滤）或从列表里挑，
-//! 下面是样文预览与 OK / Cancel。
+//! Font picker window (upstream window/font_dialog.py): type a font name (the list filters
+//! as you type) or pick from the list, with a sample preview and OK / Cancel below.
 //!
-//! 与原版的差异：预览用 egui 自带字体画，不按所选字体渲染（egui 还没接系统字体）；列表的
-//! 上下键移动也交给搜索框本身的文本光标，不做。
+//! Differences from upstream: the preview is drawn with egui's built-in font, not the
+//! selected font (egui has no system fonts yet); Up / Down list navigation is left to the
+//! search box's own text cursor and not implemented.
 
 use eframe::egui;
 
@@ -11,27 +12,27 @@ use spiderweb_core::text::TextChange;
 
 use crate::app::App;
 
-/// 没有可预览的文本时用的样文（原版 SAMPLE）。
+/// Sample text used when there is no text to preview (upstream SAMPLE).
 const SAMPLE: &str = "AaBbCc 0123";
 
-/// 字体窗口的状态（原版 FontDialog 的 tk 变量）。
+/// Font dialog state (the tk variables of upstream FontDialog).
 pub struct FontDialog {
-    /// 搜索框里的字（原版 self.name）
+    /// Text in the search box (upstream self.name)
     pub search: String,
-    /// 已安装字体（打开时取一次，原版 font_families）
+    /// Installed fonts (fetched once on open; upstream font_families)
     pub families: Vec<String>,
-    /// 列表里高亮的那一个
+    /// The highlighted entry in the list
     pub selected: Option<String>,
-    /// 样文
+    /// Sample text
     pub sample: String,
-    /// 列表当前的内容（原版 listbox）
+    /// Current contents of the list (upstream listbox)
     pub shown: Vec<String>,
-    /// 列表是按哪个输入过滤出来的；None = 刚打开，整张显示（原版 filter(select=current)）
+    /// The input the list was filtered for; None = just opened, show the whole list (upstream filter(select=current))
     listed_for: Option<String>,
 }
 
 impl FontDialog {
-    /// 打开窗口（current = 当前字体，sample = 正在编辑的文本，families = 已安装字体）。
+    /// Opens the dialog (current = current font, sample = the text being edited, families = installed fonts).
     pub fn new(current: String, sample: String, families: Vec<String>) -> Self {
         let one = sample.split_whitespace().collect::<Vec<_>>().join(" ");
         let sample = if one.is_empty() {
@@ -49,7 +50,7 @@ impl FontDialog {
         }
     }
 
-    /// 输入变了就重算列表；刚打开时整张显示（原版 filter）。
+    /// Recomputes the list when the input changes; shows the whole list on first open (upstream filter).
     fn refresh(&mut self) {
         match &self.listed_for {
             None => {
@@ -65,7 +66,7 @@ impl FontDialog {
     }
 }
 
-/// 列表：名字以输入开头的在前、其次包含的（原版 filter）。
+/// List: names starting with the input first, then names containing it (upstream filter).
 pub fn filtered(families: &[String], typed: &str) -> Vec<String> {
     let typed = typed.trim().to_lowercase();
     if typed.is_empty() {
@@ -86,7 +87,7 @@ pub fn filtered(families: &[String], typed: &str) -> Vec<String> {
     out
 }
 
-/// 确定按钮会用的字体：输入的名字正好是某个字体就用它，否则用列表里高亮的那个（原版 chosen）。
+/// Font the OK button will use: if the typed name exactly matches a font use it, otherwise the highlighted entry in the list (upstream chosen).
 fn chosen(dlg: &FontDialog, shown: &[String]) -> Option<String> {
     let typed = dlg.search.trim().to_lowercase();
     if let Some(f) = dlg.families.iter().find(|f| f.to_lowercase() == typed) {
@@ -97,7 +98,7 @@ fn chosen(dlg: &FontDialog, shown: &[String]) -> Option<String> {
         .filter(|s| shown.iter().any(|f| f == s))
 }
 
-/// 字体窗口：搜索 + 列表 + 预览 + OK / Cancel；选中后把新字体套到文本上。
+/// Font dialog: search + list + preview + OK / Cancel; on pick, applies the new font to the text.
 pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
     let Some(mut dlg) = app.font_dialog.take() else {
         return;
@@ -123,7 +124,7 @@ pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
                 resp.request_focus();
             }
             dlg.refresh();
-            // 过滤后高亮的那个不在了：选列表第一个（原版 filter 的 selection_set）
+            // The highlighted entry is gone after filtering: pick the first in the list (upstream filter's selection_set)
             if !dlg
                 .selected
                 .as_ref()
@@ -186,7 +187,7 @@ pub fn font_dialog_ui(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// 开一个字体窗口（面板的按钮用；字体表复用 app 里缓存的）。
+/// Opens a font dialog (used by the panel button; reuses the font list cached in App).
 pub fn open_font_dialog(app: &mut App, tx: &TextSettings) {
     if app.font_families.is_empty() {
         app.font_families = spiderweb_core::fonts::font_families();
@@ -223,7 +224,7 @@ mod tests {
             vec!["DejaVu Sans".to_string(), "Noto Sans CJK".to_string()]
         );
         assert_eq!(filtered(&f, "").len(), f.len());
-        // 大小写不敏感
+        // Case-insensitive
         assert_eq!(filtered(&f, "TIMES"), vec!["Times New Roman".to_string()]);
     }
 }

@@ -1,4 +1,4 @@
-//! 钢琴卷帘：视图（缩放 / 滚动）、绘制与鼠标交互（原版 roll/*）。
+//! Piano roll: view (zoom / scroll), painting and mouse interaction (upstream roll/*).
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
@@ -20,7 +20,7 @@ pub const NOTE_NAMES: [&str; 12] = [
 pub const PIANO_88_LO: i64 = 21;
 pub const PIANO_88_HI: i64 = 109;
 
-/// 每个通道槽的颜色（原版 roll_shared.SLOT_COLORS）。
+/// Color of each channel slot (upstream roll_shared.SLOT_COLORS).
 pub const SLOT_COLORS: [(Color32, Color32); 15] = [
     (
         Color32::from_rgb(0x7e, 0xa6, 0xf5),
@@ -87,20 +87,20 @@ pub const SELECTED_COLOR: (Color32, Color32) = (
     Color32::from_rgb(0xff, 0xb6, 0x5c),
     Color32::from_rgb(0x9a, 0x4b, 0x00),
 );
-#[allow(dead_code)] // 正在画的形状预览待接上
+#[allow(dead_code)] // preview of the shape being drawn yet to be wired up
 pub const DRAFT_COLOR: (Color32, Color32) = (
     Color32::from_rgb(0x9b, 0xe3, 0x9b),
     Color32::from_rgb(0x1d, 0x6b, 0x1d),
 );
 
-/// 卷帘视图状态。
+/// Piano roll view state.
 #[derive(Clone, Debug)]
 pub struct View {
     pub t: f64,
     pub top: f64,
     pub sx: f64,
     pub sy: f64,
-    /// 工程的按键范围（原版 app.keys）：视图的上限、可见范围都跟着它
+    /// The project's key range (upstream app.keys): the view's upper limit and visible range follow it
     pub keys: i64,
     pub kb_w: f32,
     pub ruler_h: f32,
@@ -153,7 +153,7 @@ impl View {
         (lo.max(0), hi.min(self.keys - 1))
     }
 
-    /// 滚动位置的上限（pianoroll.clamp_view）：整段都在上面时贴住最高键。
+    /// Upper limit of the scroll position (pianoroll.clamp_view): hugs the highest key when the whole range fits above.
     fn top_limit(&self) -> f64 {
         self.keys as f64 - 0.5
     }
@@ -203,7 +203,7 @@ impl View {
         self.ready = true;
     }
 
-    #[allow(dead_code)] // 供测试/后续调用
+    #[allow(dead_code)] // for tests / later use
     pub fn fit(&mut self, app: &App) {
         self.fit_shapes(&app.shapes, app.beats);
     }
@@ -229,7 +229,7 @@ impl View {
     }
 }
 
-/// 左键拖动状态机（原版 self.drag）。
+/// Primary-button drag state machine (upstream self.drag).
 #[derive(Clone, Debug)]
 pub enum Drag {
     Pan {
@@ -259,72 +259,72 @@ pub enum Drag {
         orig: Vec<(usize, Vec<Pt>)>,
         one: Option<usize>,
         moved: bool,
-        /// 点的是唯一选中的自定义形状：松开时拾取它下面的笔画（None = 取消拾取）
+        /// The click is on the only selected custom shape: pick the stroke under it on release (None = unpick)
         part: Option<Option<usize>>,
-        /// 再次点击单个漏斗：记下它在点啥（释放时高亮 / 清空 part）。
+        /// Clicking a single funnel again: remembers what is being clicked (highlight / clear part on release).
         funnel_again: Option<usize>,
         funnel_part: Option<PartId>,
     },
     Handle {
         i: usize,
     },
-    /// 文本工具点下后拖动：选到鼠标（原版 ("textsel",)）
+    /// Dragging after a press with the text tool: select up to the mouse (upstream ("textsel",))
     TextSel,
-    /// 拖自定义形状的笔画把手（原版 drag 的 handle + 元组 hid）
+    /// Dragging a stroke handle of a custom shape (upstream drag's handle + the hid tuple)
     StrokeHandle(crate::roll_live::StrokeHandleId),
-    /// 方 / 圆 / 三角拖出来的框（原版 create + draft["draw"]）
+    /// A box dragged out with square / circle / triangle (upstream create + draft["draw"])
     BoxCreate {
         start: Pt,
         screen: Pos2,
         tool: Tool,
     },
-    /// 放置面板里选中的自定义形状（原版 place）
+    /// Placing the custom shape selected in the panel (upstream place)
     Place {
         start: Pt,
         screen: Pos2,
         aspect: Option<f64>,
     },
-    /// 拖角点 / 边中缩放（原版 resize）
+    /// Corner / edge midpoint resize drag (upstream resize)
     Resize {
         k: usize,
         orig: Vec<Pt>,
         side: bool,
         start: Pt,
     },
-    /// 边中外面斜切（原版 skew）
+    /// Skew from outside an edge midpoint (upstream skew)
     Skew {
         k: usize,
         orig: Vec<Pt>,
         start: Pt,
     },
-    /// 角点外面旋转（原版 turn）
+    /// Rotate from outside a corner (upstream turn)
     Turn {
         orig: Vec<Pt>,
         a0: f64,
     },
-    /// 正在画漏斗的墙（原版 drag 的 "wall"）。
+    /// Drawing a funnel wall (upstream drag's "wall").
     Wall {
         screen: Pos2,
     },
 }
 
-/// 命中的把手：普通形状的点号，或自定义形状的笔画把手。
+/// A hit handle: a point number of an ordinary shape, or a stroke handle of a custom shape.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum HandleId {
     Point(usize),
     Stroke(crate::roll_live::StrokeHandleId),
 }
 
-/// 右键拖动的现场（原版 pianoroll 的 self._scrub）：还没拖够 4px 时 `tick` 为 None。
+/// Right-drag state (upstream pianoroll's self._scrub): `tick` is None until the drag exceeds 4px.
 #[derive(Clone, Debug)]
 pub struct RightDrag {
-    /// 按下时的位置（卷帘局部坐标）：松开时在这里找形状开菜单
+    /// Position at press time (roll-local coordinates): the shape for the menu is looked up here on release
     pub start: Pos2,
-    /// 开始试听后的当前 tick；None = 还没开始
+    /// Current tick once previewing has started; None = not started
     pub tick: Option<f64>,
-    /// 松开时没拖动也没命中形状：取消选择（原版 deselect）
+    /// No drag and no shape hit on release: deselect (upstream deselect)
     pub deselect: bool,
-    /// 按下时有没有按住 Shift（菜单里"就地加锚点"用）
+    /// Whether Shift was held at press time (used by the menu's "add anchor here")
     pub shift: bool,
 }
 
@@ -347,7 +347,7 @@ struct Inputs {
     scroll: Vec2,
 }
 
-/// 把指针位置换算到卷帘自己的坐标（绘制都带 rect.min，命中都在局部坐标里算）。
+/// Converts pointer positions to roll-local coordinates (painting adds rect.min, hit testing works in local coordinates).
 fn inputs(ui: &egui::Ui) -> Inputs {
     let origin = ui.max_rect().min.to_vec2();
     let local = move |p: Option<Pos2>| p.map(|p| p - origin);
@@ -375,7 +375,7 @@ fn inputs(ui: &egui::Ui) -> Inputs {
     })
 }
 
-/// 卷帘入口：布局、输入、绘制。
+/// Piano roll entry point: layout, input, painting.
 pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
     let rect = ui.max_rect();
     let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
@@ -388,7 +388,7 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         crate::roll_menu::menu_ui(app, ui);
         return;
     }
-    // 有弹出层（右键菜单 / 下拉框）开着：卷帘输入让路（原版 tk 菜单会抓走事件）
+    // A popup (context menu / dropdown) is open: the roll's input steps aside (upstream tk menus grab events)
     if !crate::roll_menu::is_popup_open(ui.ctx()) {
         let input = inputs(ui);
         handle_input(app, &input, Rect::from_min_size(Pos2::ZERO, rect.size()));
@@ -400,7 +400,7 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
             && pos.y <= app.view.h
         {
             let icon = if app.draft.is_none() && hit_handle(app, pos).is_some() {
-                egui::CursorIcon::Move // 抓住把手（原版 fleur）
+                egui::CursorIcon::Move // grabbing a handle (upstream fleur)
             } else {
                 crate::roll_custom::custom_cursor(app, crate::roll_custom::custom_hit(app, pos))
             };
@@ -408,7 +408,7 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     let _ = response;
-    // GPU 音符：revision 脏了才重建 CPU instances（全部音符，不 cull；平移 / 缩放不动）
+    // GPU notes: rebuild CPU instances only when revision is dirty (all notes, no cull; pan / zoom leave them alone)
     if let Some(gpu) = &app.note_gpu {
         gpu.sync(&app.rendered, &app.sels, app.notes_revision);
     }
@@ -416,7 +416,7 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
     crate::roll_menu::menu_ui(app, ui);
 }
 
-// ---------------------------------------------------------------- 坐标与命中
+// ---------------------------------------------------------------- coordinates and hit testing
 
 pub(crate) fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
     let v = &app.view;
@@ -434,7 +434,7 @@ pub(crate) fn event_pt(app: &App, p: Pos2, snap: bool, shift: bool) -> Pt {
     [b.max(0.0), q.clamp(0.0, (app.keys - 1) as f64)]
 }
 
-/// 选中形状的可拖点 (beat, pitch, 序号)；曲线 / 自定义形状用各自的把手。
+/// Draggable points of the selected shape as (beat, pitch, index); curves / custom shapes use their own handles.
 fn handles(app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
     if sh.kind == Kind::Curve {
         return app.curve_handle_indices(sh);
@@ -456,18 +456,18 @@ fn handles(app: &App, sh: &Shape) -> Vec<(Pt, usize)> {
 fn hit_handle(app: &App, p: Pos2) -> Option<HandleId> {
     let sh = app.selected()?;
     if sh.kind == Kind::Curve {
-        // 曲线：锚点 / 拉出的手柄任何工具都能抓，两端留给 Select（原版 curve_handles 的 free）
+        // Curves: anchors / pulled-out handles are grabbable with any tool; ends are left to Select (the free flag of upstream curve_handles)
         return app
             .curve_hit_handle(sh, p, app.tool == Tool::Select)
             .map(HandleId::Point);
     }
     if sh.kind == Kind::Custom {
-        // 被拾取曲线笔画的锚点 / 手柄任何工具都能抓；笔画点只有 Select 工具
+        // Anchors / handles of the picked curve stroke are grabbable with any tool; stroke points only with Select
         return crate::roll_live::hit_stroke_handle(app, sh, p, app.tool == Tool::Select)
             .map(HandleId::Stroke);
     }
     if sh.kind == Kind::Funnel {
-        // 漏斗：曲线把手 / 起点任何工具都能抓，线 / 墙的点留给 Select
+        // Funnels: curve handles / the start point are grabbable with any tool; line / wall points are left to Select
         return roll_funnel::hit_funnel_handle(app, sh, p, app.tool == Tool::Select)
             .map(HandleId::Point);
     }
@@ -482,7 +482,7 @@ fn hit_handle(app: &App, p: Pos2) -> Option<HandleId> {
     None
 }
 
-/// 点到形状折线的距离（屏幕坐标）。
+/// Distance from a point to a shape's polyline (screen coordinates).
 fn stroke_hit(app: &App, strokes: &[Vec<Pt>], p: Pos2) -> bool {
     for stroke in strokes {
         let pts: Vec<(f32, f32)> = stroke
@@ -528,13 +528,13 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
         if stroke_hit(app, &strokes, p) {
             return Some(i);
         }
-        // 粘贴的音符：框里任何地方都算命中
+        // Pasted notes: anywhere inside the box counts as a hit
         if sh.notes.is_some()
             && crate::roll_live::inside_strokes(&spiderweb_core::custom::custom_strokes(sh), b, q)
         {
             return Some(i);
         }
-        // Fill / Spam 的形状：轮廓里（缺口用直线补上）都算命中
+        // Fill / Spam shapes: anywhere inside the outline counts as a hit (gaps closed with straight lines)
         if sh.kind == Kind::Custom && matches!(sh.fill, Fill::Fill | Fill::Spam) {
             let polys = if sh.text.is_some() {
                 spiderweb_core::custom::custom_strokes(sh)
@@ -542,7 +542,7 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
                 spiderweb_core::custom::fill_plan(sh).polys
             };
             let inside = if sh.union {
-                // 重叠也填上：任意一个环里都算
+                // Overlaps are filled too: inside any ring counts
                 polys
                     .iter()
                     .any(|poly| crate::roll_live::inside_strokes(std::slice::from_ref(poly), b, q))
@@ -553,7 +553,7 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
                 return Some(i);
             }
         }
-        // 漏斗的里面也算命中（原版 hit_shape 的 funnel_contains）
+        // The inside of a funnel also counts as a hit (upstream hit_shape's funnel_contains)
         if sh.kind == Kind::Funnel
             && funnel::funnel_contains(sh, app.view.b_of(p.x), app.view.p_of(p.y))
         {
@@ -563,7 +563,7 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
     None
 }
 
-// ---------------------------------------------------------------- 输入
+// ---------------------------------------------------------------- input
 
 fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
     let (kb_w, ruler_h) = (app.view.kb_w, app.view.ruler_h);
@@ -647,7 +647,7 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
 }
 
 fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
-    // 先完成"点一下开始、跟随鼠标"的形状（原版 follow）
+    // First finish the "click to start, follow the mouse" shape (upstream follow)
     if let Some(follow) = app.follow.take() {
         app.drag = Some(follow);
         on_drag(app, pos, input);
@@ -658,7 +658,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
         return;
     }
     if app.tool == Tool::Select {
-        // Select 是启动工具，它的 tip 在卷帘上第一次点击时弹（原版 pianoroll.on_press）
+        // Select is the startup tool; its tip pops on the first click in the roll (upstream pianoroll.on_press)
         app.tips.show_waiting("select");
     }
     if pos.y < app.view.ruler_h {
@@ -683,7 +683,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
         return;
     }
 
-    // 选中自定义形状的盒子：角点 / 边缩放，角外旋转，边中外斜切
+    // Box of the selected custom shape: corner / edge resize, rotate outside a corner, skew outside an edge
     let custom_hit = crate::roll_custom::custom_hit(app, pos);
     if let Some(hit) = custom_hit
         && let Some(drag) = custom_box_drag(app, hit, pos, input.shift)
@@ -705,11 +705,11 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 && matches!(custom_hit, Some(crate::roll_custom::CustomHit::Inside))
                 && !input.ctrl
             {
-                i = app.sel; // 选中的自定义形状框里任何地方都算移动
+                i = app.sel; // anywhere inside the selected custom shape's box counts as a move
             }
-            // 点的是“已经唯一选中”的自定义形状：松开时拾取它下面的笔画（原版在这里先判定）
+            // The click is on an already singly-selected custom shape: pick the stroke under it on release (upstream decides this here first)
             let was_only_selected = i.is_some() && app.sel == i && app.sels.len() == 1;
-            // 再次点击那个选中的漏斗：鼠标下的线 / 曲线要高亮（原版 again / part）
+            // Clicking the selected funnel again: the line / curve under the mouse gets highlighted (upstream again / part)
             let funnel_again = i.filter(|&j| {
                 app.sels.len() == 1
                     && app.sels.contains(&j)
@@ -727,7 +727,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             if input.ctrl
                 && let Some(part) = funnel_part
             {
-                // Ctrl+点击 part：加上 / 去掉这一个
+                // Ctrl+click on a part: add / remove this one
                 app.toggle_part(part);
                 return;
             }
@@ -762,7 +762,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
                 });
                 return;
             }
-            // 唯一选中的自定义形状：拾取鼠标下的笔画（离轮廓 6px 内），否则取消拾取
+            // The only selected custom shape: pick the stroke under the mouse (within 6px of the outline), otherwise unpick
             let mut part: Option<Option<usize>> = None;
             if was_only_selected
                 && !input.ctrl
@@ -849,7 +849,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             });
         }
         Tool::Curve => {
-            // 拖拽创建 S 曲线，松手提交（拖出两端；手柄编辑在形状选中后）
+            // Drag to create an S curve, commit on release (drags out the two ends; handle editing comes once the shape is selected)
             let defaults = app.defaults.clone();
             app.draft = Some(engine::make_shape(Kind::Curve, &[pt, pt], &defaults));
             app.drag = Some(Drag::Create {
@@ -896,7 +896,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
     }
 }
 
-/// 选中自定义形状的盒子被点中 -> 对应的拖动（盒内返回 None）。
+/// Clicking the selected custom shape's box -> the matching drag (returns None inside the box).
 fn custom_box_drag(
     app: &App,
     hit: crate::roll_custom::CustomHit,
@@ -925,8 +925,8 @@ fn custom_box_drag(
     })
 }
 
-/// 折线的下一个点放在 pt（后面再跟一个随鼠标的点）。true = 画完了
-/// （Live 绘制：回到第一个点 = 闭合）（原版 poly_point）。
+/// Puts the polyline's next point at pt (followed by another point tracking the mouse).
+/// true = finished (Live drawing: returning to the first point = close) (upstream poly_point).
 fn poly_point(app: &mut App, pt: Pt) -> bool {
     let closed = {
         let Some(d) = app.draft.as_mut() else {
@@ -1087,7 +1087,7 @@ fn on_drag(app: &mut App, pos: Pos2, input: &Inputs) {
             };
             let mut sh = if kind == Kind::Curve {
                 let mut c = engine::make_shape(Kind::Curve, &[start, pt], &defaults);
-                // 温和 S 曲线：与 make_shape 一致
+                // Gentle S curve: consistent with make_shape
                 let mid = (start[0] + pt[0]) / 2.0;
                 c.pts = vec![start, [mid, start[1]], [mid, pt[1]], pt];
                 c
@@ -1204,7 +1204,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
                 {
                     app.select(Some(one), false);
                 } else if let Some(j) = funnel_again {
-                    // 再次点击那个漏斗：高亮鼠标下的 part（没点到就清空）
+                    // Clicking that funnel again: highlight the part under the mouse (clear it if nothing was hit)
                     let group = app
                         .shapes
                         .get(j)
@@ -1212,7 +1212,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
                         .unwrap_or_default();
                     app.set_parts(group, funnel_part);
                 } else if let Some(stroke) = part {
-                    app.set_stroke(stroke); // 点一下自定义形状：拾取 / 取消拾取笔画
+                    app.set_stroke(stroke); // click on a custom shape: pick / unpick a stroke
                 }
             }
         }
@@ -1231,7 +1231,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
             } else if still {
                 app.cancel_draft();
             } else if funnel {
-                // 画到选中漏斗的墙上 = 它的一条新线；否则留着等墙
+                // Drawn onto the selected funnel's wall = a new line for it; otherwise keep waiting for the wall
                 roll_funnel::funnel_finish_line(app);
             } else if app.confirm_big_draft() {
                 app.commit_draft();
@@ -1304,7 +1304,7 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
             }
         }
         Drag::Free { .. } => {
-            // Live 绘制：在起点附近松手 = 闭合
+            // Live drawing: releasing near the start = close
             if crate::roll_live::live_drawing(app) {
                 let close = app
                     .draft
@@ -1339,13 +1339,13 @@ fn on_release(app: &mut App, pos: Pos2, input: &Inputs, second: bool) {
             app.shapes_changed();
         }
         Drag::Resize { .. } | Drag::Skew { .. } | Drag::Turn { .. } => {
-            // 框已经改好；面板的缺口 / 音符数下一帧自己算
+            // The box is already updated; the panel recomputes gap / note counts next frame
             app.shapes_changed();
         }
         Drag::TextSel => {}
     }
     if matches!(app.tool, Tool::Poly) && app.draft.is_some() {
-        // 继续等下一个点
+        // keep waiting for the next point
     }
 }
 
@@ -1359,7 +1359,7 @@ fn on_double(app: &mut App, pos: Pos2, shift: bool) {
         finish_poly(app);
         return;
     }
-    // 双击文本：Select 工具 = 切到文本工具接着打；文本工具 = 选中鼠标下的词（原版 on_double）
+    // Double-click on text: Select tool = switch to the text tool and keep typing; text tool = select the word under the mouse (upstream on_double)
     if app.tool == Tool::Select && crate::roll_text::text_at(app, pos).is_some() {
         crate::roll_text::text_edit(app, pos);
         return;
@@ -1368,7 +1368,7 @@ fn on_double(app: &mut App, pos: Pos2, shift: bool) {
         crate::roll_text::text_double(app, pos);
         return;
     }
-    // 双击选中的曲线：在曲线上离鼠标最近的地方加锚点（中键同理，见 on_middle_release）
+    // Double-click on the selected curve: add an anchor at the closest point on the curve (same as middle-click, see on_middle_release)
     if app.draft.is_none()
         && app.tool == Tool::Select
         && app
@@ -1400,8 +1400,8 @@ fn finish_poly(app: &mut App) {
     }
 }
 
-/// 中键单击（没有拖动，原版 on_middle_release）：选中的曲线上加锚点；
-/// 选中的漏斗上：在线上加起点 / 靠近曲线加锚点。
+/// Middle-click (without dragging; upstream on_middle_release): add an anchor on the selected
+/// curve; on a selected funnel: add a start point on a line / an anchor near a curve.
 fn on_middle_release(app: &mut App, pos: Pos2, input: &Inputs) {
     let clicked = matches!(
         &app.drag,
@@ -1415,7 +1415,7 @@ fn on_middle_release(app: &mut App, pos: Pos2, input: &Inputs) {
         .map(|sh| sh.kind == Kind::Custom)
         .unwrap_or(false)
     {
-        // 被拾取的曲线笔画：点上加锚点
+        // Picked curve stroke: add an anchor at the point
         let near = Some((12.0 * app.scale()) as f64);
         if crate::roll_live::stroke_click(app, pos, near, input.shift) {
             return;
@@ -1433,8 +1433,9 @@ fn on_middle_release(app: &mut App, pos: Pos2, input: &Inputs) {
     }
 }
 
-/// 右键按下：画一半的折线 / 弧收尾，删漏斗 / 曲线 / 笔画把手；
-/// 没被处理又在卷帘区里就返回右拖试听的现场（原版 on_right）。
+/// Right press: finishes a half-drawn polyline / arc, deletes funnel / curve / stroke handles;
+/// if nothing handled it and it is inside the roll area, returns the state for right-drag
+/// previewing (upstream on_right).
 fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
     app.right_done = false;
     let kind = app.draft.as_ref().map(|d| d.kind);
@@ -1446,7 +1447,7 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
     } else if kind == Some(Kind::Arc) {
         app.cancel_draft();
     }
-    // 右键漏斗的曲线起点 / 锚点 / 手柄：删掉或收回（原版 delete_funnel_handle）
+    // Right-click a funnel's curve start / anchor / handle: delete or retract it (upstream delete_funnel_handle)
     let funnel_hit = if app.draft.is_none() {
         app.selected()
             .filter(|sh| sh.kind == Kind::Funnel)
@@ -1461,7 +1462,7 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
     {
         app.right_done = true;
     }
-    // 右键曲线锚点 = 删掉，手柄 = 收回锚点（端点不动，松开时走取消选择）
+    // Right-click a curve anchor = delete it, handle = retract into the anchor (ends untouched; release falls through to deselect)
     if app.draft.is_none()
         && let Some(sh) = app.selected()
         && sh.kind == Kind::Curve
@@ -1471,7 +1472,7 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
         app.right_done = true;
         return None;
     }
-    // 右键被拾取曲线笔画的锚点 = 删掉，手柄 = 收回（笔画点不特殊处理）
+    // Right-click an anchor of the picked curve stroke = delete it, handle = retract (stroke points are not treated specially)
     let custom_hid = if app.draft.is_none() {
         app.selected().and_then(|sh| {
             (sh.kind == Kind::Custom)
@@ -1491,7 +1492,7 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
         return None;
     }
     if pos.x < app.view.kb_w {
-        // 键盘列上：取消选择（原版 on_right 的 else 分支）
+        // On the keyboard column: deselect (the else branch of upstream on_right)
         if !finished {
             app.cancel_draft();
             app.select(None, false);
@@ -1506,13 +1507,13 @@ fn on_right(app: &mut App, pos: Pos2, input: &Inputs) -> Option<RightDrag> {
     })
 }
 
-/// 右键拖动时的 tick（原版 scrub_tick）：键盘列以右、不小于 0。
+/// Tick during a right-drag (upstream scrub_tick): right of the keyboard column, never below 0.
 fn scrub_tick(app: &App, pos: Pos2) -> f64 {
     let x = pos.x.max(app.view.kb_w);
     (app.view.b_of(x) * app.ppq as f64).max(0.0)
 }
 
-/// 右键拖动：先按 4px 判断是试听而不是菜单，然后扫过哪些音符就响哪些（原版 on_right_drag）。
+/// Right-drag: the first 4px decide previewing rather than a menu, then it sweeps past notes and sounds them (upstream on_right_drag).
 fn on_right_drag(app: &mut App, pos: Pos2) {
     app.position = Some(position_text(app, pos));
     let Some(sc) = app.right_drag.as_ref() else {
@@ -1545,11 +1546,11 @@ fn on_right_drag(app: &mut App, pos: Pos2) {
     }
 }
 
-/// 右键松开：拖过 = 停试听；点形状 = 菜单；点空白 = 取消选择（原版 on_right_release）。
+/// Right release: dragged = stop previewing; hit a shape = menu; empty space = deselect (upstream on_right_release).
 fn on_right_release(app: &mut App) {
     let sc = app.right_drag.take();
     if std::mem::take(&mut app.right_done) {
-        return; // 按下时已处理（曲线删点 / 收手柄）
+        return; // already handled on press (curve point deletion / handle retraction)
     }
     let Some(sc) = sc else {
         return;
@@ -1559,7 +1560,7 @@ fn on_right_release(app: &mut App) {
         return;
     }
     if !sc.deselect {
-        return; // 刚画完折线 / 弧，或取消了跟鼠标的草稿
+        return; // a polyline / arc was just finished, or a mouse-following draft was cancelled
     }
     if app.draft.is_none()
         && let Some(i) = hit_shape(app, sc.start)
@@ -1620,9 +1621,9 @@ pub fn note_name(p: i64) -> String {
     format!("{}{}", NOTE_NAMES[(p % 12) as usize], p / 12 - 1)
 }
 
-// ---------------------------------------------------------------- 绘制
+// ---------------------------------------------------------------- painting
 
-/// 把颜色往白色方向混（原版 roll_shared.fade），力度面板也用。
+/// Mixes a color toward white (upstream roll_shared.fade), also used by the velocity panel.
 pub(crate) fn fade(c: Color32, amount: f32) -> Color32 {
     let mix = |v: u8| -> u8 { (v as f32 + (255.0 - v as f32) * amount).round() as u8 };
     Color32::from_rgb(mix(c.r()), mix(c.g()), mix(c.b()))
@@ -1636,7 +1637,7 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
     );
     painter.rect_filled(area, 0.0, Color32::WHITE);
 
-    // 行：黑键底色、白键分隔线、C 线
+    // Rows: black key background, white key separator lines, C lines
     let (p_lo, p_hi) = v.visible_pitches();
     for p in p_lo..=p_hi {
         let (y0, y1) = v.row_y(p as f64);
@@ -1685,7 +1686,7 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
         );
     }
 
-    // 列：吸附线、拍线、小节线
+    // Columns: snap lines, beat lines, bar lines
     let b_lo = v.b_of(v.kb_w);
     let b_hi = v.b_of(v.w);
     if let Some(sb) = app.snap_beats()
@@ -1734,10 +1735,10 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
         b += step;
     }
 
-    // 音符
+    // Notes
     if app.show_notes {
         if let Some(gpu) = &app.note_gpu {
-            // GPU 路径：一次 instanced draw（普通一段 + 选中一段），无抽稀
+            // GPU path: one instanced draw (one segment for normal, one for selected), no decimation
             let globals = crate::note_gpu::globals_for(&app.view, app.ppq, rect.min);
             painter.add(gpu.callback(globals, rect));
         } else {
@@ -1745,7 +1746,7 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
         }
     }
 
-    // 形状线：肿瘤的淡虚线，然后未选中 / 选中
+    // Shape lines: faint dashed tumour lines, then unselected / selected
     for (i, sh) in app.shapes.iter().enumerate() {
         if joined::all_tumours(sh).iter().any(|tm| tm.on)
             && (app.sels.contains(&i) || app.show_lines)
@@ -1815,8 +1816,8 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
     crate::roll_text::paint_text_caret(app, painter, rect);
 }
 
-/// painter 回退路径（没有 wgpu render state 时）：可见性过滤 + 超量抽稀。
-/// GPU 路径在 note_gpu.rs，不做抽稀。
+/// Painter fallback path (no wgpu render state): visibility filtering + decimation when there
+/// are too many. The GPU path in note_gpu.rs does not decimate.
 fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
     let v = &app.view;
     let ppq = app.ppq as f64;
@@ -1828,7 +1829,7 @@ fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
         .iter()
         .filter(|n| n[1] as f64 >= t_lo && n[0] as f64 <= t_hi && n[2] >= p_lo && n[2] <= p_hi)
         .collect();
-    // 太多时按步长抽稀（原版用图片逐像素，这里先简单抽稀）
+    // Decimate by stride when there are too many (upstream uses per-pixel images; simple decimation for now)
     let cap = 40_000usize;
     let stride = visible.len().div_ceil(cap).max(1);
     if stride > 1 {
@@ -1897,7 +1898,7 @@ fn paint_path(
         painter.add(egui::Shape::line(clipped, Stroke::new(width, color)));
         let _ = clip;
     }
-    // 补轮廓缺口的直线：淡虚线（原版 draw_path 的 gap_lines）
+    // Straight lines closing outline gaps: faint dashed (upstream draw_path's gap_lines)
     if sh.kind == Kind::Custom && matches!(sh.fill, Fill::Fill | Fill::Spam) {
         for [a, b] in spiderweb_core::custom::gap_lines(sh) {
             let p0 = Pos2::new(rect.min.x + v.x_of(a[0]), rect.min.y + v.y_of(a[1]));
@@ -1918,7 +1919,7 @@ fn paint_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
         return;
     }
     if sh.kind == Kind::Custom {
-        // 盒子的角点 / 边中在 paint_custom_box 里；这里是笔画点与被拾取曲线笔画的锚点 / 手柄
+        // The box's corners / edge midpoints are in paint_custom_box; here are the stroke points and the anchors / handles of the picked curve stroke
         crate::roll_live::paint_custom_handles(app, painter, rect, sh);
         return;
     }
@@ -1957,7 +1958,7 @@ fn paint_draft_points(app: &App, painter: &egui::Painter, rect: Rect, d: &Shape)
     let pts: Vec<Pt> = match kind {
         Kind::Curve => vec![d.pts[0], *d.pts.last().unwrap_or(&d.pts[0])],
         Kind::Custom => {
-            // 方 / 圆 / 三角 / 自定义形状的草稿：盒子的四个角
+            // Square / circle / triangle / custom shape draft: the box's four corners
             match (d.pts.first(), d.pts.get(1), d.pts.get(2)) {
                 (Some(a), Some(b), Some(c)) => {
                     vec![*a, *b, [b[0] + c[0] - a[0], b[1] + c[1] - a[1]], *c]
@@ -2002,7 +2003,7 @@ fn paint_keyboard(app: &App, painter: &egui::Painter, rect: Rect) {
     );
     let (p_lo, p_hi) = v.visible_pitches();
     let font = FontId::proportional((v.sy as f32 * 0.6).clamp(7.0, 11.0));
-    // 灰显：128 键时是 88 键钢琴之外；256 键时是标准 128 键之外（原版 roll_draw.piano_keys）
+    // Greyed out: with 128 keys, outside the 88-key piano; with 256 keys, outside the standard 128 (upstream roll_draw.piano_keys)
     let keys_128 = v.keys == spiderweb_core::paths::KEYS[0];
     for p in p_lo..=p_hi {
         let (y0, y1) = v.row_y(p as f64);

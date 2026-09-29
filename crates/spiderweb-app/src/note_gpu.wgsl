@@ -1,25 +1,25 @@
-// 卷帘音符实例化渲染（一遍 instanced draw，不做 cull / LOD）。
+// Piano-roll note instanced rendering (one instanced draw, no cull / LOD).
 //
-// 每实例 16 字节（@location(0)）= (start_tick, end_tick, meta, pad)，
-// meta = key | vel << 8 | slot << 16 | layer << 24。
-// 平移 / 缩放只改 uniform；instance 只在音符或选择变化时重传。
+// 16 bytes per instance (@location(0)) = (start_tick, end_tick, meta, pad),
+// meta = key | vel << 8 | slot << 16 | layer << 24.
+// Pan / zoom only touch uniforms; instances are re-uploaded only when notes or selection change.
 
 struct Globals {
-    canvas_min: vec2<f32>, // 画布左上角（逻辑点，屏幕坐标）
-    ppp: f32,              // 物理像素 / 逻辑点
-    kb_w: f32,             // 键盘宽度（逻辑点，对应 View::kb_w）
-    origin_tick: u32,      // 视图左边缘 tick
+    canvas_min: vec2<f32>, // canvas top-left (logical points, screen coordinates)
+    ppp: f32,              // physical pixels per logical point
+    kb_w: f32,             // keyboard width (logical points, matches View::kb_w)
+    origin_tick: u32,      // tick at the left edge of the view
     _pad0: u32,
-    px_per_tick: f32, // 每 tick 的逻辑点数 = sx / ppq
-    top: f32,         // 视图顶端的音高（View::top）
-    sy: f32,          // 每行音高的逻辑点数（View::sy）
-    ruler_h: f32,     // 标尺高度（逻辑点，对应 View::ruler_h）
-    screen_px: vec2<f32>, // 屏幕尺寸（物理像素）
-    srgb: u32,            // 目标格式是否 sRGB：1 = 直接输出线性色
+    px_per_tick: f32, // logical points per tick = sx / ppq
+    top: f32,         // pitch at the top of the view (View::top)
+    sy: f32,          // logical points per pitch row (View::sy)
+    ruler_h: f32,     // ruler height (logical points, matches View::ruler_h)
+    screen_px: vec2<f32>, // screen size (physical pixels)
+    srgb: u32,            // whether the target format is sRGB: 1 = output linear color directly
     _pad1: u32,
     _pad2: vec2<u32>,
-    fill: array<vec4<f32>, 16>,    // 线性填充色：15 个槽位 + 选中色
-    outline: array<vec4<f32>, 16>, // 线性描边色：同上
+    fill: array<vec4<f32>, 16>,    // linear fill colors: 15 slots + selection color
+    outline: array<vec4<f32>, 16>, // linear outline colors: same as above
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -27,15 +27,15 @@ struct Globals {
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) @interpolate(flat) inst: vec4<u32>,
-    // 相对矩形左上角的物理像素坐标 / 矩形物理像素尺寸
+    // physical-pixel coordinate relative to the rectangle's top-left / rectangle size in physical pixels
     @location(1) @interpolate(linear) local: vec2<f32>,
     @location(2) @interpolate(linear) size: vec2<f32>,
-    // 左、右、上、下四条边是否没被夹出可见范围（夹过就不画那条描边）
+    // whether the left, right, top and bottom edges were not clamped out of view (a clamped edge is not outlined)
     @location(3) @interpolate(flat) keep: vec4<u32>,
 };
 
-// 把远处坐标夹到这个范围（2^20 物理像素，远超任何窗口），
-// 避免 f32 大数相减时的精度丢失；被夹掉的那条边不再画描边。
+// Clamp far-away coordinates to this range (2^20 physical pixels, far beyond any window)
+// to avoid precision loss when subtracting large f32 values; a clamped edge is no longer outlined.
 const LIM: f32 = 1048576.0;
 
 fn keep01(on: bool) -> u32 {
@@ -49,8 +49,8 @@ fn vs_main(@builtin(vertex_index) vi: u32, @location(0) inst: vec4<u32>) -> VOut
     let m = inst.z;
     let key = f32(m & 0xffu);
 
-    // u32 环绕减法再按补码读成 i32：即使 origin_tick 很大，
-    // (tick - origin_tick) 的差仍是精确的小整数，转 f32 不丢精度。
+    // Wrapping u32 subtraction read back as two's-complement i32: even with a huge
+    // origin_tick, (tick - origin_tick) stays an exact small integer and converts to f32 without precision loss.
     let dt0 = f32(i32(start - g.origin_tick));
     let dt1 = f32(i32(end - g.origin_tick));
 
@@ -66,7 +66,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @location(0) inst: vec4<u32>) -> VOut
         keep01(rawy1 <= LIM),
     );
 
-    // 与 painter 路径一致：round 到整物理像素，宽 / 高至少 1 像素
+    // Matches the painter path: round to whole physical pixels, width / height at least 1 pixel
     var x0 = round(clamp(raw0, -LIM, LIM));
     var x1 = round(clamp(raw1, -LIM, LIM));
     var y0 = round(clamp(rawy0, -LIM, LIM));
@@ -74,7 +74,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @location(0) inst: vec4<u32>) -> VOut
     x1 = max(x1, x0 + 1.0);
     y1 = max(y1, y0 + 1.0);
 
-    // 三角形带：0=(0,0) 1=(1,0) 2=(0,1) 3=(1,1)
+    // Triangle strip: 0=(0,0) 1=(1,0) 2=(0,1) 3=(1,1)
     let u = f32(vi & 1u);
     let v = f32((vi >> 1u) & 1u);
     let x = mix(x0, x1, u);
@@ -93,7 +93,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @location(0) inst: vec4<u32>) -> VOut
     return out;
 }
 
-// 0-1 sRGB gamma ← 0-1 线性（目标缓冲不是 sRGB 时手动转）
+// 0-1 sRGB gamma ← 0-1 linear (converted manually when the target buffer is not sRGB)
 fn gamma_from_linear(rgb: vec3<f32>) -> vec3<f32> {
     let cutoff = rgb < vec3<f32>(0.0031308);
     let lower = rgb * 12.92;
@@ -108,17 +108,17 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let slot = (m >> 16u) & 0xffu;
     let layer = (m >> 24u) & 0xffu;
 
-    // layer 1 = 选中形状的音符，统一用调色板最后一组（SELECTED_COLOR）
+    // layer 1 = notes of the selected shape, all using the last palette slot (SELECTED_COLOR)
     let idx = select(slot % 15u, 15u, layer == 1u);
     let base = g.fill[idx].rgb;
     let outline = g.outline[idx].rgb;
 
-    // 与 roll.rs::fade 一致：力度越大力色越接近原色
+    // Matches roll.rs::fade: the higher the velocity, the closer the note color is to the base color
     let level = min(vel, 127.0) / 4.0;
     let amount = 1.0 - level * 4.0 / 124.0;
     var color = mix(base, vec3<f32>(1.0), amount);
 
-    // 1 个逻辑点（= ppp 物理像素）的内描边；夹掉 / 在视口外的边不画
+    // 1-logical-point (= ppp physical pixels) inner outline; clamped / off-screen edges are not drawn
     let d = vec2<f32>(
         min(
             select(1e9, in.local.x, in.keep.x == 1u),

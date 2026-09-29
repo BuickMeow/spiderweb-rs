@@ -1,17 +1,18 @@
-//! Drawer 画板的工具定义与纯几何（原版 window/drawer.py 的工具部分）。
+//! Drawer tool definitions and pure geometry (the tool part of upstream window/drawer.py).
 //!
-//! 画板坐标是 0..1 的方框：u 向右、v 向上，与卷帘的拍 / 音高变换无关。
-//! 这里只放与界面无关的纯函数：吸附、命中、把手、翻转 / 旋转等，方便单测。
+//! Drawer coordinates are a 0..1 square: u to the right, v upward, independent of the roll's
+//! beat / pitch transform. Only UI-independent pure functions live here: snapping, hit testing,
+//! handles, flip / turn, etc., for easy unit testing.
 
 use spiderweb_core::Pt;
 use spiderweb_core::bezier::{self, HandleKind};
 use spiderweb_core::custom::{map_stroke, stroke_points};
 use spiderweb_core::shape::Stroke;
 
-/// 网格（原版 drawer.GRIDS）。
+/// Grids (upstream drawer.GRIDS).
 pub const GRIDS: [i64; 8] = [4, 8, 12, 16, 24, 32, 48, 64];
 
-/// 画板工具（原版 TOOLS + Triangle）。
+/// Drawer tools (upstream TOOLS + Triangle).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DrawerTool {
     Select,
@@ -40,7 +41,7 @@ impl DrawerTool {
         DrawerTool::Erase,
     ];
 
-    /// 界面上的工具名（按钮等）。
+    /// Tool name shown in the UI (buttons etc.).
     pub fn ui_label(self) -> String {
         match self {
             DrawerTool::Select => rust_i18n::t!("drawer_tool.select"),
@@ -72,7 +73,7 @@ impl DrawerTool {
         }
     }
 
-    /// 拖动式方框工具（点一下再点一下也行，见 Drawer::follow）。
+    /// Drag-style box tools (click-move-click also works, see Drawer::follow).
     pub fn is_box(self) -> bool {
         matches!(
             self,
@@ -85,12 +86,12 @@ impl DrawerTool {
     }
 }
 
-/// `round(x, 5)`（原版 event_pt 的取整）。
+/// `round(x, 5)` (rounding of upstream event_pt).
 pub fn round5(x: f64) -> f64 {
     (x * 1e5).round() / 1e5
 }
 
-/// 画板点吸附到网格（原版 event_pt 的吸附部分；Shift 不吸附）。
+/// Snaps a drawer point to the grid (the snap part of upstream event_pt; Shift disables snapping).
 pub fn snap_uv(u: f64, v: f64, n: i64, shift: bool) -> Pt {
     if shift || n <= 0 {
         return [round5(u), round5(v)];
@@ -99,7 +100,7 @@ pub fn snap_uv(u: f64, v: f64, n: i64, shift: bool) -> Pt {
     [round5((u * nf).round() / nf), round5((v * nf).round() / nf)]
 }
 
-/// 从 start 到 pt 的框修正成正方形（原版 perfect；Ctrl 时方 / 圆用）。
+/// Corrects the box from start to pt into a square (upstream perfect; used by square / circle with Ctrl).
 pub fn perfect(start: Pt, pt: Pt) -> Pt {
     let (du, dv) = (pt[0] - start[0], pt[1] - start[1]);
     let m = du.abs().max(dv.abs());
@@ -109,14 +110,14 @@ pub fn perfect(start: Pt, pt: Pt) -> Pt {
     ]
 }
 
-/// 方框（原版 square 工具的五点闭合折线）。
+/// Box (the five-point closed polyline of the upstream square tool).
 pub fn box_pts(start: Pt, pt: Pt) -> Vec<Pt> {
     let (u0, u1) = (start[0].min(pt[0]), start[0].max(pt[0]));
     let (v0, v1) = (start[1].min(pt[1]), start[1].max(pt[1]));
     vec![[u0, v0], [u1, v0], [u1, v1], [u0, v1], [u0, v0]]
 }
 
-/// 方框里的三角（顶点朝上，同内置 Triangle）。
+/// Triangle inside the box (apex up, same as the built-in Triangle).
 pub fn triangle_pts(start: Pt, pt: Pt) -> Vec<Pt> {
     let (u0, u1) = (start[0].min(pt[0]), start[0].max(pt[0]));
     let (v0, v1) = (start[1].min(pt[1]), start[1].max(pt[1]));
@@ -124,13 +125,13 @@ pub fn triangle_pts(start: Pt, pt: Pt) -> Vec<Pt> {
     vec![[u0, v0], [u1, v0], [mid, v1], [u0, v0]]
 }
 
-/// 拖动给出的 S 形曲线（原版 curve 工具的起点 / 中点手柄 / 终点）。
+/// S-shaped curve produced by dragging (start / midpoint handles / end of the upstream curve tool).
 pub fn curve_pts(start: Pt, pt: Pt) -> Vec<Pt> {
     let mid = round5((start[0] + pt[0]) / 2.0);
     vec![start, [mid, start[1]], [mid, pt[1]], pt]
 }
 
-/// 屏幕点 (x, y) 到一条笔画的距离（点列按屏幕坐标给）。
+/// Distance from screen point (x, y) to a stroke (the point list is given in screen coordinates).
 pub fn path_dist(screen: &[[f64; 2]], x: f64, y: f64) -> f64 {
     if screen.is_empty() {
         return f64::INFINITY;
@@ -155,7 +156,7 @@ pub fn path_dist(screen: &[[f64; 2]], x: f64, y: f64) -> f64 {
     best
 }
 
-/// 屏幕上 (x, y) 下的笔画号（从最上面一条找起，near = 像素半径）。
+/// Stroke number under screen point (x, y) (searching from the topmost one; near = pixel radius).
 pub fn stroke_at(
     strokes: &[Stroke],
     to_screen: &dyn Fn(Pt) -> [f64; 2],
@@ -175,19 +176,19 @@ pub fn stroke_at(
     None
 }
 
-/// 选中笔画上一个能拖的点（原版 handles 的元素）。
+/// A draggable point on the selected stroke (an element of upstream handles).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spot {
-    /// 折线 / 弧的点、曲线两端、椭圆角点（角点号 0-3）
+    /// Points of a polyline / arc, the two ends of a curve, ellipse corners (corner number 0-3)
     Point(usize),
-    /// 椭圆角点（0 左下、1 右下、2 右上、3 左上）
+    /// Ellipse corners (0 bottom-left, 1 bottom-right, 2 top-right, 3 top-left)
     Corner(usize),
-    /// 曲线的锚点 / 手柄：j 是点号，ctrl 区分手柄
+    /// Curve anchors / handles: j is the point number, ctrl distinguishes handles
     Pen { j: usize, ctrl: bool },
 }
 
-/// 要显示的把手 `(笔画号, 点, (u, v))`：选中的笔画排前面；长自由笔画只在选中时显示点
-/// （原版 Drawer.handles）。
+/// Handles to display as `(stroke number, spot, (u, v))`: the selected stroke comes first;
+/// long free strokes only show points when selected (upstream Drawer.handles).
 pub fn handles(strokes: &[Stroke], sel: Option<usize>) -> Vec<(usize, Spot, Pt)> {
     let order: Vec<usize> = sel
         .into_iter()
@@ -206,7 +207,7 @@ pub fn handles(strokes: &[Stroke], sel: Option<usize>) -> Vec<(usize, Spot, Pt)>
                 }
             }
             Stroke::Curve { pts, .. } => {
-                // 原版把 pen_handles 反过来放：端点的命中优先级最高
+                // Upstream pushes pen_handles in reverse: ends have the highest hit priority
                 for (j, kind) in bezier::pen_handles(pts, Some(i) == sel, &[])
                     .into_iter()
                     .rev()
@@ -230,7 +231,7 @@ pub fn handles(strokes: &[Stroke], sel: Option<usize>) -> Vec<(usize, Spot, Pt)>
     out
 }
 
-/// 命中的把手（near 像素内，先找选中的笔画）。
+/// Hit handle (within near pixels; the selected stroke is searched first).
 pub fn handle_at(
     strokes: &[Stroke],
     sel: Option<usize>,
@@ -248,13 +249,13 @@ pub fn handle_at(
     None
 }
 
-/// 被选中的曲线笔画里，具体是哪一条（原版 is_pen_point 的入口）。
+/// Which stroke is the selected curve, if any (the entry point of upstream is_pen_point).
 pub fn selected_curve(strokes: &[Stroke], sel: Option<usize>) -> Option<usize> {
     let i = sel?;
     matches!(strokes.get(i), Some(Stroke::Curve { .. })).then_some(i)
 }
 
-/// 一组笔画的所有原始点（椭圆用框的两个角）（原版 middle 的点集）。
+/// All raw points of a set of strokes (an ellipse uses the two corners of its box) (upstream middle's point set).
 fn raw_points(strokes: &[Stroke], idx: &[usize]) -> Vec<Pt> {
     let mut out = Vec::new();
     for &i in idx {
@@ -272,7 +273,7 @@ fn raw_points(strokes: &[Stroke], idx: &[usize]) -> Vec<Pt> {
     out
 }
 
-/// 一组笔画的中间（u, v）；没有点时 None。
+/// Center of a set of strokes (u, v); None when there are no points.
 pub fn center_uv(strokes: &[Stroke], idx: &[usize]) -> Option<Pt> {
     let pts = raw_points(strokes, idx);
     let ul = pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
@@ -283,7 +284,7 @@ pub fn center_uv(strokes: &[Stroke], idx: &[usize]) -> Option<Pt> {
         .then_some([(ul + uh) / 2.0, (vl + vh) / 2.0])
 }
 
-/// 翻转选中的笔画（原版 flip）：sideways = 左右翻，否则上下翻。
+/// Flips the selected strokes (upstream flip): sideways = left/right, otherwise up/down.
 pub fn flip_strokes(strokes: &[Stroke], idx: &[usize], sideways: bool) -> Vec<Stroke> {
     let Some(c) = center_uv(strokes, idx) else {
         return strokes.to_vec();
@@ -311,7 +312,7 @@ pub fn flip_strokes(strokes: &[Stroke], idx: &[usize], sideways: bool) -> Vec<St
         .collect()
 }
 
-/// 选中的笔画绕中间转 90°（原版 turn）：站在网格上的图形转完还站在网格上。
+/// Turns the selected strokes 90° around the center (upstream turn): shapes sitting on the grid still sit on the grid after turning.
 pub fn turn_strokes(strokes: &[Stroke], idx: &[usize], n: i64, clockwise: bool) -> Vec<Stroke> {
     let pts = raw_points(strokes, idx);
     if pts.is_empty() || n <= 0 {
@@ -331,7 +332,7 @@ pub fn turn_strokes(strokes: &[Stroke], idx: &[usize], n: i64, clockwise: bool) 
     let (mut cu, mut cv) = ((ul + uh) / 2.0, (vl + vh) / 2.0);
     if on_grid {
         let (a, b) = ((2.0 * cu).round() as i64, (2.0 * cv).round() as i64);
-        // 一个中间在线上、一个在线间：转 90° 会落到网格之间，绕半个方格外转
+        // One center coordinate on a grid line and one between lines: turning 90° would land between grid lines, so turn around a point half a square outside
         if (a.rem_euclid(2) + b.rem_euclid(2)) % 2 == 1 {
             let d = if a.rem_euclid(2) == 1 { 0.5 } else { -0.5 };
             if clockwise {
@@ -365,7 +366,7 @@ pub fn turn_strokes(strokes: &[Stroke], idx: &[usize], n: i64, clockwise: bool) 
         .collect()
 }
 
-/// copy / 翻转 / 旋转作用的对象：选中的一条，或（没选时）全部（原版 targets）。
+/// What copy / flip / turn act on: the selected stroke, or all of them when nothing is selected (upstream targets).
 pub fn targets(sel: Option<usize>, len: usize) -> Vec<usize> {
     match sel {
         Some(i) if i < len => vec![i],
@@ -373,7 +374,7 @@ pub fn targets(sel: Option<usize>, len: usize) -> Vec<usize> {
     }
 }
 
-/// 去掉连续重复的点（原版 finish_poly / commit 的过滤）。
+/// Removes consecutive duplicate points (the filter of upstream finish_poly / commit).
 pub fn dedupe_points(pts: &[Pt]) -> Vec<Pt> {
     let mut out: Vec<Pt> = Vec::with_capacity(pts.len());
     for p in pts {
@@ -384,7 +385,7 @@ pub fn dedupe_points(pts: &[Pt]) -> Vec<Pt> {
     out
 }
 
-/// 正 n 边形（"Sides" 控制用）：中心 center、外接半径 r。
+/// Regular n-gon (used by the "Sides" control): center center, circumradius r.
 pub fn polygon_pts(center: Pt, r: f64, sides: usize) -> Vec<Pt> {
     let n = sides.clamp(3, 64);
     let mut out = Vec::with_capacity(n + 1);
@@ -467,20 +468,20 @@ mod tests {
             Stroke::Poly { pts, .. } => {
                 assert_eq!(pts, &vec![[1.0, 0.0], [0.0, 0.0], [0.5, 1.0]]);
             }
-            other => panic!("期望 poly，得到 {other:?}"),
+            other => panic!("expected poly, got {other:?}"),
         }
     }
 
     #[test]
     fn turn_clockwise_moves_points_a_quarter() {
         let strokes = vec![poly(vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])];
-        // n = 4：中心 (0.5, 0.5)，全部落在网格上，2cu + 2cv = 2 是偶数，不偏半格
+        // n = 4: center (0.5, 0.5), everything on the grid, 2cu + 2cv = 2 is even, no half-cell offset
         let got = turn_strokes(&strokes, &[0], 4, true);
         match &got[0] {
             Stroke::Poly { pts, .. } => {
                 assert_eq!(pts, &vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.5]]);
             }
-            other => panic!("期望 poly，得到 {other:?}"),
+            other => panic!("expected poly, got {other:?}"),
         }
     }
 
@@ -504,7 +505,7 @@ mod tests {
             poly(vec![[0.25, 0.25], [0.5, 0.5]]),
         ];
         let hs = handles(&strokes, Some(1));
-        assert_eq!(hs[0].0, 1, "选中的笔画排最前");
+        assert_eq!(hs[0].0, 1, "the selected stroke comes first");
         assert_eq!(hs[0].1, Spot::Point(0));
         let corners: Vec<_> = hs.iter().filter(|(i, ..)| *i == 0).collect();
         assert_eq!(corners.len(), 4);

@@ -1,9 +1,12 @@
-//! 文本工具（原版 roll/roll_text.py）：在卷帘上点击放文本、打字输入、光标与选区。
+//! Text tool (upstream roll/roll_text.py): click the roll to place text, type it in, caret
+//! and selection.
 //!
-//! 文本形状是自定义形状：`sh.text` 存设置，`sh.strokes` 是字形轮廓，`sh.pts` 是三个框点。
-//! 每次编辑都走 [`spiderweb_core::text::build`] 重排；只剩空格的文本没有形状，设置与轴留在
-//! [`Typing`] 里，等下一个可见字符再长出来。键盘事件由 `App::ui` 最先交给 [`text_keyboard`]
-//! （原版 `on_key` 的 typing 优先级：打字时全局快捷键让路）。
+//! A text shape is a custom shape: `sh.text` holds the settings, `sh.strokes` the glyph
+//! outlines, `sh.pts` the three frame points. Every edit re-lays out through
+//! [`spiderweb_core::text::build`]; whitespace-only text has no shape, its settings and axes
+//! stay in [`Typing`] until the next visible character grows it back. Keyboard events are
+//! handed to [`text_keyboard`] first by `App::ui` (the typing priority of upstream `on_key`:
+//! global shortcuts step aside while typing).
 
 use std::time::Duration;
 
@@ -17,22 +20,22 @@ use spiderweb_core::text::{self, Axes, TextChange};
 use crate::app::{App, Tool};
 use crate::roll::Drag;
 
-/// 光标闪烁半周期，毫秒（原版 BLINK_MS）。
+/// Caret blink half-period in milliseconds (upstream BLINK_MS).
 pub const BLINK_MS: u64 = 530;
 
-/// 正在输入的文本（原版 self.typing 字典）。
+/// The text being typed (upstream self.typing dict).
 #[derive(Clone, Debug)]
 pub struct Typing {
-    /// 正在输入的形状序号；还没有可见字符时为 None
+    /// Index of the shape being typed in; None while there is no visible character yet
     pub i: Option<usize>,
-    /// 光标位置（第几个字符前）
+    /// Caret position (before which character)
     pub caret: usize,
-    /// 选区的另一端（== caret 时没有选区）
+    /// The other end of the selection (== caret means no selection)
     pub anchor: usize,
-    /// 还没有形状时的设置与轴
+    /// Settings and axes while there is no shape yet
     pub tx: Option<TextSettings>,
     pub axes: Option<Axes>,
-    /// 这个形状的输入是否已经压过撤销步
+    /// Whether this typing already pushed an undo step for the shape
     pub undo: bool,
     /// What the text was when typing started (upstream ty["was"]), for the Erase text: name.
     pub was: String,
@@ -43,9 +46,9 @@ pub struct Typing {
     pub new: bool,
 }
 
-// ---------------------------------------------------------------- 纯逻辑（可单测）
+// ---------------------------------------------------------------- pure logic (unit-testable)
 
-/// 在字符区间 s0..s1 里插入 s，返回新文本与新光标位置（原版 insert_text 的字符串部分）。
+/// Inserts s into the character range s0..s1 and returns the new text with the new caret position (the string part of upstream insert_text).
 pub fn insert_str(text: &str, s0: usize, s1: usize, s: &str) -> (String, usize) {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
@@ -57,17 +60,17 @@ pub fn insert_str(text: &str, s0: usize, s1: usize, s: &str) -> (String, usize) 
     (out, s0 + s.chars().count())
 }
 
-/// Backspace：删掉光标前一个字符（原版 type_key 的 BackSpace 分支）。返回新文本与新光标。
+/// Backspace: deletes the character before the caret (the BackSpace branch of upstream type_key). Returns the new text and caret.
 pub fn backspace(text: &str, caret: usize) -> (String, usize) {
     insert_str(text, caret.saturating_sub(1), caret, "")
 }
 
-/// Delete：删掉光标处的字符（原版 type_key 的 Delete 分支）。返回新文本与新光标。
+/// Delete: deletes the character at the caret (the Delete branch of upstream type_key). Returns the new text and caret.
 pub fn delete_at(text: &str, caret: usize) -> (String, usize) {
     insert_str(text, caret, caret.saturating_add(1), "")
 }
 
-/// 光标移动方向（原版 type_key 的 Left / Right / Home / End / Up / Down）。
+/// Caret movement direction (Left / Right / Home / End / Up / Down of upstream type_key).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CaretDir {
     Left,
@@ -78,7 +81,7 @@ pub enum CaretDir {
     Down,
 }
 
-/// 第 line 行首在字符数组里的下标（原版 rfind("\n") + 1）。
+/// Index of the start of line `line` in the character array (upstream rfind("\n") + 1).
 fn line_start(chars: &[char], line: usize) -> usize {
     let mut at = 0;
     let mut n = 0;
@@ -94,7 +97,7 @@ fn line_start(chars: &[char], line: usize) -> usize {
     at
 }
 
-/// 从 start 起这一行的行尾下标（不含换行符）。
+/// Index of the end of the line starting at start (excluding the newline).
 fn line_end(chars: &[char], start: usize) -> usize {
     chars[start..]
         .iter()
@@ -103,7 +106,7 @@ fn line_end(chars: &[char], start: usize) -> usize {
         .unwrap_or(chars.len())
 }
 
-/// 移动光标（原版 type_key 的光标分支）：`anchor` 是选区的另一端，`shift` = 扩选。
+/// Moves the caret (the caret branch of upstream type_key): `anchor` is the other end of the selection, `shift` = extend it.
 pub fn move_caret(text: &str, caret: usize, anchor: usize, dir: CaretDir, shift: bool) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
@@ -112,7 +115,7 @@ pub fn move_caret(text: &str, caret: usize, anchor: usize, dir: CaretDir, shift:
     match dir {
         CaretDir::Left | CaretDir::Right => {
             if lo != hi && !shift {
-                // 有选区：左到选区头、右到选区尾
+                // There is a selection: left goes to its head, right to its tail
                 if dir == CaretDir::Left { lo } else { hi }
             } else if dir == CaretDir::Left {
                 caret.saturating_sub(1)
@@ -150,9 +153,9 @@ pub fn move_caret(text: &str, caret: usize, anchor: usize, dir: CaretDir, shift:
     }
 }
 
-// ---------------------------------------------------------------- 命中与坐标
+// ---------------------------------------------------------------- hit testing and coordinates
 
-/// 文本框的四个角（原版 custom_corners）：u0v0, u1v0, u1v1, u0v1，拍 / 音高。
+/// The text box's four corners (upstream custom_corners): u0v0, u1v0, u1v1, u0v1, beat / pitch.
 fn corners(sh: &Shape) -> Option<[Pt; 4]> {
     if sh.pts.len() < 3 {
         return None;
@@ -161,7 +164,7 @@ fn corners(sh: &Shape) -> Option<[Pt; 4]> {
     Some([[b0, p0], [b1, p1], [b1 + b2 - b0, p1 + p2 - p0], [b2, p2]])
 }
 
-/// 屏幕点 (x, y) 在不在这个平行四边形框里（原版 inside_box）。
+/// Whether screen point (x, y) is inside this parallelogram box (upstream inside_box).
 fn inside_box(c: &[Pt; 4], v: &crate::roll::View, x: f32, y: f32) -> bool {
     let (ax, ay) = (v.x_of(c[0][0]) as f64, v.y_of(c[0][1]) as f64);
     let (bx, by) = (v.x_of(c[1][0]) as f64, v.y_of(c[1][1]) as f64);
@@ -176,7 +179,7 @@ fn inside_box(c: &[Pt; 4], v: &crate::roll::View, x: f32, y: f32) -> bool {
     (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&w)
 }
 
-/// 屏幕点下面的文本形状（从新到旧）（原版 text_at）。
+/// Text shape under a screen point (newest to oldest) (upstream text_at).
 pub fn text_at(app: &App, pos: Pos2) -> Option<usize> {
     for i in (0..app.shapes.len()).rev() {
         let sh = &app.shapes[i];
@@ -192,7 +195,7 @@ pub fn text_at(app: &App, pos: Pos2) -> Option<usize> {
     None
 }
 
-/// 屏幕位置 -> 卷帘 (beat, pitch)（与 roll::event_pt 同一套夹取）。
+/// Screen position -> roll (beat, pitch) (the same clamping as roll::event_pt).
 fn roll_pt(app: &App, pos: Pos2) -> Pt {
     let v = &app.view;
     let x = pos.x.clamp(v.kb_w, v.w);
@@ -200,7 +203,7 @@ fn roll_pt(app: &App, pos: Pos2) -> Pt {
     [v.b_of(x), v.p_of(y)]
 }
 
-/// 正在输入的（设置, 轴）（原版 typing_state）。
+/// The typing state as (settings, axes) (upstream typing_state).
 pub fn typing_state(app: &App) -> Option<(TextSettings, Axes)> {
     let ty = app.typing.as_ref()?;
     match ty.i {
@@ -212,12 +215,12 @@ pub fn typing_state(app: &App) -> Option<(TextSettings, Axes)> {
     }
 }
 
-/// 输入中文本的内容。
+/// Contents of the text being typed.
 fn typing_text(app: &App) -> Option<String> {
     typing_state(app).map(|(tx, _)| tx.text)
 }
 
-/// 选区的 (起点, 终点)；相等 = 没有选区（原版 text_selection）。
+/// The selection as (start, end); equal means no selection (upstream text_selection).
 pub fn selection(app: &App) -> (usize, usize) {
     app.typing
         .as_ref()
@@ -225,7 +228,7 @@ pub fn selection(app: &App) -> (usize, usize) {
         .unwrap_or((0, 0))
 }
 
-/// 鼠标最近的光标位置（原版 caret_at）：先按行高选行，再选行里 x 最近的位置。
+/// Caret position closest to the mouse (upstream caret_at): pick the line by row height first, then the closest x within the line.
 pub fn caret_at(app: &App, pos: Pos2) -> usize {
     let Some((tx, axes)) = typing_state(app) else {
         return 0;
@@ -244,7 +247,7 @@ pub fn caret_at(app: &App, pos: Pos2) -> usize {
     let line_of: Vec<usize> = (0..=chars.len())
         .map(|j| chars[..j].iter().filter(|&&c| c == '\n').count())
         .collect();
-    // 每行的基线 y（同一行都一样，后写的覆盖前写的）
+    // Baseline y of each line (same for the whole line; later writes overwrite earlier ones)
     let mut base: Vec<(usize, f64)> = Vec::new();
     for (j, p) in spots.iter().enumerate() {
         let line = line_of.get(j).copied().unwrap_or(0);
@@ -268,10 +271,11 @@ pub fn caret_at(app: &App, pos: Pos2) -> usize {
         .unwrap_or(chars.len())
 }
 
-// ---------------------------------------------------------------- 点击 / 拖动 / 双击
+// ---------------------------------------------------------------- click / drag / double-click
 
-/// 一次点击（原版 text_click）：点在正在输入的文本上 = 移动光标 / 扩选；否则结束输入，
-/// 点已有文本 = 在那里接着打，点空白 = 放一段新文本。
+/// A click (upstream text_click): on the text being typed = move the caret / extend the
+/// selection; otherwise end typing: on existing text = keep typing there, on empty space =
+/// place new text.
 fn press(app: &mut App, pos: Pos2, pt: Pt, shift: bool) {
     app.drag = Some(Drag::TextSel);
     let i = text_at(app, pos);
@@ -331,17 +335,17 @@ fn press(app: &mut App, pos: Pos2, pt: Pt, shift: bool) {
     }
 }
 
-/// 文本工具点击（原版 text_click）。
+/// Text tool click (upstream text_click).
 pub fn text_press(app: &mut App, pos: Pos2, pt: Pt) {
     press(app, pos, pt, false);
 }
 
-/// 文本工具点击，Shift = 从原来那头扩选。
+/// Text tool click; Shift = extend the selection from the original end.
 pub fn text_press_shift(app: &mut App, pos: Pos2, pt: Pt, shift: bool) {
     press(app, pos, pt, shift);
 }
 
-/// 点击后拖动：从按下处选到鼠标（原版 text_drag）。
+/// Drag after a click: select from the press position to the mouse (upstream text_drag).
 pub fn text_drag(app: &mut App, pos: Pos2) {
     if app.typing.is_none() {
         return;
@@ -352,7 +356,7 @@ pub fn text_drag(app: &mut App, pos: Pos2) {
     }
 }
 
-/// Select 工具双击文本：切到文本工具并接着打（原版 edit_text）。
+/// Double-click on text with the Select tool: switch to the text tool and keep typing (upstream edit_text).
 pub fn text_edit(app: &mut App, pos: Pos2) {
     app.tool = Tool::Text;
     app.draw_tool = Tool::Text;
@@ -360,7 +364,7 @@ pub fn text_edit(app: &mut App, pos: Pos2) {
     text_press(app, pos, pt);
 }
 
-/// 文本工具双击：选中鼠标下的一个词（原版 text_double）。
+/// Text tool double-click: selects the word under the mouse (upstream text_double).
 pub fn text_double(app: &mut App, pos: Pos2) {
     let same = app
         .typing
@@ -400,15 +404,16 @@ pub fn text_double(app: &mut App, pos: Pos2) {
     }
 }
 
-/// 结束输入（原版 end_typing）。
+/// Ends typing (upstream end_typing).
 pub fn end_typing(app: &mut App) {
     app.typing = None;
 }
 
-// ---------------------------------------------------------------- 文本编辑
+// ---------------------------------------------------------------- text editing
 
-/// 把文本写进正在输入的东西（原版 set_text）：有形状就地重排，只有空格时把形状删掉；
-/// 还没有形状时，第一个看得见的字符让形状长出来（同一次输入只压一次撤销步）。
+/// Writes the text into what is being typed (upstream set_text): with a shape, re-lay it out
+/// in place; whitespace-only removes the shape; without one, the first visible character grows
+/// it (one undo step per typing session).
 pub fn set_text(app: &mut App, text: &str, caret: usize) {
     let Some((mut tx, axes)) = typing_state(app) else {
         return;
@@ -421,7 +426,7 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
     let font = text::text_font(&tx);
     match app.typing.as_ref().and_then(|t| t.i) {
         Some(i) => {
-            // 这次输入的第一次改动才压撤销步（原版 ty["undo"]）
+            // The undo step is pushed on the first change of this typing (upstream ty["undo"])
             if !app.typing.as_ref().map(|t| t.undo).unwrap_or(false) {
                 // the History name: what the text was (upstream ty["was"])
                 let was = app
@@ -445,7 +450,7 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
             if text::build(sh, &tx, &font, axes) {
                 app.shapes_changed();
             } else {
-                // 看不见了：形状收起来，输入状态留着
+                // Nothing visible any more: fold the shape away and keep the typing state
                 app.shapes.remove(i);
                 if let Some(ty) = app.typing.as_mut() {
                     ty.i = None;
@@ -467,7 +472,7 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
                     ty.i = Some(idx);
                 }
                 if undo_done {
-                    // 这次输入已经压过撤销步：形状可能删过又长出来，直接接回列表
+                    // This typing already pushed an undo step: the shape may have been deleted and grown back, so splice it back into the list directly
                     app.shapes.push(sh);
                     app.select(Some(idx), false);
                     app.shapes_changed();
@@ -548,7 +553,7 @@ pub fn typing_step_name(
     }
 }
 
-/// 在光标处插入一段字符，替换选区（原版 insert_text）。
+/// Inserts a run of characters at the caret, replacing the selection (upstream insert_text).
 pub fn insert_text(app: &mut App, s: &str) {
     let Some(text) = typing_text(app) else {
         return;
@@ -558,7 +563,7 @@ pub fn insert_text(app: &mut App, s: &str) {
     set_text(app, &new, caret);
 }
 
-/// 面板改了设置后的文字输入现场（原版 retype）：设置与轴换了，文本就地重排或长出来。
+/// The typing state after the panel changed settings (upstream retype): settings and axes are replaced, the text re-lays out in place or grows anew.
 pub fn retype(app: &mut App, tx: TextSettings, axes: Axes) {
     match app.typing.as_ref().and_then(|t| t.i) {
         None => {
@@ -574,7 +579,7 @@ pub fn retype(app: &mut App, tx: TextSettings, axes: Axes) {
             if let Some(sh) = app.shapes.get_mut(i) {
                 text::build(sh, &tx, &font, axes);
             }
-            // 面板自己压过撤销步：下一次按键重新开始一步
+            // The panel pushed its own undo step: the next keystroke starts a fresh one
             if let Some(ty) = app.typing.as_mut() {
                 ty.undo = false;
             }
@@ -582,8 +587,9 @@ pub fn retype(app: &mut App, tx: TextSettings, axes: Axes) {
     }
 }
 
-/// 面板改了一次文本设置（原版 set_text_setting）：改默认值、正在输入的文本或选中的文本们，
-/// 第一行起点不动（restyle 缩放轴），然后重算音符。
+/// The panel changed a text setting (upstream set_text_setting): applies to the defaults, the
+/// text being typed or the selected texts; the first line's start stays put (restyle scales
+/// the axes), then notes are recomputed.
 pub fn set_text_setting(app: &mut App, changes: &TextChange) {
     app.text_defaults = changes.apply(&app.text_defaults);
     if app.typing.is_some() {
@@ -639,9 +645,9 @@ pub fn set_text_setting(app: &mut App, changes: &TextChange) {
     app.panel_sel = None;
 }
 
-// ---------------------------------------------------------------- 键盘
+// ---------------------------------------------------------------- keyboard
 
-/// 处理一个输入事件；true = 文本输入消费了它（原版 type_key 的 "break"）。
+/// Handles one input event; true = the text input consumed it (upstream type_key's "break").
 pub fn text_key(app: &mut App, event: &egui::Event) -> bool {
     match event {
         egui::Event::Copy => {
@@ -677,7 +683,7 @@ pub fn text_key(app: &mut App, event: &egui::Event) -> bool {
     }
 }
 
-/// 打字时的键盘入口：`typing` 激活时最先消费事件，全局快捷键让路（原版 on_key 的优先级）。
+/// Keyboard entry point while typing: events are consumed first when `typing` is active, global shortcuts step aside (the priority of upstream on_key).
 pub fn text_keyboard(app: &mut App, ctx: &egui::Context) {
     if app.typing.is_none() || ctx.egui_wants_keyboard_input() {
         return;
@@ -698,7 +704,7 @@ pub fn text_keyboard(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// 一次按键（原版 type_key）：Ctrl 组合走复制 / 撤销等，其余是编辑与光标移动。
+/// One key press (upstream type_key): Ctrl combinations go to copy / undo etc., the rest are editing and caret movement.
 fn key_event(app: &mut App, key: egui::Key, modifiers: egui::Modifiers) -> bool {
     use egui::Key;
     if modifiers.command || modifiers.ctrl {
@@ -714,7 +720,7 @@ fn key_event(app: &mut App, key: egui::Key, modifiers: egui::Modifiers) -> bool 
             Key::A => select_all(app),
             Key::C => copy_selection(app, false),
             Key::X => copy_selection(app, true),
-            // Ctrl+V 由 Event::Paste 处理；其余 Ctrl+键在打字时都不触发全局快捷键
+            // Ctrl+V is handled by Event::Paste; other Ctrl+keys never trigger global shortcuts while typing
             _ => {}
         }
         return true;
@@ -740,7 +746,7 @@ fn key_event(app: &mut App, key: egui::Key, modifiers: egui::Modifiers) -> bool 
     true
 }
 
-/// Backspace：有选区删选区，否则删光标前一个字符。
+/// Backspace: deletes the selection if there is one, otherwise the character before the caret.
 fn edit_backspace(app: &mut App) {
     let (s0, s1) = selection(app);
     if s0 != s1 {
@@ -754,7 +760,7 @@ fn edit_backspace(app: &mut App) {
     set_text(app, &new, caret);
 }
 
-/// Delete：有选区删选区，否则删光标处的字符。
+/// Delete: deletes the selection if there is one, otherwise the character at the caret.
 fn edit_delete(app: &mut App) {
     let (s0, s1) = selection(app);
     if s0 != s1 {
@@ -768,7 +774,7 @@ fn edit_delete(app: &mut App) {
     set_text(app, &new, caret);
 }
 
-/// 方向键：移动光标；Shift 时保留选区另一端。
+/// Arrow keys: move the caret; with Shift the other end of the selection is kept.
 fn move_caret_key(app: &mut App, dir: CaretDir, shift: bool) {
     let Some(text) = typing_text(app) else {
         return;
@@ -785,7 +791,7 @@ fn move_caret_key(app: &mut App, dir: CaretDir, shift: bool) {
     }
 }
 
-/// 全选正在输入的这段文本（不是所有形状）。
+/// Selects all of the text being typed (not all shapes).
 fn select_all(app: &mut App) {
     let Some(text) = typing_text(app) else {
         return;
@@ -796,7 +802,7 @@ fn select_all(app: &mut App) {
     }
 }
 
-/// Ctrl+C / Ctrl+X：有选区复制（剪切再删）；没选区时 Ctrl+C 复制选中的形状（原版行为）。
+/// Ctrl+C / Ctrl+X: with a selection, copy it (cut copies then deletes); without one, Ctrl+C copies the selected shapes (upstream behaviour).
 fn copy_selection(app: &mut App, cut: bool) {
     let (s0, s1) = selection(app);
     if s0 == s1 {
@@ -816,9 +822,9 @@ fn copy_selection(app: &mut App, cut: bool) {
     }
 }
 
-// ---------------------------------------------------------------- 绘制
+// ---------------------------------------------------------------- painting
 
-/// 画正在输入的文本：虚线框、选中字符的高亮、闪烁的光标（原版 draw_typing）。
+/// Paints the text being typed: dashed box, highlights of selected characters, blinking caret (upstream draw_typing).
 pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
     let Some(ty) = app.typing.as_ref() else {
         return;
@@ -831,7 +837,7 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
     let Some(&first) = spots.first() else {
         return;
     };
-    // em 单位 -> 屏幕
+    // em units -> screen
     let at = |x: f64, y: f64| -> Pos2 {
         let p = text::to_roll(axes, x, y);
         Pos2::new(
@@ -849,7 +855,7 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
     let blue = Color32::from_rgb(0x3a, 0x7b, 0xd5);
     let lw = app.scale().max(1.0);
     let pad = 0.08;
-    // 虚线框（跟着文字转 / 斜）
+    // Dashed box (turns / skews with the text)
     let corners = [
         at(xlo - pad, ylo - font.descent - pad),
         at(xhi + pad, ylo - font.descent - pad),
@@ -865,7 +871,7 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
             3.0 * lw,
         ));
     }
-    // 选中字符
+    // Selected characters
     let chars: Vec<char> = tx.text.chars().collect();
     let (s0, s1) = (ty.anchor.min(ty.caret), ty.anchor.max(ty.caret));
     let highlight = Color32::from_rgba_unmultiplied(0x3a, 0x7b, 0xd5, 0x70);
@@ -875,7 +881,7 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
         };
         let (x0, y) = (p[0], p[1]);
         let x1 = match (chars.get(j), spots.get(j + 1)) {
-            // 选中的换行符：画一小段
+            // A selected newline: draw a small sliver
             (Some('\n'), _) => x0 + 0.25,
             (_, Some(s)) => s[0],
             _ => x0,
@@ -888,7 +894,7 @@ pub fn paint_text_caret(app: &App, painter: &egui::Painter, rect: Rect) {
         ];
         painter.add(egui::Shape::convex_polygon(q, highlight, Stroke::NONE));
     }
-    // 光标（闪烁）
+    // Caret (blinking)
     if s0 == s1 {
         let phase = painter.ctx().input(|i| i.time) * 1000.0 / BLINK_MS as f64;
         if (phase as u64).is_multiple_of(2) {
@@ -932,7 +938,7 @@ mod tests {
         assert_eq!(typing_step_name(None, true, "?", "", String::new()), None);
     }
 
-    /// 打字编辑：在光标处插入（字符下标，中文也一样）并写进 Shape.text。
+    /// Typing edit: inserts at the caret (character indices, CJK included) and writes into Shape.text.
     #[test]
     fn typing_edits_shape_text() {
         let mut sh = Shape::new(Kind::Custom, vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
@@ -940,7 +946,7 @@ mod tests {
             text: "heo".to_string(),
             ..Default::default()
         });
-        // 在 e 后插入 "ll"：heo -> hello
+        // Insert "ll" after the e: heo -> hello
         let text0 = sh.text.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         let (text, caret) = insert_str(&text0, 2, 2, "ll");
         if let Some(tx) = sh.text.as_mut() {
@@ -948,7 +954,7 @@ mod tests {
         }
         assert_eq!(sh.text.as_ref().map(|t| t.text.as_str()), Some("hello"));
         assert_eq!(caret, 4);
-        // 中文按字符而不是字节：删掉 "l"，再在 "中" 前插一个字符
+        // CJK counts by character, not byte: delete the "l", then insert a character before the CJK one
         let (text, _) = delete_at("hello", 2);
         assert_eq!(text, "helo");
         let (text, caret) = insert_str("a中b", 1, 1, "X");
@@ -960,45 +966,45 @@ mod tests {
         assert_eq!(sh.text.as_ref().map(|t| t.text.as_str()), Some("aX中b"));
     }
 
-    /// 选区替换：选中的字符被输入替换，Backspace / Delete 按光标走。
+    /// Selection replacement: typed characters replace the selection, Backspace / Delete follow the caret.
     #[test]
     fn insert_replaces_selection_and_deletes() {
-        // 选区 1..3（"el"）换成 "Z"
+        // Selection 1..3 ("el") replaced with "Z"
         assert_eq!(insert_str("hello", 1, 3, "Z"), ("hZlo".to_string(), 2));
-        // Backspace 删光标前一个；光标 0 不动
+        // Backspace deletes before the caret; caret 0 stays put
         assert_eq!(backspace("ab", 1), ("b".to_string(), 0));
         assert_eq!(backspace("ab", 0), ("ab".to_string(), 0));
-        // Delete 删光标处；末尾不动
+        // Delete deletes at the caret; the end stays put
         assert_eq!(delete_at("ab", 0), ("b".to_string(), 0));
         assert_eq!(delete_at("ab", 2), ("ab".to_string(), 2));
     }
 
-    /// 光标移动：Left/Right 遇选区跳到选区头尾，Home/End 在行内，Up/Down 保持列。
+    /// Caret movement: Left/Right jump to the selection ends when there is a selection, Home/End stay within the line, Up/Down keep the column.
     #[test]
     fn caret_moves_like_the_original() {
         let text = "ab\ncdef\ngh";
-        // 选区 2..6（"b\ncde"）：左到其头、右到其尾
+        // Selection 2..6 ("b\ncde"): left goes to its head, right to its tail
         assert_eq!(move_caret(text, 2, 6, CaretDir::Left, false), 2);
         assert_eq!(move_caret(text, 2, 6, CaretDir::Right, false), 6);
-        // Shift 时逐字符走
+        // With Shift it moves character by character
         assert_eq!(move_caret(text, 2, 6, CaretDir::Right, true), 3);
         assert_eq!(move_caret(text, 0, 0, CaretDir::Left, false), 0);
         assert_eq!(move_caret(text, 10, 10, CaretDir::Right, false), 10);
-        // Home/End：第 2 行 "cdef" 是 3..7
+        // Home/End: line 2 "cdef" is 3..7
         assert_eq!(move_caret(text, 5, 5, CaretDir::Home, false), 3);
         assert_eq!(move_caret(text, 5, 5, CaretDir::End, false), 7);
-        // Up/Down：从第 2 行第 2 列 (4) 往下到第 3 行第 2 列 = 9；短行收在行尾
+        // Up/Down: from line 2 column 2 (4) down to line 3 column 2 = 9; a short line clamps to its end
         assert_eq!(move_caret(text, 4, 4, CaretDir::Down, false), 9);
         assert_eq!(move_caret(text, 8, 8, CaretDir::Up, false), 3);
-        // 行尾的换行处往下：列数收在下一行行尾
+        // Down from the newline at a line end: the column clamps to the next line's end
         assert_eq!(move_caret(text, 7, 7, CaretDir::Down, false), 10);
         assert_eq!(move_caret(text, 2, 2, CaretDir::Down, false), 5);
-        // 第一行往上、最后一行往下都不动
+        // Up from the first line and down from the last line don't move
         assert_eq!(move_caret(text, 1, 1, CaretDir::Up, false), 1);
         assert_eq!(move_caret(text, 9, 9, CaretDir::Down, false), 9);
     }
 
-    /// restyle：字号翻倍轴翻倍、原点不动；只改行距轴不动；换单位让字母变大而 size 数字不变。
+    /// restyle: doubling the size doubles the axes with the origin fixed; changing only leading leaves the axes alone; switching units enlarges the letters while the size number stays.
     #[test]
     fn restyle_scales_axes_and_keeps_the_start() {
         let tx = TextSettings {
@@ -1021,10 +1027,10 @@ mod tests {
             0.5,
         );
         assert_eq!(new.size, 4.0);
-        assert_eq!(a.0, axes.0, "第一行起点不动");
+        assert_eq!(a.0, axes.0, "the first line's start stays put");
         assert_eq!(a.2, [0.0, 4.0]);
 
-        // 只改行距：size 框的数字保持（shown_size），轴不动
+        // Only leading changed: the size box number stays (shown_size) and the axes don't move
         let (new, a) = text::restyle(
             &tx,
             axes,
@@ -1038,7 +1044,7 @@ mod tests {
         assert_eq!(new.size, 2.0);
         assert_eq!(a, axes);
 
-        // Font -> Rows：数字 2 不变，但 em = size / cap = 4，轴放大一倍
+        // Font -> Rows: the number 2 stays, but em = size / cap = 4, doubling the axes
         let (new, a) = text::restyle(
             &tx,
             axes,
@@ -1054,7 +1060,7 @@ mod tests {
         assert!((a.2[1] - 4.0).abs() < 1e-9);
         assert_eq!(a.0, axes.0);
 
-        // 改对齐不动轴
+        // Changing the align leaves the axes alone
         let (new, a) = text::restyle(
             &tx,
             axes,
@@ -1069,24 +1075,24 @@ mod tests {
         assert_eq!(a, axes);
     }
 
-    /// 文本框命中（原版 inside_box）：斜框里外与退化的框。
+    /// Text box hit test (upstream inside_box): inside and outside a skewed box, and a degenerate box.
     #[test]
     fn text_box_hit_test() {
         let v = crate::roll::View::default();
-        // 框：beat 0..1、pitch 60..61 的斜平行四边形
+        // Box: a skewed parallelogram over beat 0..1, pitch 60..61
         let c: [Pt; 4] = [
             [0.0, 60.0],
             [1.0, 60.0],
             [1.0 + 0.25, 60.0 + 1.0],
             [0.25, 61.0],
         ];
-        // 屏幕坐标由 View 换算：kb_w=56, ruler_h=20, sx=60, sy=6, top=127.5
+        // Screen coordinates are converted by View: kb_w=56, ruler_h=20, sx=60, sy=6, top=127.5
         let at = |b: f64, p: f64| (v.x_of(b), v.y_of(p));
         let (x, y) = at(0.5, 60.5);
         assert!(inside_box(&c, &v, x, y));
-        let (x, y) = at(1.5, 60.5); // u 在框外
+        let (x, y) = at(1.5, 60.5); // u is outside the box
         assert!(!inside_box(&c, &v, x, y));
-        // 退化的框（三点一线）不算命中
+        // A degenerate box (three collinear points) is not a hit
         let flat: [Pt; 4] = [[0.0, 60.0], [1.0, 60.0], [2.0, 60.0], [1.0, 60.0]];
         let (x, y) = at(0.5, 60.0);
         assert!(!inside_box(&flat, &v, x, y));

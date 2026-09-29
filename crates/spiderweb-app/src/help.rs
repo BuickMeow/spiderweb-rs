@@ -1,6 +1,7 @@
-//! 帮助与提示（原版 window/help.py + files/about.py 的 VERSION / WEBSITE）：
-//! Tips（首次使用的弹窗，看过的主题持久化到程序目录 tips.json）、帮助窗口（F1，可搜索、
-//! 按工具定位、可滚动）、侧栏底部的当前工具帮助。
+//! Help and tips (upstream window/help.py + VERSION / WEBSITE of files/about.py):
+//! Tips (first-use popups; seen topics persist to tips.json in the program directory), the
+//! help window (F1, searchable, positioned by tool, scrollable), and the current tool's help
+//! at the bottom of the side panel.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,16 +13,16 @@ use serde::{Deserialize, Serialize};
 use crate::app::{App, Tool, VERSION};
 use crate::help_texts::{self, Topic};
 
-/// 新版 / 源码 / 问题反馈地址（原版 files/about.py 的 WEBSITE）。
+/// New versions / source / issue tracker URL (WEBSITE of upstream files/about.py).
 pub const WEBSITE: &str = "https://github.com/UnPrioritized/Spiderweb";
-/// 看过的 tip 存这里（程序目录，原版存在 autosave 的窗口设置里）。
+/// Seen tips are stored here (program directory; upstream keeps them in the autosave window settings).
 pub const TIPS_FILE: &str = "tips.json";
-/// 启动后延迟弹欢迎 tip（原版 `after(800, ...)`）。
+/// Delay before the welcome tip pops up after startup (upstream `after(800, ...)`).
 pub const WELCOME_DELAY: Duration = Duration::from_millis(800);
 
-// ---------------------------------------------------------------- 持久化的 tips
+// ---------------------------------------------------------------- persisted tips
 
-/// tips.json 的内容。
+/// Contents of tips.json.
 #[derive(Serialize, Deserialize)]
 struct TipsFile {
     #[serde(default)]
@@ -43,23 +44,23 @@ impl Default for TipsFile {
     }
 }
 
-/// 哪些 tip 看过、是否显示，以及当前弹窗（原版 help.Tips）。
+/// Which tips were seen, whether they are shown, and the current popup (upstream help.Tips).
 pub struct Tips {
-    /// 看过的主题 id。
+    /// IDs of seen topics.
     pub seen: BTreeSet<String>,
-    /// 首次使用的 tip 开关。
+    /// First-use tips switch.
     pub on: bool,
-    /// 正在弹的主题 id。
+    /// ID of the topic currently popping up.
     pub popup: Option<String>,
     /// (topic, force) shown one after another once the open tip is closed (upstream waiting).
     pub waiting: Vec<(String, bool)>,
-    /// 启动后到点弹欢迎 tip（None = 已经试过了）。
+    /// Time the welcome tip pops up after startup (None = already tried).
     pub welcome_at: Option<Instant>,
     path: PathBuf,
 }
 
 impl Tips {
-    /// 从程序目录读 tips.json（没有 / 坏了就用默认：全都没看过、显示）。
+    /// Reads tips.json from the program directory (missing / broken falls back to defaults: nothing seen, tips on).
     pub fn new(base: &Path) -> Self {
         let path = base.join(TIPS_FILE);
         let file = std::fs::read_to_string(&path)
@@ -76,12 +77,12 @@ impl Tips {
         }
     }
 
-    /// tips.json 的完整路径。
+    /// Full path to tips.json.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// 写回 tips.json（写不了就算了，下次再说）。
+    /// Writes tips.json back (if the write fails, so be it — next time).
     pub fn save(&self) {
         let file = TipsFile {
             seen: self.seen.iter().cloned().collect(),
@@ -92,12 +93,12 @@ impl Tips {
         }
     }
 
-    /// 弹这个主题的 tip（看过了 / 关掉了就不弹）。正弹着别的主题时直接换掉（被换掉的稍后补弹）。
+    /// Pops up the tip for this topic (skipped if seen / turned off). Replaces another topic's popup directly (the replaced one comes back later).
     pub fn show(&mut self, topic: &str) {
         self.show_ex(topic, false, false, false);
     }
 
-    /// 同 [`Tips::show`]，但正弹着别的主题时排队等它关掉（原版 wait=True）。
+    /// Same as [`Tips::show`], but if another topic is popping up, queue and wait for it to close (upstream wait=True).
     pub fn show_waiting(&mut self, topic: &str) {
         self.show_ex(topic, true, false, false);
     }
@@ -131,7 +132,7 @@ impl Tips {
         self.save();
     }
 
-    /// “Got it”：还没看过的下一个主题（NEXT）接着弹，否则关掉。
+    /// "Got it": pops the next unseen topic (NEXT) if there is one, otherwise closes.
     pub fn got_it(&mut self) {
         let next = self
             .popup
@@ -143,7 +144,7 @@ impl Tips {
         }
     }
 
-    /// 关掉当前 tip（窗口 X / Esc），排队的接着来（看过的不再弹）。
+    /// Closes the current tip (window X / Esc); queued ones come next (seen ones don't pop again).
     pub fn close(&mut self) {
         self.popup = None;
         while self.popup.is_none() && !self.waiting.is_empty() {
@@ -152,7 +153,7 @@ impl Tips {
         }
     }
 
-    /// “Show all tips again”：全都没看过、重新打开（原版 reset_tips）。
+    /// "Show all tips again": marks everything unseen and turns tips back on (upstream reset_tips).
     pub fn reset(&mut self) {
         self.seen.clear();
         self.on = true;
@@ -160,21 +161,21 @@ impl Tips {
     }
 }
 
-// ---------------------------------------------------------------- 搜索
+// ---------------------------------------------------------------- search
 
-/// 一个主题的全部可搜索文字（原版 topic_words）。
+/// All searchable text of a topic (upstream topic_words).
 pub fn topic_words(t: &Topic) -> String {
     format!("{} {} {} {}", t.title, t.tip, t.text, t.words).to_lowercase()
 }
 
-/// 搜索：每个词都要出现在主题里（原版 HelpWindow.matches）。
+/// Search: every word must appear in the topic (upstream HelpWindow.matches).
 pub fn topic_matches(t: &Topic, query: &str) -> bool {
     query
         .split_whitespace()
         .all(|w| topic_words(t).contains(&w.to_lowercase()))
 }
 
-/// 过滤后的主题（保持 help_texts::TOPICS 顺序，空搜索 = 全部）。
+/// Filtered topics (help_texts::TOPICS order, empty query = all).
 pub fn filter_topics(query: &str) -> Vec<&'static Topic> {
     help_texts::TOPICS
         .iter()
@@ -182,7 +183,7 @@ pub fn filter_topics(query: &str) -> Vec<&'static Topic> {
         .collect()
 }
 
-// ---------------------------------------------------------------- 工具 / 侧栏
+// ---------------------------------------------------------------- tools / side panel
 
 /// The topics a tool's tip uses (upstream TOOL_TIPS: TOOL_TOPICS + DRAWER_TOOL_TOPICS). A tool tip
 /// replacing another tip doesn't come back later.
@@ -202,7 +203,7 @@ fn is_tool_tip(id: &str) -> bool {
         )
 }
 
-/// 工具 -> tip 主题 id（原版 TOOL_TOPICS；Square / Circle / Triangle 共用 box）。
+/// Tool -> tip topic id (upstream TOOL_TOPICS; Square / Circle / Triangle share box).
 pub fn tool_topic(tool: Tool) -> &'static str {
     let key = match tool {
         Tool::Select => "select",
@@ -221,7 +222,7 @@ pub fn tool_topic(tool: Tool) -> &'static str {
     help_texts::tool_topic(key)
 }
 
-/// 侧栏底部的当前工具帮助（原版 update_side_help）。
+/// Help for the current tool at the bottom of the side panel (upstream update_side_help).
 pub fn side_help_text(app: &App) -> String {
     match help_texts::by_id(tool_topic(app.tool)) {
         Some(t) => rust_i18n::t!("help.side", title = t.title, text = t.text).to_string(),
@@ -229,7 +230,7 @@ pub fn side_help_text(app: &App) -> String {
     }
 }
 
-/// 侧栏底部一块：当前工具的帮助 + 打开帮助窗口的按钮。
+/// Bottom block of the side panel: help for the current tool + a button to open the help window.
 pub fn side_help_ui(app: &mut App, ui: &mut egui::Ui) {
     if help_texts::by_id(tool_topic(app.tool)).is_none() {
         return;
@@ -251,17 +252,17 @@ pub fn side_help_ui(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// 帮助窗口的状态。
+/// Help window state.
 #[derive(Default)]
 pub struct HelpState {
     pub open: bool,
-    /// 正在看的主题 id。
+    /// ID of the topic being viewed.
     pub topic: Option<String>,
-    /// 搜索框。
+    /// Search box.
     pub query: String,
 }
 
-/// 打开帮助窗口（原版 open_help）：topic 为 None 时定位到当前工具的主题。
+/// Opens the help window (upstream open_help): with topic None, jumps to the current tool's topic.
 pub fn open_help(app: &mut App, topic: Option<&str>) {
     let id = topic.unwrap_or_else(|| tool_topic(app.tool));
     let Some(_) = help_texts::by_id(id) else {
@@ -269,13 +270,13 @@ pub fn open_help(app: &mut App, topic: Option<&str>) {
     };
     app.help.open = true;
     app.help.topic = Some(id.to_string());
-    // 搜索词会把目标主题滤掉的话清空搜索（原版 open_topic）。
+    // Clear the search if it would filter out the target topic (upstream open_topic).
     if !app.help.query.is_empty() && !filter_topics(&app.help.query).iter().any(|t| t.id == id) {
         app.help.query.clear();
     }
 }
 
-// ---------------------------------------------------------------- 界面
+// ---------------------------------------------------------------- UI
 
 /// Typing anywhere in the Help window types into the search box (upstream HelpWindow.type_to_search):
 /// printable characters go in, Backspace takes the last one off.
@@ -295,7 +296,7 @@ fn type_query(query: &mut String, events: &[egui::Event]) {
     }
 }
 
-/// 帮助窗口的界面（每帧调用；没打开就什么都不做）。
+/// Help window UI (called every frame; does nothing when closed).
 pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     if !app.help.open {
         return;
@@ -306,7 +307,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
         type_query(&mut app.help.query, &events);
     }
     let found = filter_topics(&app.help.query);
-    // 当前主题被搜索滤掉 / 还没选过：选第一个（原版 fill_list）。
+    // Current topic filtered out by the search / none picked yet: select the first (upstream fill_list).
     let keep = app
         .help
         .topic
@@ -323,7 +324,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut reset = false;
     let mut link: Option<&'static str> = None;
 
-    // 主体至少这么高：egui 的窗口会缩到内容高度，不设的话会比原版的 900x620 矮很多
+    // Body must be at least this tall: egui windows shrink to content height, and without this they would be much shorter than upstream's 900x620
     let body_h = (ctx.viewport_rect().height() * 0.72).clamp(520.0, 900.0);
     egui::Window::new(rust_i18n::t!("help.title", version = VERSION))
         .open(&mut open)
@@ -419,7 +420,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// 帮助窗口右侧：一个小节的标题、正文、See also（原版 HelpWindow.show）。
+/// Right side of the help window: a topic's title, body and See also (upstream HelpWindow.show).
 fn show_topic(
     ui: &mut egui::Ui,
     id: Option<&str>,
@@ -464,9 +465,9 @@ fn show_topic(
     }
 }
 
-/// tip 弹窗与欢迎 tip 的延迟（每帧调用）。
+/// The tip popup and the welcome tip delay (called every frame).
 pub fn tips_ui(app: &mut App, ctx: &egui::Context) {
-    // 启动后过一小会儿弹欢迎 tip（原版 after(800)）；到点前安排重绘。
+    // Pop the welcome tip shortly after startup (upstream after(800)); schedule a repaint until then.
     if let Some(at) = app.tips.welcome_at {
         let elapsed = at.elapsed();
         if elapsed >= WELCOME_DELAY {
@@ -539,15 +540,15 @@ mod tests {
         assert!(filter_topics("zzzzz").is_empty());
         let ids: Vec<&str> = filter_topics("funnel curve").iter().map(|t| t.id).collect();
         assert!(ids.contains(&"funnel_curves"));
-        // 搜索词（words 字段）也参与匹配
+        // Search words (the words field) take part in matching too
         assert!(
             filter_topics("unlink")
                 .iter()
                 .any(|t| t.id == "funnel_links")
         );
-        // 所有词都要在：没有主题同时提到 eraser 和 velocity
+        // All words must be present: no topic mentions both eraser and velocity
         assert!(filter_topics("eraser velocity").is_empty());
-        let funnel = help_texts::by_id("funnel").expect("funnel 主题");
+        let funnel = help_texts::by_id("funnel").expect("funnel topic");
         assert!(topic_matches(funnel, "FUNNEL"));
         assert!(topic_matches(funnel, "  wall   gate "));
         assert!(!topic_matches(funnel, "wall tunisia"));
@@ -602,7 +603,7 @@ mod tests {
         assert!(tips.seen.contains("welcome"));
         assert!(std::fs::read_to_string(tips.path()).is_ok());
 
-        // 重开：看过的不再弹
+        // Reopen: seen tips don't pop again
         let mut again = Tips::new(tmp.path());
         assert!(again.seen.contains("welcome"));
         again.show("welcome");
@@ -617,7 +618,7 @@ mod tests {
         tips.got_it();
         assert_eq!(tips.popup.as_deref(), Some("view"));
 
-        // wait：正弹着别的先排队，关掉后接着弹
+        // wait: another popup is open, so queue and show after it closes
         tips.close();
         assert!(tips.popup.is_none());
         tips.show("line");
@@ -627,7 +628,7 @@ mod tests {
         tips.close();
         assert_eq!(tips.popup.as_deref(), Some("funnel"));
 
-        // 关掉 tips 就不弹、也不记
+        // With tips off, nothing pops and nothing is recorded
         let off = crate::test_support::TempDir::new("tips-off");
         let mut tips = Tips::new(off.path());
         tips.on = false;
@@ -635,7 +636,7 @@ mod tests {
         assert!(tips.popup.is_none());
         assert!(!tips.seen.contains("line"));
 
-        // reset：全都没看过
+        // reset: everything unseen
         tips.reset();
         assert!(tips.on && tips.seen.is_empty());
     }

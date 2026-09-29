@@ -1,4 +1,4 @@
-//! 工具栏与右侧面板（原版 window/app.py 的 _build / _build_side 及各面板）。
+//! Toolbar and right side panel (upstream window/app.py's _build / _build_side and the panels).
 
 use eframe::egui;
 
@@ -32,7 +32,7 @@ fn domino_start_text(start: DominoStart) -> String {
     .to_string()
 }
 
-/// 字重选择（fonts.WEIGHTS）。
+/// Font weight choices (fonts.WEIGHTS).
 const WEIGHTS: [(i32, &str); 9] = [
     (100, "Thin"),
     (200, "Extra light"),
@@ -45,7 +45,7 @@ const WEIGHTS: [(i32, &str); 9] = [
     (900, "Black"),
 ];
 
-/// 最接近的字重名（原版 sync_text 的 min(WEIGHTS, ...)）。
+/// Closest weight name (the min(WEIGHTS, ...) of upstream sync_text).
 fn weight_name(w: i32) -> &'static str {
     WEIGHTS
         .iter()
@@ -54,7 +54,7 @@ fn weight_name(w: i32) -> &'static str {
         .unwrap_or("Regular")
 }
 
-/// 面板的一行数字框（原版 ENTRIES 的 label / unit / range / scrub 步长）。
+/// A number row in the panel (label / unit / range / scrub step of upstream ENTRIES).
 struct NumberRow {
     label: String,
     unit: String,
@@ -95,14 +95,14 @@ fn parse_int(text: &str, lo: i64, hi: i64) -> Option<i64> {
     spiderweb_io::mathexpr::calc_int(text, Some(lo), Some(hi)).ok()
 }
 
-/// 自由笔面板要改的东西：一个 free 形状，或唯一选中的自定义形状里被拾取的 free 笔画。
+/// What the freehand panel acts on: a free shape, or the picked free stroke of the only selected custom shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FreeTarget {
     Shape(usize),
     Stroke(usize, usize),
 }
 
-/// 能带肿瘤的形状（原版 LINE_KINDS）。
+/// Shapes that can carry tumours (upstream LINE_KINDS).
 fn tumour_kind(kind: Kind) -> bool {
     matches!(
         kind,
@@ -110,7 +110,7 @@ fn tumour_kind(kind: Kind) -> bool {
     )
 }
 
-/// 主题的 tip 文案（工具栏按钮的悬浮提示；找不到就是空）。
+/// A topic's tip text (tooltip of toolbar buttons; empty when not found).
 fn tip_of(topic: &str) -> &'static str {
     crate::help_texts::by_id(topic).map(|t| t.tip).unwrap_or("")
 }
@@ -125,7 +125,7 @@ impl App {
                 }
                 let selected = self.tool == tool;
                 let text = format!("{} ({})", tool.ui_label(), tool.hotkey().to_uppercase());
-                // 按钮上显示这个工具的 tip（原版 widgets.Tooltip）
+                // Show this tool's tip on the button (upstream widgets.Tooltip)
                 let tip = tip_of(crate::help::tool_topic(tool));
                 if ui
                     .selectable_label(selected, text)
@@ -138,7 +138,7 @@ impl App {
                     }
                     self.tool = tool;
                     self.cancel_draft();
-                    // 换工具时弹这个工具的 tip（看过的不会再弹）
+                    // Pop this tool's tip when switching tools (seen ones don't pop again)
                     self.tips.show(crate::help::tool_topic(tool));
                 }
             }
@@ -207,7 +207,7 @@ impl App {
             self.vel_text = [fmt_num(t.vel0), fmt_num(t.vel1)];
             self.refresh_custom_gate_text();
             self.sync_funnel_text();
-            // 第一次选中某种形状：显示怎么编辑它（原版 sync_panel）
+            // First time a kind of shape is selected: show how to edit it (upstream sync_panel)
             self.show_kind_tip();
         }
         self.project_section(ui);
@@ -220,11 +220,11 @@ impl App {
         self.custom_section(ui);
         self.points_section(ui);
         self.funnel_section(ui);
-        // 侧栏底部：当前工具的帮助
+        // Bottom of the side panel: help for the current tool
         crate::help::side_help_ui(self, ui);
     }
 
-    /// 选中形状的种类对应的 tip（custom / funnel / free 各一个）。
+    /// The tip for the selected shapes' kind (one each for custom / funnel / free).
     fn show_kind_tip(&mut self) {
         let kinds: Vec<Kind> = self
             .sels
@@ -243,10 +243,10 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------ 自由笔
+    // ------------------------------------------------------------ freehand
 
-    /// 面板里"画整齐"要改的东西：选中的 free 形状；没有就找唯一选中的自定义形状
-    /// 里被拾取的 free 笔画（原版 free_targets）。
+    /// What "straighten" in the panel acts on: selected free shapes; if none, the picked
+    /// free stroke of the only selected custom shape (upstream free_targets).
     fn free_targets(&self) -> Vec<FreeTarget> {
         let shapes: Vec<FreeTarget> = self
             .sels
@@ -284,14 +284,14 @@ impl App {
         }
     }
 
-    /// 自由笔面板（原版 panel_freehand）：Straighten 灵敏度，0 = 保持原样。
+    /// Freehand panel (upstream panel_freehand): Straighten sensitivity, 0 = leave as is.
     fn freehand_section(&mut self, ui: &mut egui::Ui) {
         let targets = self.free_targets();
         if targets.is_empty() && !self.sels.is_empty() {
-            return; // 选中的都不是自由笔
+            return; // nothing selected is freehand
         }
         if targets.is_empty() && self.tool != Tool::Free {
-            return; // 没选东西：只有 Freehand 工具下才给新笔画调灵敏度
+            return; // nothing selected: sensitivity for new strokes is only adjustable with the Freehand tool
         }
         let mut value = match targets.first() {
             Some(FreeTarget::Shape(i)) => self
@@ -334,15 +334,15 @@ impl App {
         }
     }
 
-    /// 改了 Straighten：新笔画用这个值；选中目标写回（free 形状 / 自定义形状的自由笔画）。
+    /// Straighten changed: new strokes use this value; selected targets are written back (free shapes / free strokes of custom shapes).
     fn set_free_smooth(&mut self, value: i64, targets: &[FreeTarget], fresh: bool) {
-        self.free_smooth = value; // 新自由笔画也用它（原版 free_smooth）
+        self.free_smooth = value; // new free strokes use it too (upstream free_smooth)
         if targets.is_empty() {
             self.schedule_autosave();
             return;
         }
         if fresh {
-            self.edit_key = None; // 新一次拖动 = 新的一步撤销
+            self.edit_key = None; // a fresh drag = a new undo step
         }
         let key = format!("smooth:{:?}", self.sels);
         if self.edit_key.as_deref() != Some(key.as_str()) {
@@ -385,9 +385,9 @@ impl App {
         self.shapes_changed();
     }
 
-    // ------------------------------------------------------------ 肿瘤
+    // ------------------------------------------------------------ tumours
 
-    /// 当前屏幕比例：几个 beat 对应一个 key（原版 `roll.sy / roll.sx`，兜底 0.25）。
+    /// Current screen ratio: how many beats correspond to one key (upstream `roll.sy / roll.sx`, fallback 0.25).
     pub(crate) fn tumour_k(&self) -> f64 {
         if self.view.sx != 0.0 {
             self.view.sy / self.view.sx
@@ -396,7 +396,7 @@ impl App {
         }
     }
 
-    /// 面板要改的肿瘤形状：选中的 line / poly / free / curve / arc（原版 tumour_targets）。
+    /// Tumour shapes the panel acts on: selected line / poly / free / curve / arc (upstream tumour_targets).
     pub(crate) fn tumour_targets(&self) -> Vec<usize> {
         self.sels
             .iter()
@@ -470,9 +470,9 @@ impl App {
         text
     }
 
-    // ------------------------------------------------------------ 自定义形状面板
+    // ------------------------------------------------------------ custom shape panel
 
-    /// 面板要改的自定义形状：选中的那些；没选中时是"新形状的默认设置"（原版 custom_targets）。
+    /// Custom shapes the panel acts on: the selected ones; with nothing selected it is "default settings for new shapes" (upstream custom_targets).
     fn custom_targets(&self) -> Vec<usize> {
         self.sels
             .iter()
@@ -485,7 +485,7 @@ impl App {
             .collect()
     }
 
-    /// 选中变化时把 gate 文本刷成当前形状的 ticks（原版 sync_custom）。
+    /// Refreshes the gate text to the current shape's ticks when the selection changes (upstream sync_custom).
     fn refresh_custom_gate_text(&mut self) {
         let gate = self
             .custom_targets()
@@ -557,7 +557,7 @@ impl App {
             && placed
                 .iter()
                 .any(|&i| self.shapes.get(i).is_some_and(|s| s.notes.is_some()));
-        // 轮廓的缺口数（1.2.0：Fill / Spam 会用直线全部补上，这里只用于提示）
+        // Number of gaps in the outline (1.2.0: Fill / Spam closes them all with straight lines; only used as a hint here)
         let gaps = if placed_mode {
             placed
                 .iter()
@@ -573,7 +573,7 @@ impl App {
                 .unwrap_or(0)
         };
         let spam = matches!(fill, Fill::Spam | Fill::OutlineSpam);
-        let alignable = spam && ends != Ends::Stretch; // 拉伸的门限正好填满每段：起点无所谓
+        let alignable = spam && ends != Ends::Stretch; // the Stretch gate exactly fills each piece: the start doesn't matter
 
         let mut pick: Option<String> = None;
         let mut new_fill: Option<Fill> = None;
@@ -654,7 +654,7 @@ impl App {
                         egui::TextEdit::singleline(&mut self.custom_gate_text).desired_width(70.0),
                     );
                     if resp.lost_focus() {
-                        apply_gate = true; // Enter 或点到别处都应用（原版 Return / FocusOut）
+                        apply_gate = true; // Enter or clicking elsewhere applies it (upstream Return / FocusOut)
                     }
                     ui.label(rust_i18n::t!("panel.custom.gate_hint"));
                 });
@@ -837,7 +837,7 @@ impl App {
         }
     }
 
-    /// 面板里选了一个模板（内置或图形库里的）：新形状用它，选中的自定义形状也换成它。
+    /// A template (built-in or from the shape library) was picked in the panel: new shapes use it and selected custom shapes are switched to it.
     fn pick_custom_template(&mut self, name: &str, placed: &[usize]) {
         let Some((strokes, _)) = crate::roll_live::builtin_template(&self.library_dir, name) else {
             self.status = rust_i18n::t!("panel.custom.error_read", name = name).to_string();
@@ -903,7 +903,7 @@ impl App {
         self.shapes_changed();
     }
 
-    /// "Overlaps cancel out"：勾上 = union 关（重叠抵消，even-odd）。
+    /// "Overlaps cancel out": checked = union off (overlaps cancel, even-odd).
     fn set_custom_union(&mut self, union: bool, placed: &[usize]) {
         if placed.is_empty() {
             self.custom_defaults.union = union;
@@ -934,9 +934,9 @@ impl App {
         self.shapes_changed();
     }
 
-    /// gate 文本框（ticks，mathexpr 表达式）应用成形状的拍数（原版 on_gate）。
+    /// Applies the gate text box (ticks, a mathexpr expression) as the shape's beat count (upstream on_gate).
     fn apply_custom_gate(&mut self, placed: &[usize]) {
-        // 输入不合法：原版只把输入框标红（Bad.TEntry），没有提示文字
+        // Invalid input: upstream just marks the box red (Bad.TEntry) with no message
         let Ok(ticks) =
             spiderweb_io::mathexpr::calc_int(&self.custom_gate_text, Some(1), Some(10_000_000))
         else {
@@ -991,7 +991,7 @@ impl App {
                             self.on_project_change();
                         }
                         ui.end_row();
-                        // 128 / 256 键（1.2.0 的 Project -> Keys）
+                        // 128 / 256 keys (Project -> Keys in 1.2.0)
                         ui.label(rust_i18n::t!("panel.project.keys"));
                         let keys_before = self.keys;
                         egui::ComboBox::from_id_salt("keys")
@@ -1351,9 +1351,9 @@ impl App {
         self.shapes_changed();
     }
 
-    // ------------------------------------------------------------ 文本面板
+    // ------------------------------------------------------------ text panel
 
-    /// 选中的文本形状（按下标排序）（原版 text_shapes）。
+    /// Selected text shapes (sorted by index) (upstream text_shapes).
     pub fn text_shapes(&self) -> Vec<usize> {
         self.sels
             .iter()
@@ -1367,8 +1367,9 @@ impl App {
             .collect()
     }
 
-    /// 面板显示的（设置, size 框的数字）：正在输入的、选中的第一段文本，或新文本的默认值
-    /// （原版 text_current；size 跟着轴走，见 shown_size）。
+    /// What the panel shows (settings, size box number): the text being typed, the first
+    /// selected text, or the defaults for new text (upstream text_current; size follows the
+    /// axes, see shown_size).
     fn text_current(&self) -> (TextSettings, f64) {
         if let Some((tx, axes)) = crate::roll_text::typing_state(self) {
             let cap = text::text_font(&tx).cap;
@@ -1389,7 +1390,7 @@ impl App {
         (self.text_defaults.clone(), self.text_defaults.size)
     }
 
-    /// 文本面板（原版 panel_text）：字体 / 字号 / 字重 / 字距 / 行距 / 对齐 / 阈值 / 加粗。
+    /// Text panel (upstream panel_text): font / size / weight / letter spacing / line spacing / align / threshold / bold.
     fn text_section(&mut self, ui: &mut egui::Ui) {
         let text_shapes = self.text_shapes();
         if self.typing.is_none() && self.tool != Tool::Text && text_shapes.is_empty() {
@@ -1646,9 +1647,9 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------ 漏斗
+    // ------------------------------------------------------------ funnel
 
-    /// 漏斗面板要作用的形状：选中的漏斗（原版 funnel_targets）。
+    /// Shapes the funnel panel acts on: selected funnels (upstream funnel_targets).
     fn funnel_target_indices(&self) -> Vec<usize> {
         self.sels
             .iter()
@@ -1662,7 +1663,7 @@ impl App {
             .collect()
     }
 
-    /// gate 文本框跟着选中的漏斗（或默认设置）刷新（原版 sync_funnel 的文本部分）。
+    /// Refreshes the gate text boxes to the selected funnel (or the defaults) (the text part of upstream sync_funnel).
     pub fn sync_funnel_text(&mut self) {
         let cur = self
             .selected()
@@ -1673,15 +1674,15 @@ impl App {
         self.funnel_text = [fmt_ticks(cur.gate0, ppq), fmt_ticks(cur.gate1, ppq)];
     }
 
-    /// 漏斗设置面板（原版 panel_funnel._build_funnel / sync_funnel）：填充、墙、gate、
-    /// 变化方式与跟随、曲线预设 / 公式、翻里翻外与首尾对调。
+    /// Funnel settings panel (upstream panel_funnel._build_funnel / sync_funnel): fill, wall,
+    /// gate, variation and follow, curve presets / formulas, inside-out and swapping the ends.
     fn funnel_section(&mut self, ui: &mut egui::Ui) {
         let targets = self.funnel_target_indices();
         if targets.is_empty() && !self.sels.is_empty() {
             return;
         }
         if targets.is_empty() && self.tool != Tool::Funnel {
-            return; // 没选东西：只有 Funnel 工具下才给新漏斗调设置
+            return; // nothing selected: settings for new funnels are only adjustable with the Funnel tool
         }
         let cur = targets
             .first()
@@ -1747,7 +1748,7 @@ impl App {
                 });
                 ui.horizontal_wrapped(|ui| {
                     ui.label(rust_i18n::t!("panel.funnel.wall"));
-                    // 反向漏斗的墙在前头：两种说法跟着换（原版 sync_funnel）
+                    // A reversed funnel's wall is at the front: swap the two wordings accordingly (upstream sync_funnel)
                     let (end_text, start_text) = if reversed {
                         (
                             rust_i18n::t!("panel.funnel.notes_start_on_it"),
@@ -1893,7 +1894,7 @@ impl App {
         self.funnel_formula = formula_text;
     }
 
-    /// 改选中漏斗（或没选东西时的默认设置）的漏斗设置（原版 set_funnel）。
+    /// Changes funnel settings for the selected funnels (or the defaults when nothing is selected) (upstream set_funnel).
     fn apply_funnel_settings(&mut self, s: FunnelSettings) {
         let targets = self.funnel_target_indices();
         if !targets.is_empty() {
@@ -1919,7 +1920,7 @@ impl App {
         self.shapes_changed();
     }
 
-    /// 预设曲线（CURVE_PRESETS）给高亮的曲线（原版 apply_formula 的预设部分）。
+    /// Applies a preset curve (CURVE_PRESETS) to the highlighted curve (the preset part of upstream apply_formula).
     fn apply_funnel_preset(&mut self, i: usize) {
         let Some((_, text)) = CURVE_PRESETS.get(i) else {
             return;
@@ -1930,7 +1931,7 @@ impl App {
         };
         let shape = match text {
             None => {
-                // 默认曲线不会算不出来（原版 preset_curve(None) 同样不报错）
+                // The default curve cannot fail to compute (upstream preset_curve(None) also never errors)
                 let Ok(c) = funnel::preset_curve(None) else {
                     return;
                 };
@@ -1955,7 +1956,7 @@ impl App {
         self.apply_curve_shape(shape);
     }
 
-    /// 自己写的公式给高亮的曲线（原版 apply_formula 的公式部分）。
+    /// Applies a hand-written formula to the highlighted curve (the formula part of upstream apply_formula).
     fn apply_funnel_formula(&mut self, text: &str) {
         if text.trim().is_empty() {
             return;
@@ -1985,7 +1986,7 @@ impl App {
         }
     }
 
-    /// 把一条曲线形状给高亮的曲线（原版 set_curves：没高亮时什么都不做，也不提示）。
+    /// Gives a curve shape to the highlighted curve (upstream set_curves: does nothing and shows nothing when nothing is highlighted).
     fn apply_curve_shape(&mut self, shape: FunnelCurve) {
         if self
             .funnel_parts()
@@ -2002,7 +2003,7 @@ fn fmt_num(v: f64) -> String {
     spiderweb_io::mathexpr::fmt(v)
 }
 
-/// gate 以 tick 显示（原版 fmt(round(t[key] * ppq, 3))）。
+/// Gate shown in ticks (upstream fmt(round(t[key] * ppq, 3))).
 fn fmt_ticks(gate: f64, ppq: f64) -> String {
     spiderweb_io::mathexpr::fmt((gate * ppq * 1000.0).round() / 1000.0)
 }

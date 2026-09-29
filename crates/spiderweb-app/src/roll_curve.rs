@@ -1,6 +1,8 @@
-//! 曲线工具与曲线编辑（钢笔）：把手枚举、命中、拖点、增删锚点、对称跟随与把手绘制。
-//! 对应原版 roll/roll_curve.py 的 CurveEditing 与 roll_draw.py 的 draw_handles 曲线分支；
-//! 编辑逻辑委托给 spiderweb_core::bezier（与 Python 的 notes/bezier.py 同一套）。
+//! Curve tool and curve editing (pen): handle enumeration, hit testing, point dragging,
+//! anchor add/remove, symmetric following and handle drawing.
+//! Corresponds to upstream roll/roll_curve.py's CurveEditing and the curve branch of
+//! roll_draw.py's draw_handles; editing logic is delegated to spiderweb_core::bezier
+//! (the same set as Python's notes/bezier.py).
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
@@ -12,15 +14,15 @@ use spiderweb_core::shape::{Kind, Shape};
 use crate::app::App;
 use crate::roll::View;
 
-/// 曲线把手类型（锚点 / 手柄 / 两端），核心 HandleKind 的别名。
+/// Curve handle kind (anchor / control handle / end), an alias for core HandleKind.
 pub type CurveHandle = HandleKind;
 
-/// 手柄线与手柄的颜色（原版 HANDLE_COLOR）。
+/// Color of handle lines and handles (upstream HANDLE_COLOR).
 const HANDLE_COLOR: Color32 = Color32::from_rgb(0x00, 0x50, 0xd0);
-/// 曲线两端的方块描边（原版 #c00000）。
+/// Outline of the squares at the curve's ends (upstream #c00000).
 const END_COLOR: Color32 = Color32::from_rgb(0xc0, 0x00, 0x00);
 
-/// View 的 (to_screen, from_screen) 闭包（原版 to_xy / from_xy）。
+/// The View's (to_screen, from_screen) closures (upstream to_xy / from_xy).
 fn view_maps(
     view: &View,
 ) -> (
@@ -47,7 +49,7 @@ fn curve_point_handles(sh: &Shape) -> Vec<(usize, Pt, CurveHandle)> {
         .collect()
 }
 
-/// 要显示的把手 `(点, 种类)`（原版 pen_handles）。
+/// Handles to display as `(point, kind)` (upstream pen_handles).
 fn curve_handle_points(sh: &Shape) -> Vec<(Pt, CurveHandle)> {
     curve_point_handles(sh)
         .into_iter()
@@ -55,8 +57,9 @@ fn curve_handle_points(sh: &Shape) -> Vec<(Pt, CurveHandle)> {
         .collect()
 }
 
-/// 屏幕命中：`near` 像素内离 (x, y) 最近的把手点号。
-/// `any` = Select 工具：两端也能拖；否则两端留给"从端点起新建曲线"（原版 curve_handles 的 free）。
+/// Screen hit test: point number of the closest handle within `near` pixels of (x, y).
+/// `any` = Select tool: ends can be dragged too; otherwise ends are left for "start a new
+/// curve from an endpoint" (the free flag of upstream curve_handles).
 fn hit_curve_handle(
     sh: &Shape,
     to_screen: &dyn Fn(Pt) -> [f64; 2],
@@ -77,7 +80,7 @@ fn hit_curve_handle(
     None
 }
 
-/// 形状 -> 曲线（只带曲线字段）。
+/// Shape -> curve (curve fields only).
 fn curve_of(sh: &Shape) -> Curve {
     Curve {
         pts: sh.pts.clone(),
@@ -97,18 +100,18 @@ fn apply_curve(sh: &mut Shape, c: Curve) {
     sh.splits = c.splits;
 }
 
-/// 右键点 i 会发生什么（核心 can_delete）。
+/// What happens when right-clicking point i (core can_delete).
 fn curve_can_delete(sh: &Shape, i: usize) -> Option<CanDelete> {
     bezier::can_delete(&curve_of(sh), i)
 }
 
 impl App {
-    /// 选中曲线要显示的把手 `(点, 种类)`：拉出的手柄、中间锚点、两端。
+    /// Handles to display for the selected curve `(point, kind)`: pulled-out handles, middle anchors, ends.
     pub fn curve_handles(&self, sh: &Shape) -> Vec<(Pt, CurveHandle)> {
         curve_handle_points(sh)
     }
 
-    /// 曲线把手 `(点, 点号)`，按绘制顺序（卷帘 handles 用）。
+    /// Curve handles `(point, point number)` in drawing order (used by the roll's handles).
     pub fn curve_handle_indices(&self, sh: &Shape) -> Vec<(Pt, usize)> {
         curve_point_handles(sh)
             .into_iter()
@@ -116,15 +119,16 @@ impl App {
             .collect()
     }
 
-    /// 屏幕命中曲线把手，返回点号；`any` 为 true（Select 工具）时两端也可命中。
+    /// Screen hit test for curve handles, returns the point number; ends are also hit testable when `any` is true (Select tool).
     pub fn curve_hit_handle(&self, sh: &Shape, pos: Pos2, any: bool) -> Option<usize> {
         let (to_screen, _) = view_maps(&self.view);
         let near = 7.0_f32.max(8.0 * self.scale()) as f64;
         hit_curve_handle(sh, &to_screen, pos.x as f64, pos.y as f64, near, any)
     }
 
-    /// 把曲线点 i 拖到 pt（已吸附）：锚点带着手柄走，Alt 拉出 / 断开手柄，平滑锚点另一手柄跟着转，
-    /// 对称曲线的另一半跟随（bezier.drag_point，exact=false）。
+    /// Drags curve point i to pt (already snapped): the anchor carries its handles, Alt pulls
+    /// out / breaks handles, the other handle of a smooth anchor rotates along, and the other
+    /// half of a symmetric curve follows (bezier.drag_point, exact=false).
     pub fn curve_drag(&mut self, i: usize, pt: Pt, alt: bool) {
         let (to_screen, from_screen) = view_maps(&self.view);
         let Some(idx) = self.sel else {
@@ -143,8 +147,8 @@ impl App {
         }
     }
 
-    /// 在选中曲线的第 seg 段的 t 处加锚点并移到 pt（曲线经过那里）；对称的另一半也加一个。
-    /// true = 加上了。
+    /// Adds an anchor at t on segment seg of the selected curve and moves it to pt (the curve
+    /// passes through there); a matching one is added to the symmetric half. true = added.
     pub fn curve_add_anchor(&mut self, seg: usize, t: f64, pt: Pt) -> bool {
         if !(0.0..1.0).contains(&t) {
             return false;
@@ -170,8 +174,9 @@ impl App {
         true
     }
 
-    /// 中键 / 双击在选中的曲线上加锚点：用 bezier.nearest 找最近段与 t，
-    /// 只当曲线离鼠标不超过 `near` 像素（None = 不限）时才加。true = 加上了。
+    /// Middle-click / double-click adds an anchor on the selected curve: uses bezier.nearest
+    /// to find the closest segment and t, and only adds it when the curve is within `near`
+    /// pixels of the mouse (None = no limit). true = added.
     pub fn curve_click(&mut self, pos: Pos2, pt: Pt, near: Option<f64>) -> bool {
         let (to_screen, _) = view_maps(&self.view);
         let Some(sh) = self.selected() else {
@@ -202,7 +207,7 @@ impl App {
         true
     }
 
-    /// 右键曲线点 i：锚点删掉，手柄收回到锚点；对称曲线的中间锚点保留。true = 处理了。
+    /// Right-click on curve point i: an anchor is deleted and its handles retract into it; the middle anchor of a symmetric curve is kept. true = handled.
     pub fn curve_delete_handle(&mut self, i: usize) -> bool {
         let Some(idx) = self.sel else {
             return false;
@@ -233,9 +238,10 @@ impl App {
         true
     }
 
-    /// 对称曲线的另一半跟着点 i 所在的一半；是对称曲线时返回 true。
-    /// 面板改了点的坐标后调用（原版 PianoRoll.keep_symmetric，i=0）。
-    #[allow(dead_code)] // 曲线点框待接上（panels 的 Points 表暂不含曲线）
+    /// The other half of a symmetric curve follows the half containing point i; returns true
+    /// when the curve is symmetric. Called after the panel changes a point's coordinates
+    /// (upstream PianoRoll.keep_symmetric, i=0).
+    #[allow(dead_code)] // Curve point box yet to be wired up (the panels Points table does not include curves)
     pub fn curve_keep_symmetric(&mut self, i: usize) -> bool {
         let (to_screen, _) = view_maps(&self.view);
         let Some(idx) = self.sel else {
@@ -256,8 +262,9 @@ impl App {
     }
 }
 
-/// 画选中曲线的把手（原版 draw_handles 的 curve 分支）：
-/// 手柄线白边蓝芯，锚点白圆蓝边，手柄实心蓝圆白边，两端白方块红边。
+/// Draws the handles of the selected curve (the curve branch of upstream draw_handles):
+/// handle lines are blue with a white edge, anchors are white circles with a blue edge,
+/// handles are solid blue circles with a white edge, ends are white squares with a red edge.
 pub fn paint_curve_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     let s = app.scale();
     let at = |p: Pt| {
@@ -372,7 +379,7 @@ mod tests {
     fn end_wins_over_nearby_control_with_select() {
         let sh = curve4();
         let screen = |p: Pt| [p[0], p[1]];
-        // 光标在末端 (3,0)：Select（any=true）优先命中端点；钢笔（any=false）只能命中手柄
+        // Cursor at the end (3,0): Select (any=true) hits the end first; the pen (any=false) can only hit handles
         assert_eq!(hit_curve_handle(&sh, &screen, 3.0, 0.0, 2.0, true), Some(3));
         assert_eq!(
             hit_curve_handle(&sh, &screen, 3.0, 0.0, 2.0, false),
@@ -403,7 +410,7 @@ mod tests {
         assert_eq!(curve_can_delete(&sh, 2), Some(CanDelete::Handle));
         assert_eq!(curve_can_delete(&sh, 3), Some(CanDelete::Anchor));
         assert_eq!(curve_can_delete(&sh, 4), Some(CanDelete::Handle));
-        assert_eq!(curve_can_delete(&sh, 5), None); // 末端锚点的手柄
+        assert_eq!(curve_can_delete(&sh, 5), None); // handle of the end anchor
         sh.sym = Some(Sym::Turn);
         assert_eq!(curve_can_delete(&sh, 3), Some(CanDelete::Middle));
         assert_eq!(curve_can_delete(&sh, 6), None);

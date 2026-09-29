@@ -1,25 +1,25 @@
-//! 测试用临时目录：不依赖第三方 crate，测试结束自动清理。
+//! Temp directory for tests: no third-party crate, cleaned up automatically when the test ends.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 测试目录计数，保证同一进程里多次调用不撞名。
+/// Test directory counter, ensuring repeated calls in the same process never collide.
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// 临时目录守卫：`Drop` 时删掉整个目录。
+/// Temp directory guard: deletes the whole directory on `Drop`.
 pub struct TempDir {
     path: PathBuf,
 }
 
 impl TempDir {
-    /// 在系统临时目录下建一个空目录（名字带 tag、进程号与序号）。
+    /// Creates an empty directory under the system temp dir (name carries tag, process id and sequence number).
     pub fn new(tag: &str) -> Self {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path =
             std::env::temp_dir().join(format!("spiderweb-test-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         if let Err(e) = std::fs::create_dir_all(&path) {
-            panic!("临时目录建不了 {path:?}: {e}");
+            panic!("cannot create temp directory {path:?}: {e}");
         }
         Self { path }
     }
