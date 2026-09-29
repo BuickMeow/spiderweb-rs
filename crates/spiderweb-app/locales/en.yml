@@ -226,12 +226,34 @@ panel:
     info_notes: "%{n} notes.  "
     error_formula: "Can't use the formula \"%{text}\":\n%{e}"
 
+join_split:
+  lines_polylines_freehand_strokes_curves: "lines, polylines, freehand strokes, curves and arcs"
+  turn_into_live_shape: "Turn into live shape"
+  turns_the_selected_shapes_into_one: "Turns the selected shapes into one live shape (a custom shape), so it can be filled.\nCurves stay curves, arcs stay arcs, and the notes stay the same.\nSplit into separate shapes gives the old shapes back (until the drawing is changed).\nShortcut: Ctrl+L"
+  select_the_shapes_to_turn_into: "Select the shapes to turn into a live shape (%{JOIN_KINDS} or custom shapes)."
+  only_and_custom_shapes_can_be: "Only %{JOIN_KINDS} and custom shapes can be turned into a live shape (%{join} selected)."
+  it_s_a_custom_shape_already: "It's a custom shape already (select more shapes to put them into one)."
+  spiderweb: "Spiderweb"
+  turning_these_into_a_live_shape: "Turning these into a live shape changes this:\n\n• "
+  split_into_separate_shapes_or_ctrl: "\n\nSplit into separate shapes (or Ctrl+Z) gives the old shapes back."
+  turned_the_shape_into_a_live: "Turned the shape into a live shape (Split into separate shapes gives it back)"
+  turned_shapes_into_a_live_shape: "Turned %{n} shapes into a live shape (Split into separate shapes gives them back)"
+
+roll_funnel:
+  and: " and "
+
+convert:
+  tumours_become_fixed_points_they_can: "Tumours become fixed points: they can't be changed with the tumour settings any more."
+  last_note_starts_on_it_is: "\"Last note: starts on it\" is dropped (every stroke ends on its last point)."
+
 menu:
   add_point: "Add point here"
   add_anchor: "Add anchor here"
   edit_text: "Edit text"
   delete_stroke: "Delete this stroke"
   save_library: "Save drawing to the shape library…"
+  turn_into_live_shape: "Turn into live shape"
+  ctrl_l: "Ctrl+L"
   shape: "shape"
   n_shapes: "%{n} shapes"
   delete: "Delete %{shapes}"

@@ -402,6 +402,7 @@ pub fn build(sh: &mut Shape, tx: &TextSettings, font: &Font, axes: Axes) -> bool
                 .collect(),
             sharp: Vec::new(),
             sym: None,
+            src: None,
         })
         .collect();
     sh.pts = vec![

@@ -83,11 +83,13 @@ pub fn builtin_shape(name: &str) -> Option<(Vec<PathStroke>, f64)> {
         free: false,
         smooth: 0,
         k: 1.0,
+        src: None,
     };
     match name {
         "Circle" => Some((
             vec![PathStroke::Ellipse {
                 box_: [0.0, 0.0, 1.0, 1.0],
+                src: None,
             }],
             1.0,
         )),
@@ -115,10 +117,12 @@ pub fn box_draft_parts(
         free: false,
         smooth: 0,
         k: 1.0,
+        src: None,
     };
     let strokes = match tool {
         Tool::Circle => vec![PathStroke::Ellipse {
             box_: [0.0, 0.0, 1.0, 1.0],
+            src: None,
         }],
         Tool::Triangle => vec![poly(&TRIANGLE)],
         _ => vec![poly(&SQUARE)],
@@ -250,10 +254,12 @@ pub fn draft_stroke(sh: &Shape, draw: Option<Tool>) -> Option<PathStroke> {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         };
         return Some(match tool {
             Tool::Circle => PathStroke::Ellipse {
                 box_: [b0, p0, b1, p1],
+                src: None,
             },
             Tool::Triangle => poly(vec![[b0, p0], [b1, p0], [(b0 + b1) / 2.0, p1], [b0, p0]]),
             _ => poly(vec![[b0, p0], [b1, p0], [b1, p1], [b0, p1], [b0, p0]]),
@@ -264,23 +270,27 @@ pub fn draft_stroke(sh: &Shape, draw: Option<Tool>) -> Option<PathStroke> {
             pts: sh.pts.clone(),
             sharp: sh.sharp.clone(),
             sym: sh.sym,
+            src: None,
         }),
         Kind::Arc => Some(PathStroke::Curve {
             pts: arc_bezier(&sh.pts, sh.k),
             sharp: Vec::new(),
             sym: None,
+            src: None,
         }),
         Kind::Free => Some(PathStroke::Poly {
             pts: sh.pts.clone(),
             free: true,
             smooth: sh.smooth,
             k: sh.k,
+            src: None,
         }),
         _ => Some(PathStroke::Poly {
             pts: sh.pts.clone(),
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         }),
     }
 }
@@ -446,7 +456,7 @@ pub fn point_strokes(app: &App, sh: &Shape) -> Vec<usize> {
 /// （roll_live.stroke_spots）。
 pub fn stroke_spots(st: &PathStroke) -> Vec<(usize, Pt)> {
     match st {
-        PathStroke::Ellipse { box_ } => {
+        PathStroke::Ellipse { box_, .. } => {
             let (u0, v0, u1, v1) = (box_[0], box_[1], box_[2], box_[3]);
             let (cu, cv) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
             vec![(0, [u0, cv]), (1, [u1, cv]), (2, [cu, v0]), (3, [cu, v1])]
@@ -576,7 +586,7 @@ pub fn drag_stroke_point(
     let Some(st) = fr.strokes.get(k).cloned() else {
         return hid;
     };
-    if let PathStroke::Ellipse { box_ } = st {
+    if let PathStroke::Ellipse { box_, .. } = st {
         let mut box_ = box_;
         let pt = crate::roll::event_pt(app, pos, true, shift);
         let uv = to_uv(pt[0], pt[1]);
@@ -588,7 +598,7 @@ pub fn drag_stroke_point(
             box_[1] > box_[3]
         };
         if let Some(target) = app.shapes.get_mut(i) {
-            if let Some(PathStroke::Ellipse { box_: b }) = target.strokes.get_mut(k) {
+            if let Some(PathStroke::Ellipse { box_: b, .. }) = target.strokes.get_mut(k) {
                 *b = box_;
             }
             refit(target);
@@ -715,7 +725,10 @@ pub fn drag_stroke_handle(
             let Some(k) = picked_curve_in(app, &fr.strokes) else {
                 return hid;
             };
-            let Some(PathStroke::Curve { pts, sharp, sym }) = fr.strokes.get(k) else {
+            let Some(PathStroke::Curve {
+                pts, sharp, sym, ..
+            }) = fr.strokes.get(k)
+            else {
                 return hid;
             };
             let mut c = bezier::Curve {
@@ -733,7 +746,10 @@ pub fn drag_stroke_handle(
             let uv = to_uv(pt[0], pt[1]);
             bezier::drag_point(&mut c, j, uv, alt, &to_screen, &from_screen, false);
             let mut strokes = fr.strokes;
-            if let Some(PathStroke::Curve { pts, sharp, sym }) = strokes.get_mut(k) {
+            if let Some(PathStroke::Curve {
+                pts, sharp, sym, ..
+            }) = strokes.get_mut(k)
+            {
                 *pts = c.pts;
                 *sharp = c.sharp;
                 *sym = c.sym;
@@ -755,7 +771,10 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
     let Some(k) = picked_curve_in(app, &fr.strokes) else {
         return;
     };
-    let Some(PathStroke::Curve { pts, sharp, sym }) = fr.strokes.get(k) else {
+    let Some(PathStroke::Curve {
+        pts, sharp, sym, ..
+    }) = fr.strokes.get(k)
+    else {
         return;
     };
     let mut c = bezier::Curve {
@@ -775,7 +794,10 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
             app.push_undo();
             bezier::delete_point(&mut c, j, &to_screen, false);
             let mut strokes = fr.strokes;
-            if let Some(PathStroke::Curve { pts, sharp, sym }) = strokes.get_mut(k) {
+            if let Some(PathStroke::Curve {
+                pts, sharp, sym, ..
+            }) = strokes.get_mut(k)
+            {
                 *pts = c.pts;
                 *sharp = c.sharp;
                 *sym = c.sym;
@@ -795,7 +817,10 @@ pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) ->
     let Some(k) = picked_curve_in(app, &fr.strokes) else {
         return false;
     };
-    let Some(PathStroke::Curve { pts, sharp, sym }) = fr.strokes.get(k) else {
+    let Some(PathStroke::Curve {
+        pts, sharp, sym, ..
+    }) = fr.strokes.get(k)
+    else {
         return false;
     };
     let mut c = bezier::Curve {
@@ -823,7 +848,10 @@ pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) ->
     }
     app.push_undo();
     let mut strokes = fr.strokes;
-    if let Some(PathStroke::Curve { pts, sharp, sym }) = strokes.get_mut(k) {
+    if let Some(PathStroke::Curve {
+        pts, sharp, sym, ..
+    }) = strokes.get_mut(k)
+    {
         *pts = c.pts.clone();
         *sharp = c.sharp.clone();
         *sym = c.sym;
@@ -988,7 +1016,8 @@ mod tests {
         assert_eq!(
             sh.strokes,
             vec![PathStroke::Ellipse {
-                box_: [0.0, 0.0, 1.0, 1.0]
+                box_: [0.0, 0.0, 1.0, 1.0],
+                src: None
             }]
         );
     }

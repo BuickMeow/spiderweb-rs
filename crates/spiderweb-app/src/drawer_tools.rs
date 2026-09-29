@@ -196,7 +196,7 @@ pub fn handles(strokes: &[Stroke], sel: Option<usize>) -> Vec<(usize, Spot, Pt)>
     let mut out = Vec::new();
     for i in order {
         match &strokes[i] {
-            Stroke::Ellipse { box_ } => {
+            Stroke::Ellipse { box_, .. } => {
                 let [u0, v0, u1, v1] = *box_;
                 for (k, p) in [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
                     .into_iter()
@@ -256,7 +256,7 @@ fn raw_points(strokes: &[Stroke], idx: &[usize]) -> Vec<Pt> {
     let mut out = Vec::new();
     for &i in idx {
         match strokes.get(i) {
-            Some(Stroke::Ellipse { box_ }) => {
+            Some(Stroke::Ellipse { box_, .. }) => {
                 out.push([box_[0], box_[1]]);
                 out.push([box_[2], box_[3]]);
             }
@@ -406,6 +406,7 @@ mod tests {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         }
     }
 
@@ -495,6 +496,7 @@ mod tests {
         let strokes = vec![
             Stroke::Ellipse {
                 box_: [0.0, 0.0, 1.0, 1.0],
+                src: None,
             },
             poly(vec![[0.25, 0.25], [0.5, 0.5]]),
         ];

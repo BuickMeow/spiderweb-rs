@@ -16,10 +16,10 @@ renderer, a pure-Rust note engine and no Python runtime.
 
 | Area | State |
 |---|---|
-| Feature parity | upstream **1.1.0** complete; **1.2.0** in progress (done: 256-key mode, custom fill upgrade; remaining: join/split, turn-into-live-shape, tumour graphs, snap system, history panel, Domino start) |
-| Correctness | **2000+ differential test cases** against the original Python engine (paths, bezier/arc, smooth, tumour, text, custom, funnel, engine) |
+| Feature parity | upstream **1.1.0** complete; **1.2.0** in progress (done: 256-key mode, custom fill upgrade, turn-into-live-shape; remaining: join/split, tumour graphs, snap system, history panel, Domino start) |
+| Correctness | **2700+ differential test cases** against the original Python engine (paths, bezier/arc, smooth, tumour, text, custom, convert, funnel, engine) |
 | Formats | MIDI export is **byte-identical** to the original; project JSON and the Domino clipboard format are cross-checked with Python |
-| Tests | 154 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
+| Tests | 164 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
 | CI | `.github/workflows/ci.yml` — fmt / clippy / test / release build on Ubuntu, macOS and Windows |
 | Performance | see below; tracked per commit on the [benchmark dashboard](https://buickmeow.github.io/spiderweb-rs/dev/bench/) |
 
@@ -74,7 +74,7 @@ Windows-only by design (the button reports that on other platforms).
 
 | Crate | Contents |
 |---|---|
-| `spiderweb-core` | shapes → notes: paths, bezier, arc, smooth, tumour, envelope, custom, funnel, text, fonts, engine (no UI, no platform code) |
+| `spiderweb-core` | shapes → notes: paths, bezier, arc, smooth, tumour, envelope, custom, convert, funnel, text, fonts, engine (no UI, no platform code) |
 | `spiderweb-domino` | Domino clipboard codec + Windows clipboard FFI |
 | `spiderweb-io` | project files / autosave, MIDI writer, math expressions, atomic writes |
 | `spiderweb-app` | eframe/egui app, wgpu note renderer, tools, panels, drawers, help |

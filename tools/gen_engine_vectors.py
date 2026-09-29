@@ -289,6 +289,18 @@ def gen():
     def add_tracks(sh, ppq=960, keys=128):
         add("shape_notes_tracks", [sh, ppq, keys], E.shape_notes_tracks(sh, ppq, keys))
 
+    # Strokes from different shapes (convert.py's "src"): every note carries its source group.
+    def src_custom(strokes, **kw):
+        return custom([dict(s, src=i % 2) for i, s in enumerate(strokes)], **kw)
+
+    src_line = src_custom([SQUARE[0], TRIANGLE[0]], fill="empty")
+    add_tracks(src_line)
+    add_notes(src_line)
+    add_notes(dict(src_line, fill="outline_spam", gate=0.25))
+    # Overlapping sources: the same note from two groups stays twice (they can get channels apart).
+    overlap_src = src_custom([SQUARE[0], SQUARE[0]], fill="empty")
+    add_tracks(overlap_src)
+
     pasted = custom(SQUARE, notes=notes_rows(NOTE_ROWS))
     add_tracks(pasted)
     pasted_own = custom(SQUARE, notes=notes_rows(NOTE_ROWS), own_vel=True)
@@ -307,9 +319,10 @@ def gen():
     add_tracks(pasted_high_own, 960, 128)
 
     # ------------------------------------------------------------ assign_slots
-    def add_slots(lists, split):
-        add("assign_slots", [lists, split],
-            E.assign_slots([np.asarray(a, np.int64).reshape(-1, 4) for a in lists], split))
+    def add_slots(lists, split, apart=()):
+        args = [np.asarray(a, np.int64).reshape(-1, 4) for a in lists]
+        add("assign_slots", [lists, split, [list(g) for g in apart]],
+            E.assign_slots(args, split, apart))
 
     add_slots([[[0, 200, 60, 100]], [[100, 300, 60, 100]]], "key")
     add_slots([[[0, 200, 60, 100]], [[100, 300, 64, 100]]], "key")
@@ -323,6 +336,13 @@ def gen():
     add_slots([[[10, 20, 60, 100], [20, 30, 60, 100]], [[15, 25, 60, 100]], [[5, 8, 60, 100]]], "key")
     add_slots([[[0, 10, 60, 100], [10, 20, 60, 100], [30, 40, 60, 100]], [[15, 35, 60, 100]]], "key")
     add_slots([[[0, 100, 60, 100]], [[0, 100, 60, 100]], [[0, 100, 60, 100]]], "key")
+    # apart: the lists of one group (a custom shape's outline/inside, convert.py's sources) never share a slot
+    add_slots([[[0, 200, 60, 100]], [[100, 300, 64, 100]]], "key", apart=[[0, 1]])
+    add_slots([[[0, 200, 60, 100]], [[100, 300, 64, 100]]], "time", apart=[[0, 1]])
+    add_slots([[[0, 200, 60, 100]], [[100, 300, 64, 100]], [[50, 150, 62, 100]]], "key", apart=[[0, 2]])
+    add_slots([[[0, 200, 60, 100]], [[100, 300, 64, 100]], [[50, 150, 62, 100]]], "key", apart=[[0, 1, 2]])
+    # apart splits them even when they don't overlap
+    add_slots([[[0, 100, 60, 100]], [[200, 300, 60, 100]]], "key", apart=[[0, 1]])
 
     # ------------------------------------------------------------ resolve_overlaps
     def add_resolve(rows):
@@ -345,10 +365,10 @@ def gen():
     add_resolve([[0, 100, 130, 50, 0, 0], [50, 80, 2, 60, 1, 0], [0, 200, 130, 50, 0, 0]])
 
     # ------------------------------------------------------------ render
-    def add_render(lists, mode, split, tracks=None, ppq=960):
+    def add_render(lists, mode, split, tracks=None, apart=None, ppq=960):
         args_lists = [np.asarray(a, np.int64).reshape(-1, 4) for a in lists]
         args_tracks = None if tracks is None else [None if t is None else np.asarray(t, np.int64) for t in tracks]
-        add("render", [lists, mode, split, tracks], E.render(args_lists, mode, split, args_tracks))
+        add("render", [lists, mode, split, tracks, apart], E.render(args_lists, mode, split, args_tracks, apart))
 
     A = [[0, 200, 60, 100]]
     B = [[100, 300, 60, 90]]
@@ -377,6 +397,23 @@ def gen():
     add_render([[[0, 100, 60, 100], [100, 200, 60, 100]], [[50, 150, 60, 100]]], "raw", "key")
     add_render([[[0, 100, 60, 100], [0, 100, 60, 100]]], "single", "key")
     add_render([[[0, 100, 60, 100], [50, 150, 64, 80]]], "single", "key")
+
+    # convert.py's source groups (tracks) + Fill / Spam "Outline" (apart)
+    src_notes, src_tracks = E.shape_notes_tracks(src_line, 960)
+    add_render([src_notes.tolist(), B], "auto", "key",
+               tracks=[src_tracks.tolist(), None], apart=[False, False])
+    add_render([src_notes.tolist(), B], "auto", "time",
+               tracks=[src_tracks.tolist(), None], apart=[False, False])
+    apart_shape = custom(SQUARE, fill="fill", apart=True)
+    ap_notes, ap_tracks = E.shape_notes_tracks(apart_shape, 960)
+    add_render([ap_notes.tolist()], "auto", "key", tracks=[ap_tracks.tolist()], apart=[True])
+    spam_apart = custom(SQUARE, fill="spam", apart=True, gate=0.125)
+    sp_notes, sp_tracks = E.shape_notes_tracks(spam_apart, 960)
+    add_render([sp_notes.tolist()], "auto", "key", tracks=[sp_tracks.tolist()], apart=[True])
+    add_render([sp_notes.tolist(), A], "auto", "key",
+               tracks=[sp_tracks.tolist(), None], apart=[True, False])
+    add_render([sp_notes.tolist(), A], "auto", "time",
+               tracks=[sp_tracks.tolist(), None], apart=[True, False])
 
     # ------------------------------------------------------------ slot_track_channel
     for slot in (0, 1, 8, 9, 10, 14, 15, 16, 30, 45):

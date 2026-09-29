@@ -837,8 +837,10 @@ impl App {
 
     fn custom_section(&mut self, ui: &mut egui::Ui) {
         let placed = self.custom_targets();
-        if !self.sels.is_empty() && placed.is_empty() {
-            return; // 选中的都不是自定义形状
+        // A selection that can become one live shape still shows this panel, for the button.
+        let can_turn = crate::convert_ui::live_problem(self).is_none();
+        if !self.sels.is_empty() && placed.is_empty() && !can_turn {
+            return; // the selection has no custom shapes and can't become one live shape
         }
         let title = if placed.is_empty() {
             rust_i18n::t!("panel.custom.title_new").to_string()
@@ -849,7 +851,10 @@ impl App {
         };
         egui::CollapsingHeader::new(title)
             .default_open(true)
-            .show(ui, |ui| self.custom_body_ui(ui, &placed));
+            .show(ui, |ui| {
+                crate::convert_ui::live_button_ui(self, ui);
+                self.custom_body_ui(ui, &placed);
+            });
     }
 
     fn custom_ends_label(ends: Ends) -> String {

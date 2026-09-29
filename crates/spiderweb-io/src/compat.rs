@@ -15,7 +15,7 @@ use spiderweb_core::arc::clean_k as arc_k;
 use spiderweb_core::custom::{BOX_STROKE, check_notes, clean_curve, clean_strokes};
 use spiderweb_core::shape::{
     Align, Ends, Fill, FunnelCurve, FunnelFill, FunnelStart, GateChange, GateFollow, Kind, Shape,
-    Stroke, Sym, TextSettings, Tumour, WallMode,
+    ShapeFrom, Stroke, Sym, TextSettings, Tumour, WallMode,
 };
 use spiderweb_core::smooth::{SMOOTH_DEFAULT, clean_level};
 use spiderweb_core::text::clean_text;
@@ -326,10 +326,21 @@ pub fn shape_from_json(value: &Value) -> Result<Option<Shape>, ShapeError> {
             }
             let keep = n - (n - 1) % 3;
             let stroke = clean_curve(value, &out.pts[..keep]);
-            if let Stroke::Curve { pts, sharp, sym } = stroke {
+            if let Stroke::Curve {
+                pts, sharp, sym, ..
+            } = stroke
+            {
                 out.pts = pts;
                 out.sharp = sharp;
                 out.sym = sym;
+            }
+            // clean_joined's `gaps` part: keep the ones that leave every piece a segment.
+            let last = spiderweb_core::bezier::anchor_count(&out.pts) as i64 - 1;
+            if let Some(want) = clean_gaps(sh.get("gaps"), last) {
+                out.gaps = want;
+            }
+            if !out.gaps.is_empty() {
+                out.sym = None; // a joined curve has no symmetric halves
             }
         }
         Kind::Funnel => match funnel_shape(sh, out.clone()) {
@@ -382,6 +393,11 @@ fn custom_shape(sh: &Map<String, Value>, mut out: Shape) -> Result<Option<Shape>
         .map_or(Ends::Drop, ends_from_str);
     out.union = matches!(sh.get("union"), Some(Value::Bool(true)));
     out.apart = matches!(sh.get("apart"), Some(Value::Bool(true)));
+    // The shapes it was made of (convert.py). Anything off (a bad old shape, missing keys, points
+    // that aren't three 2-number rows) drops it, like Python's try/except around the whole block.
+    if let Some(fr) = sh.get("from").and_then(Value::as_object) {
+        out.from = shape_from_of(fr);
+    }
     if let Some(tx) = sh.get("text").filter(|v| v.is_object()) {
         out.text = clean_text(tx);
     }
@@ -400,6 +416,64 @@ fn custom_shape(sh: &Map<String, Value>, mut out: Shape) -> Result<Option<Shape>
         }
     }
     Ok(Some(out))
+}
+
+/// `clean_joined`'s `gaps` part: 1..last-2, every piece keeps at least one segment, gaps stay at
+/// least one anchor apart. None = Python's `int(g)` failed (the try/except returns: no gaps at all).
+fn clean_gaps(v: Option<&Value>, last: i64) -> Option<Vec<i64>> {
+    let items: Vec<Value> = match v {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::String(s)) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+        _ => return Some(Vec::new()),
+    };
+    let mut want: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    for g in &items {
+        want.insert(py_int(g)?);
+    }
+    let mut gaps: Vec<i64> = Vec::new();
+    for g in want {
+        if (1..=last - 2).contains(&g) && gaps.last().is_none_or(|&prev| g >= prev + 2) {
+            gaps.push(g);
+        }
+    }
+    Some(gaps)
+}
+
+/// `clean_shape`'s `sh["from"]` (convert.py): the valid original shapes + the new shape's strokes
+/// and box frame. Python wraps the whole block in try/except; anything off drops all of it, so this
+/// returns None the same way.
+fn shape_from_of(fr: &Map<String, Value>) -> Option<ShapeFrom> {
+    let items = fr.get("shapes")?.as_array()?;
+    if items.is_empty() {
+        return None;
+    }
+    let mut shapes = Vec::with_capacity(items.len());
+    for o in items {
+        if !o.is_object() {
+            return None; // clean_shape(non-dict) is None -> all(olds) is false
+        }
+        let sh = shape_from_json(o).ok()??;
+        shapes.push(sh);
+    }
+    let pts_v = fr.get("pts")?;
+    let pts_arr = pts_v.as_array()?;
+    if pts_arr.len() != 3 {
+        return None;
+    }
+    let mut pts = Vec::with_capacity(3);
+    for p in pts_arr {
+        pts.push(pt_of(p).ok()?);
+    }
+    let strokes = match fr.get("strokes")? {
+        Value::Array(_) => clean_strokes(fr.get("strokes")?),
+        v if py_bool(v) => return None,
+        _ => Vec::new(),
+    };
+    Some(ShapeFrom {
+        shapes,
+        strokes,
+        pts,
+    })
 }
 
 /// 漏斗的设置与曲线（Python 的 try 包住整段：出错就整个形状无效）。
@@ -645,6 +719,7 @@ fn stroke_value(st: &Stroke) -> Value {
             free,
             smooth,
             k,
+            ..
         } => {
             o.insert("kind".into(), Value::from("poly"));
             o.insert("pts".into(), pts_value(pts));
@@ -654,7 +729,9 @@ fn stroke_value(st: &Stroke) -> Value {
                 o.insert("k".into(), Value::from(*k));
             }
         }
-        Stroke::Curve { pts, sharp, sym } => {
+        Stroke::Curve {
+            pts, sharp, sym, ..
+        } => {
             o.insert("kind".into(), Value::from("curve"));
             o.insert("pts".into(), pts_value(pts));
             if !sharp.is_empty() {
@@ -667,18 +744,21 @@ fn stroke_value(st: &Stroke) -> Value {
                 o.insert("sym".into(), Value::from(sym_str(*s)));
             }
         }
-        Stroke::Arc { pts, k } => {
+        Stroke::Arc { pts, k, .. } => {
             o.insert("kind".into(), Value::from("arc"));
             o.insert("pts".into(), pts_value(pts));
             o.insert("k".into(), Value::from(*k));
         }
-        Stroke::Ellipse { box_ } => {
+        Stroke::Ellipse { box_, .. } => {
             o.insert("kind".into(), Value::from("ellipse"));
             o.insert(
                 "box".into(),
                 Value::Array(box_.iter().map(|&x| Value::from(x)).collect()),
             );
         }
+    }
+    if let Some(src) = st.src() {
+        o.insert("src".into(), Value::from(src));
     }
     Value::Object(o)
 }
@@ -820,6 +900,12 @@ pub fn shape_to_json(sh: &Shape) -> Value {
             if let Some(s) = sh.sym {
                 o.insert("sym".into(), Value::from(sym_str(s)));
             }
+            if !sh.gaps.is_empty() {
+                o.insert(
+                    "gaps".into(),
+                    Value::Array(sh.gaps.iter().map(|&i| Value::from(i)).collect()),
+                );
+            }
         }
         Kind::Custom => {
             o.insert("name".into(), Value::from(sh.name.clone()));
@@ -853,6 +939,16 @@ pub fn shape_to_json(sh: &Shape) -> Value {
                 if sh.own_vel {
                     o.insert("own_vel".into(), Value::Bool(true));
                 }
+            }
+            if let Some(fr) = &sh.from {
+                o.insert(
+                    "from".into(),
+                    serde_json::json!({
+                        "shapes": fr.shapes.iter().map(shape_to_json).collect::<Vec<_>>(),
+                        "strokes": fr.strokes.iter().map(stroke_value).collect::<Vec<_>>(),
+                        "pts": pts_value(&fr.pts),
+                    }),
+                );
             }
         }
         Kind::Funnel => {

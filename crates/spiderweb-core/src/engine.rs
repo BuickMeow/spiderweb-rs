@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::arc;
 use crate::bezier;
-use crate::custom::{block_notes, custom_notes, custom_strokes};
+use crate::custom::{block_notes, custom_notes_groups, custom_strokes};
 use crate::envelope::{env_values, velocity_env};
 use crate::funnel::{funnel_notes, funnel_strokes};
 use crate::paths::{dedupe, dot_segment_notes, path_notes};
@@ -220,17 +220,19 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
         p[0] *= ppq; // beats -> ticks
     }
     let mut own: Option<Vec<[i64; 2]>> = None;
+    // A custom shape made of other shapes (convert.py): which of them each note came from.
+    let mut groups: Option<Vec<i64>> = None;
     let mut raw: Vec<[i64; 3]>;
     if sh.kind == Kind::Custom && sh.notes.is_some() {
         let rows = block_notes(sh, ppq).unwrap_or_default();
         raw = rows.iter().map(|r| [r[0], r[1], r[2]]).collect();
         own = Some(rows.iter().map(|r| [r[3], r[4]]).collect());
-    } else if matches!(sh.kind, Kind::Custom | Kind::Funnel) {
-        raw = if sh.kind == Kind::Custom {
-            custom_notes(sh, ppq)
-        } else {
-            funnel_notes(sh, ppq)
-        };
+    } else if sh.kind == Kind::Custom {
+        let (rows, ids) = custom_notes_groups(sh, ppq);
+        raw = rows;
+        groups = ids;
+    } else if sh.kind == Kind::Funnel {
+        raw = funnel_notes(sh, ppq);
     } else if end_dot && sh.kind == Kind::Poly && path.len() > 2 {
         raw = dot_segment_notes(&path);
     } else {
@@ -277,6 +279,22 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
             .iter()
             .zip(own.iter())
             .map(|(r, o)| [r[0], r[1], r[2], o[1]])
+            .collect();
+        let got = unique_rows(&rows);
+        raw = got.iter().map(|r| [r[0], r[1], r[2]]).collect();
+        tracks = Some(got.iter().map(|r| r[3]).collect());
+    } else if let Some(groups) = groups {
+        let groups: Vec<i64> = groups
+            .into_iter()
+            .zip(keep.iter())
+            .filter(|(_, k)| **k)
+            .map(|(g, _)| g)
+            .collect();
+        // (the same note from two of them stays twice, like two shapes)
+        let rows: Vec<[i64; 4]> = raw
+            .iter()
+            .zip(groups.iter())
+            .map(|(r, &g)| [r[0], r[1], r[2], g])
             .collect();
         let got = unique_rows(&rows);
         raw = got.iter().map(|r| [r[0], r[1], r[2]]).collect();
@@ -342,7 +360,10 @@ pub fn running_max(values: &[i64], groups: &[i64]) -> Vec<i64> {
 /// 自动通道：音符重叠的形状分到不同的 slot，不冲突的复用最小的空 slot；越早的形状 slot 越小
 /// （engine.assign_slots）。每个形状同 key 背靠背的音符先并成一段（spam 连成一片 = 一段），
 /// 任何与这段长度重叠的都和它其中一条音符重叠；没有长度的音符各自算。
-pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split) -> Vec<usize> {
+///
+/// `apart`: groups of note list numbers that always get different slots (a custom shape's outline
+/// and inside, or convert.py's per-source groups).
+pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split, apart: &[Vec<usize>]) -> Vec<usize> {
     let n = note_lists.len();
     let key_of = |r: &Note4| if split == Split::Key { r[2] } else { 0 };
     let mut by_pitch: HashMap<i64, Vec<(i64, i64, usize)>> = HashMap::new();
@@ -392,6 +413,18 @@ pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split) -> Vec<usize> {
                 }
             }
             active.push((e, o));
+        }
+    }
+    for group in apart {
+        for &a in group {
+            if a >= n {
+                continue;
+            }
+            for &b in group {
+                if b != a && b < n {
+                    clashes[a].insert(b);
+                }
+            }
         }
     }
     let first: Vec<f64> = note_lists
@@ -512,20 +545,26 @@ enum SlotMap {
 
 /// 一组形状的音符 ->（最终音符, 用掉的 slot 数）（engine.render）。
 ///
-/// note_lists：每个形状 shape_notes 的结果。mode 见 [`Mode`]；tracks：每个形状 None，
-/// 或它每条音符的轨道（粘贴音符，shape_notes_tracks）：auto 时形状的每条轨道当成一个形状。
+/// note_lists: every shape's shape_notes result. mode: see [`Mode`]. tracks: per shape None, or the
+/// track of each of its notes (pasted notes and convert.py's groups, shape_notes_tracks): with
+/// "auto" each track of the shape gets channels as if it were a shape of its own. apart: per shape
+/// True if its tracks must get different channels (Fill / Spam "Outline").
 pub fn render(
     note_lists: &[Vec<Note4>],
     mode: Mode,
     split: Split,
     tracks: Option<&[Option<Vec<i64>>]>,
+    apart: Option<&[bool]>,
 ) -> (Vec<Note6>, usize) {
     let empty: Vec<Option<Vec<i64>>> = Vec::new();
     let tracks = tracks.unwrap_or(&empty);
+    let no_apart: Vec<bool> = Vec::new();
+    let apart = apart.unwrap_or(&no_apart);
     let (slot_of, count) = if mode == Mode::Auto {
         // 形状、按轨道拆开的粘贴音符；unit_of = 每条音符的 unit
         let mut units: Vec<Vec<Note4>> = Vec::new();
         let mut unit_of: Vec<SlotMap> = Vec::new();
+        let mut forced: Vec<Vec<usize>> = Vec::new();
         for (o, lst) in note_lists.iter().enumerate() {
             let tr = tracks.get(o).and_then(|t| t.as_ref());
             match tr {
@@ -551,6 +590,9 @@ pub fn render(
                         );
                     }
                     unit_of.push(SlotMap::Each(which.iter().map(|&w| base + w).collect()));
+                    if apart.get(o).copied().unwrap_or(false) {
+                        forced.push((base..base + ids.len()).collect());
+                    }
                 }
                 _ => {
                     unit_of.push(SlotMap::One(units.len()));
@@ -558,7 +600,7 @@ pub fn render(
                 }
             }
         }
-        let unit_slots = assign_slots(&units, split);
+        let unit_slots = assign_slots(&units, split, &forced);
         let count = unit_slots.iter().max().map_or(0, |&m| m + 1);
         let slot_of: Vec<SlotMap> = unit_of
             .into_iter()
