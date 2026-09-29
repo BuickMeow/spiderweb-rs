@@ -9,7 +9,8 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(os.path.dirname(REPO), "Spiderweb-main", "scripts")
+# 原版源码目录：默认 1.1.0 参考副本，可用 SPIDERWEB_SRC 指到别的版本（如 1.2.0）
+SCRIPTS = os.environ.get("SPIDERWEB_SRC") or os.path.join(os.path.dirname(REPO), "Spiderweb-main", "scripts")
 if not os.path.isdir(SCRIPTS):
     # worktree 在临时目录时按相对路径找不到原版，回退到固定路径
     SCRIPTS = "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts"

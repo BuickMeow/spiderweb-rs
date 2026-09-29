@@ -215,6 +215,10 @@ pub struct App {
     pub loaded: bool,
     pub panel_sel: Option<usize>,
     pub vel_text: [String; 2],
+    /// SPIDERWEB_PERF=1：显示帧时间 HUD 并打印加载 / 重算耗时
+    pub perf: bool,
+    /// 帧时间指数平均（ms）
+    pub frame_ms: f32,
     /// 正在输入的文本（原版 roll.typing）
     pub typing: Option<Typing>,
     /// 文本剪切板的内容，等有 ctx 的时候写进系统剪贴板
@@ -245,6 +249,7 @@ impl App {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
+        let perf = std::env::var("SPIDERWEB_PERF").is_ok();
         let autosave_path = base.join("autosave.json");
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
         crate::errors::install(base.clone());
@@ -317,6 +322,8 @@ impl App {
             loaded: false,
             panel_sel: None,
             vel_text: ["127".into(), "127".into()],
+            perf,
+            frame_ms: 0.0,
             typing: None,
             text_clipboard: None,
             font_dialog: None,
@@ -332,10 +339,19 @@ impl App {
         app.tips.welcome_at = Some(Instant::now());
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
+        let t_load = Instant::now();
         app.load_autosave();
         app.loaded = true;
         app.sync_funnel_text();
         app.shapes_changed();
+        if perf {
+            eprintln!(
+                "[perf] load+render {:.1} ms, {} shapes, {} notes",
+                t_load.elapsed().as_secs_f64() * 1000.0,
+                app.shapes.len(),
+                app.rendered.len()
+            );
+        }
         app
     }
 
@@ -575,6 +591,7 @@ impl App {
 
     /// 重新计算全部音符并刷新界面（原版 shapes_changed）。
     pub fn shapes_changed(&mut self) {
+        let t0 = Instant::now();
         let got: Vec<NotesAndTracks> = self.shapes.iter().map(|sh| self.notes_tracks(sh)).collect();
         let lists: Vec<Vec<[i64; 4]>> = got.iter().map(|(n, _)| n.clone()).collect();
         let tracks: Vec<Option<Vec<i64>>> = got.iter().map(|(_, t)| t.clone()).collect();
@@ -604,6 +621,13 @@ impl App {
         // 音符变了：note_gpu 下一帧重建 instance buffer
         self.notes_revision = self.notes_revision.wrapping_add(1);
         self.schedule_autosave();
+        if self.perf {
+            eprintln!(
+                "[perf] shapes_changed {:.1} ms, {} notes",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                self.rendered.len()
+            );
+        }
     }
 
     pub fn note_count(&self, sh: &Shape) -> i64 {
@@ -1507,6 +1531,33 @@ impl eframe::App for App {
             } else if !cancel {
                 self.pending_delete_all = Some(count);
             }
+        }
+
+        if self.perf {
+            let dt = ctx.input(|i| i.stable_dt); // 上一帧耗时
+            self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
+            egui::Area::new(egui::Id::new("perf_hud"))
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
+                .show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        let fps = if self.frame_ms > 0.0 {
+                            1000.0 / self.frame_ms
+                        } else {
+                            0.0
+                        };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{:.2} ms/frame ({:.0} fps)\n{} shapes · {} notes",
+                                self.frame_ms,
+                                fps,
+                                self.shapes.len(),
+                                self.rendered.len()
+                            ))
+                            .monospace(),
+                        );
+                    });
+                });
+            ctx.request_repaint();
         }
     }
 

@@ -15,3 +15,7 @@ ttf-parser = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[[bench]]
+name = "engine"
+harness = false
