@@ -23,8 +23,10 @@ Read this together with [README.md](README.md) and [TESTING.md](TESTING.md).
 - Localisation: user-visible strings live in `crates/spiderweb-app/locales/en.yml`
   and go through `rust_i18n::t!(...)`. English text must match the original
   Spiderweb wording verbatim; do not invent new strings.
-- Commit messages follow the existing style: `type(scope): 摘要` in Chinese
-  followed by a blank line and `- bullet` details. Keep them short.
+- Commit messages are **English**: `type(scope): summary` (imperative, e.g.
+  `feat(core): port the 1.2.0 snap system`), followed by a blank line and
+  `- bullet` details. Keep them short. History before this rule is Chinese;
+  do not rewrite it.
 
 ## Commands
 
