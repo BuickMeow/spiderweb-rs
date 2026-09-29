@@ -5,7 +5,12 @@
 //!   `meta = key | vel << 8 | slot << 16 | layer << 24` (layer 1 = notes of selected shapes).
 //! - All coordinate transform happens in the vertex shader (see `note_gpu.wgsl`): pan / zoom
 //!   only touch uniforms, and the instance buffers are only repacked when notes or selection
-//!   change (`App::notes_revision`).
+//!   change (`App::notes_revision`) or when the view leaves the uploaded window.
+//! - Viewport culling: [`NoteIndex`] buckets notes by start tick and is rebuilt only when the
+//!   revision changes. [`NoteGpu::sync`] packs just the notes inside the caller's margin-expanded
+//!   [`CullRange`] (ticks and keys). Panning inside the uploaded window reuses the buffers; only
+//!   crossing its edge re-uploads the new slice. A fully zoomed-out project still uploads and
+//!   draws every note: LOD is out of scope, this is culling only.
 //! - Instances are split across chunk buffers, each at most
 //!   `device.limits().max_buffer_size - 1 MiB`, so projects with tens of millions of notes
 //!   stay below the wgpu device limit; chunks are reused / grown across frames.
@@ -33,6 +38,9 @@ const CHUNK_HEADROOM: u64 = 1 << 20;
 
 /// Sane cap on the chunk count; a project that needs more is not drawn on the GPU.
 const MAX_CHUNKS: usize = 1024;
+
+/// Target number of start-tick buckets in [`NoteIndex`] (the exact count can be one more).
+const CULL_BUCKETS: u32 = 4096;
 
 /// One instance is 16 bytes, corresponding to `@location(0)` of the wgsl vertex entry point.
 #[repr(C)]
@@ -86,11 +94,29 @@ pub struct PackedInstances {
     pub normal_count: usize,
 }
 
-/// Packs all rendered notes into instances (no visibility cull).
+/// Packs all rendered notes into instances (no visibility cull; the unculled reference packing).
+#[cfg(test)]
 pub fn pack_instances(rendered: &[Note], sels: &BTreeSet<usize>) -> PackedInstances {
-    let mut normal: Vec<NoteInstance> = Vec::with_capacity(rendered.len());
+    pack_notes(rendered.iter(), sels)
+}
+
+/// Packs the notes at `indices` (ascending, as returned by [`NoteIndex::query`]) into instances.
+pub fn pack_instances_of(
+    rendered: &[Note],
+    indices: &[u32],
+    sels: &BTreeSet<usize>,
+) -> PackedInstances {
+    pack_notes(indices.iter().map(|&i| &rendered[i as usize]), sels)
+}
+
+/// Shared packing: normal notes first, selected after; `notes` must yield in draw order.
+fn pack_notes<'a>(
+    notes: impl ExactSizeIterator<Item = &'a Note>,
+    sels: &BTreeSet<usize>,
+) -> PackedInstances {
+    let mut normal: Vec<NoteInstance> = Vec::with_capacity(notes.len());
     let mut selected: Vec<NoteInstance> = Vec::new();
-    for n in rendered {
+    for n in notes {
         let is_sel = sels.contains(&(n.owner as usize));
         let inst = NoteInstance::pack(n, u32::from(is_sel));
         if is_sel {
@@ -104,6 +130,116 @@ pub fn pack_instances(rendered: &[Note], sels: &BTreeSet<usize>) -> PackedInstan
     PackedInstances {
         instances: normal,
         normal_count,
+    }
+}
+
+/// Viewport rectangle used to cull note instances, in ticks and keys; the caller passes it
+/// already margin-expanded, so panning inside the margin never triggers a re-upload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CullRange {
+    pub tick_lo: u32,
+    pub tick_hi: u32,
+    pub key_lo: u32,
+    pub key_hi: u32,
+}
+
+impl CullRange {
+    /// Whether `self` fully covers `other` (the uploaded window still contains the request).
+    pub fn contains(&self, other: &CullRange) -> bool {
+        self.tick_lo <= other.tick_lo
+            && self.tick_hi >= other.tick_hi
+            && self.key_lo <= other.key_lo
+            && self.key_hi >= other.key_hi
+    }
+}
+
+/// Whether [`NoteGpu::sync`] must repack and re-upload: the revision changed, nothing is
+/// uploaded yet, or the requested range left the uploaded window.
+pub fn needs_upload(
+    revision_changed: bool,
+    uploaded: Option<CullRange>,
+    requested: CullRange,
+) -> bool {
+    revision_changed || !uploaded.is_some_and(|u| u.contains(&requested))
+}
+
+/// Start-tick bucket index over the rendered notes, used to query only the visible slice.
+///
+/// `bucket_span = max(1, max_end / CULL_BUCKETS)` and bucket `i` holds the indices of the notes
+/// whose `start` falls into `[i * span, (i + 1) * span)`. The maximum gate (`end - start`) is
+/// kept so a query scans from `tick_lo - max_gate`: a note starting far left of the view can
+/// still cover it. Rebuilt only when `App::notes_revision` changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoteIndex {
+    span: u32,
+    buckets: Vec<Vec<u32>>,
+    max_gate: u32,
+}
+
+impl NoteIndex {
+    /// Builds the buckets; `notes` are the full rendered order (`query` returns indices into it).
+    pub fn build(notes: &[Note]) -> Self {
+        let Some(max_end) = notes.iter().map(|n| n.end).max() else {
+            return Self::default();
+        };
+        let span = (max_end / CULL_BUCKETS).max(1);
+        let count = (max_end / span) as usize + 1;
+        let mut buckets: Vec<Vec<u32>> = vec![Vec::new(); count];
+        let mut max_gate = 0u32;
+        for (i, n) in notes.iter().enumerate() {
+            max_gate = max_gate.max(n.end.saturating_sub(n.start));
+            let b = (n.start / span) as usize;
+            buckets[b.min(count - 1)].push(i as u32);
+        }
+        Self {
+            span,
+            buckets,
+            max_gate,
+        }
+    }
+
+    /// The buckets' tick span (`0` for an empty index).
+    #[cfg(test)]
+    pub fn span(&self) -> u32 {
+        self.span
+    }
+
+    /// The longest gate in the index (`0` for an empty index).
+    #[cfg(test)]
+    pub fn max_gate(&self) -> u32 {
+        self.max_gate
+    }
+
+    /// Indices of the notes with `start < tick_hi && end > tick_lo` and a key inside the range,
+    /// in ascending note order (the order [`pack_instances_of`] uses).
+    pub fn query(&self, notes: &[Note], range: CullRange) -> Vec<u32> {
+        let mut out = Vec::new();
+        self.query_into(notes, range, &mut out);
+        out
+    }
+
+    /// [`Self::query`] appending to `out` (which may already hold entries).
+    pub fn query_into(&self, notes: &[Note], range: CullRange, out: &mut Vec<u32>) {
+        if self.buckets.is_empty() {
+            return;
+        }
+        let last = self.buckets.len() - 1;
+        // A note inside the range must start after `tick_lo - max_gate`; scan from that bucket.
+        let lo = (range.tick_lo.saturating_sub(self.max_gate) / self.span) as usize;
+        let hi = (range.tick_hi / self.span) as usize;
+        for b in lo.min(last)..=hi.min(last) {
+            for &i in &self.buckets[b] {
+                let n = &notes[i as usize];
+                if n.start < range.tick_hi
+                    && n.end > range.tick_lo
+                    && (n.key as u32) >= range.key_lo
+                    && (n.key as u32) <= range.key_hi
+                {
+                    out.push(i);
+                }
+            }
+        }
+        out.sort_unstable();
     }
 }
 
@@ -230,12 +366,17 @@ struct Inner {
     max_chunk_bytes: u64,
     /// SPIDERWEB_PERF: log the device limit once and the chunk count on every rebuild.
     perf: bool,
+    /// Packed instances of the uploaded slice (not the whole project).
     cpu: Vec<NoteInstance>,
     normal_count: usize,
     /// true = CPU instances changed; rebuild / re-upload chunks in prepare
     pending_upload: bool,
-    /// App::notes_revision of the last sync
-    last_revision: u64,
+    /// Start-tick buckets over the rendered notes, rebuilt with the index revision below.
+    index: NoteIndex,
+    /// App::notes_revision of the last index build
+    index_revision: u64,
+    /// The cull range the current CPU slice / GPU chunks cover (None before the first upload)
+    uploaded: Option<CullRange>,
     /// true after an upload / allocation failure: GPU notes are skipped until data changes again
     upload_failed: bool,
 }
@@ -313,10 +454,15 @@ impl Inner {
             queue.write_buffer(&chunk.buffer, 0, bytes);
         }
         if self.perf {
+            let range = self.uploaded.unwrap_or_default();
             eprintln!(
-                "[perf] note_gpu: {} instance chunks ({} instances, {} bytes/chunk limit)",
+                "[perf] note_gpu: {} instance chunks ({} instances, ticks {}..{}, keys {}..{}; chunk limit {} bytes)",
                 self.chunks.len(),
                 self.cpu.len(),
+                range.tick_lo,
+                range.tick_hi,
+                range.key_lo,
+                range.key_hi,
                 self.max_chunk_bytes
             );
         }
@@ -429,23 +575,33 @@ impl NoteGpu {
                 cpu: Vec::new(),
                 normal_count: 0,
                 pending_upload: false,
-                last_revision: u64::MAX,
+                index: NoteIndex::default(),
+                index_revision: u64::MAX,
+                uploaded: None,
                 upload_failed: false,
             })),
         }
     }
 
-    /// Repacks the CPU instances only when revision changed (no GPU upload here; prepare does the upload).
-    pub fn sync(&self, rendered: &[Note], sels: &BTreeSet<usize>, revision: u64) {
+    /// Rebuilds the culling index only when the note revision changed, then packs / re-uploads the
+    /// visible slice when the revision changed or the requested range left the uploaded window
+    /// (no GPU work here; prepare does the upload).
+    pub fn sync(&self, rendered: &[Note], sels: &BTreeSet<usize>, revision: u64, cull: CullRange) {
         let mut inner = self.lock();
-        if inner.last_revision == revision {
+        let revision_changed = inner.index_revision != revision;
+        if revision_changed {
+            inner.index = NoteIndex::build(rendered);
+            inner.index_revision = revision;
+        }
+        if !needs_upload(revision_changed, inner.uploaded, cull) {
             return;
         }
-        let packed = pack_instances(rendered, sels);
+        let indices = inner.index.query(rendered, cull);
+        let packed = pack_instances_of(rendered, &indices, sels);
         inner.cpu = packed.instances;
         inner.normal_count = packed.normal_count;
+        inner.uploaded = Some(cull);
         inner.pending_upload = true;
-        inner.last_revision = revision;
     }
 
     /// Builds this frame's paint callback; the uniform values are computed here and prepare only writes the buffer.
@@ -758,5 +914,190 @@ mod tests {
         // The cap wins over rounding up and never drops below the needed size
         assert_eq!(chunk_capacity(1000, 1008), 1008);
         assert_eq!(chunk_capacity(1008, 1008), 1008);
+    }
+
+    // ---------------------------------------------------------------- viewport culling
+
+    fn cull_note(start: i64, end: i64, key: i64) -> Note {
+        Note::from_row6([start, end, key, 100, 0, 0])
+    }
+
+    /// Full-pitch cull range over `[lo, hi]` ticks.
+    fn cull_ticks(lo: u32, hi: u32) -> CullRange {
+        CullRange {
+            tick_lo: lo,
+            tick_hi: hi,
+            key_lo: 0,
+            key_hi: 255,
+        }
+    }
+
+    #[test]
+    fn index_query_on_empty_index_is_empty() {
+        let idx = NoteIndex::build(&[]);
+        assert_eq!(idx.span(), 0);
+        assert_eq!(idx.max_gate(), 0);
+        assert!(idx.query(&[], cull_ticks(0, 1000)).is_empty());
+    }
+
+    #[test]
+    fn index_finds_notes_spanning_buckets() {
+        // max_end 11999 -> span = 2, so the two notes land in different buckets
+        let notes = vec![cull_note(1, 10, 60), cull_note(11999, 12000, 61)];
+        let idx = NoteIndex::build(&notes);
+        assert_eq!(idx.span(), 2);
+        assert_eq!(idx.query(&notes, cull_ticks(0, 2)), vec![0]);
+        assert_eq!(idx.query(&notes, cull_ticks(11999, 12001)), vec![1]);
+        assert_eq!(idx.query(&notes, cull_ticks(0, 12001)), vec![0, 1]);
+    }
+
+    #[test]
+    fn index_finds_a_gate_longer_than_a_bucket() {
+        // span = 48 (200010 / 4096); note 0 alone covers 100000 ticks
+        let notes = vec![cull_note(0, 100_000, 60), cull_note(200_000, 200_010, 61)];
+        let idx = NoteIndex::build(&notes);
+        assert_eq!(idx.span(), 48);
+        assert_eq!(idx.max_gate(), 100_000);
+        assert_eq!(idx.query(&notes, cull_ticks(99_990, 100_000)), vec![0]);
+        assert_eq!(
+            idx.query(&notes, cull_ticks(100_001, 199_999)),
+            Vec::<u32>::new()
+        );
+        assert_eq!(idx.query(&notes, cull_ticks(199_999, 200_011)), vec![1]);
+    }
+
+    #[test]
+    fn index_zero_width_range_keeps_only_straddling_notes() {
+        let notes = vec![
+            cull_note(90, 110, 60),
+            cull_note(0, 100, 61),
+            cull_note(100, 200, 62),
+        ];
+        let idx = NoteIndex::build(&notes);
+        // Tick 100 exactly: [0, 100) ends and [100, 200) starts there, only [90, 110] straddles
+        assert_eq!(idx.query(&notes, cull_ticks(100, 100)), vec![0]);
+    }
+
+    #[test]
+    fn index_filters_by_pitch_range() {
+        let notes = vec![
+            cull_note(0, 10, 40),
+            cull_note(0, 10, 60),
+            cull_note(0, 10, 80),
+        ];
+        let idx = NoteIndex::build(&notes);
+        let pitch = |lo, hi| CullRange {
+            tick_lo: 0,
+            tick_hi: 100,
+            key_lo: lo,
+            key_hi: hi,
+        };
+        assert_eq!(idx.query(&notes, pitch(50, 70)), vec![1]);
+        assert_eq!(idx.query(&notes, pitch(60, 60)), vec![1]);
+        assert_eq!(idx.query(&notes, pitch(0, 255)), vec![0, 1, 2]);
+        assert!(idx.query(&notes, pitch(41, 59)).is_empty());
+    }
+
+    #[test]
+    fn index_finds_a_long_note_starting_far_left() {
+        // Note 0 starts at tick 0 but still covers the far right of the project
+        let mut notes = vec![cull_note(0, 500_000, 60)];
+        for i in 0..100 {
+            let start = 400_000 + i * 10;
+            notes.push(cull_note(start, start + 5, 61));
+        }
+        let idx = NoteIndex::build(&notes);
+        assert_eq!(idx.query(&notes, cull_ticks(499_990, 500_000)), vec![0]);
+        assert_eq!(idx.query(&notes, cull_ticks(499_996, 500_001)), vec![0]);
+    }
+
+    #[test]
+    fn index_query_returns_ascending_note_order() {
+        // Stored out of start order: the query must still match `pack_instances` draw order
+        let notes = vec![
+            cull_note(5000, 5010, 60),
+            cull_note(10, 20, 61),
+            cull_note(9000, 9010, 62),
+        ];
+        let idx = NoteIndex::build(&notes);
+        assert_eq!(idx.query(&notes, cull_ticks(0, 10_000)), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn pack_instances_of_keeps_layer_split_of_the_slice() {
+        let rendered: Vec<Note> = [
+            [0, 10, 60, 100, 0, 0],
+            [100, 110, 61, 100, 0, 1],
+            [200, 210, 62, 100, 1, 2],
+        ]
+        .iter()
+        .map(|r| Note::from_row6(*r))
+        .collect();
+        let sels: BTreeSet<usize> = [1usize].into_iter().collect();
+        // Slice [0, 2]: both owners are unselected, so the whole slice is the normal layer
+        let p = pack_instances_of(&rendered, &[0, 2], &sels);
+        assert_eq!(p.instances.len(), 2);
+        assert_eq!(p.normal_count, 2);
+        assert_eq!(p.instances[0].key(), 60);
+        assert_eq!(p.instances[1].key(), 62);
+        assert_eq!(p.instances[1].layer(), 0);
+        // Slice [1, 2]: the selected note moves behind the normal one and gets layer 1
+        let p = pack_instances_of(&rendered, &[1, 2], &sels);
+        assert_eq!(p.normal_count, 1);
+        assert_eq!(p.instances[0].layer(), 0);
+        assert_eq!(p.instances[0].key(), 62);
+        assert_eq!(p.instances[1].layer(), 1);
+        assert_eq!(p.instances[1].key(), 61);
+    }
+
+    #[test]
+    fn upload_decision_tracks_revision_and_window() {
+        let uploaded = Some(CullRange {
+            tick_lo: 100,
+            tick_hi: 200,
+            key_lo: 10,
+            key_hi: 20,
+        });
+        let req = |t0, t1, k0, k1| CullRange {
+            tick_lo: t0,
+            tick_hi: t1,
+            key_lo: k0,
+            key_hi: k1,
+        };
+        // Revision change always repacks, even when the range is contained
+        assert!(needs_upload(true, uploaded, req(120, 180, 12, 18)));
+        // Contained: reuse the uploaded slice (exact bounds included)
+        assert!(!needs_upload(false, uploaded, req(100, 200, 10, 20)));
+        assert!(!needs_upload(false, uploaded, req(120, 180, 12, 18)));
+        // Crossing any edge re-uploads
+        assert!(needs_upload(false, uploaded, req(99, 150, 12, 18)));
+        assert!(needs_upload(false, uploaded, req(150, 201, 12, 18)));
+        assert!(needs_upload(false, uploaded, req(120, 150, 9, 18)));
+        assert!(needs_upload(false, uploaded, req(120, 150, 12, 21)));
+        // Nothing uploaded yet
+        assert!(needs_upload(false, None, req(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn view_cull_range_expands_ticks_and_keys_by_the_margin() {
+        let view = View {
+            t: 0.0,
+            top: 127.5,
+            sx: 60.0,
+            sy: 6.0,
+            keys: 128,
+            kb_w: 56.0,
+            ruler_h: 20.0,
+            w: 1200.0,
+            h: 600.0,
+            ready: true,
+        };
+        let r = view.cull_range(960);
+        // Visible beats 0..19.0667; one viewport width of margin on each side
+        assert_eq!(r.tick_lo, 0); // clamped at 0 instead of -18304
+        assert_eq!(r.tick_hi, 36_608);
+        // Visible keys 31..127, plus 8 keys on each side
+        assert_eq!(r.key_lo, 23);
+        assert_eq!(r.key_hi, 135);
     }
 }

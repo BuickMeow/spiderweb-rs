@@ -59,13 +59,15 @@ Large projects, whole roll in view (`cargo xtask bench-project`):
 | 50 M | 3.4 s | 9.3 GB | 431 ms | 456 ms |
 | 100 M | 12.6 s | 9.8 GB | 533 ms | 1069 ms |
 
-Frame time scales with the total number of notes: every instance is submitted
-every frame (no visibility paging or LOD yet), so ~10 M notes is the practical
-ceiling for interactive use when the whole roll is on screen. Editing stays
-smooth when zoomed in. The next steps for huge projects are CPU-side
-visible-range paging and summary/LOD blocks for the zoomed-out view. Instance
-buffers are chunked, so projects with tens of millions of notes no longer hit
-wgpu's 256 MiB default buffer limit.
+Frame time scales with the number of **visible** notes: a start-tick index
+culls notes outside the viewport (expanded by one screen of ticks and 8 keys on
+each side) before upload, and the uploaded slice is reused while panning inside
+that margin. Zoomed in, a 25 M-note project uploads a few thousand instances
+(tens of KB) instead of 432 MB and runs at the 60 Hz vsync cap. The table above
+is the fully zoomed-out (fit) case, which still draws every note; summary/LOD
+blocks for that case are the follow-up. Instance buffers are chunked, so
+projects with tens of millions of notes no longer hit wgpu's 256 MiB default
+buffer limit.
 
 Reproduce locally:
 

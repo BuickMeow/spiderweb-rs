@@ -94,6 +94,10 @@ pub const DRAFT_COLOR: (Color32, Color32) = (
     Color32::from_rgb(0x1d, 0x6b, 0x1d),
 );
 
+/// Extra keys kept above / below the visible pitch range in the GPU cull rectangle, so small
+/// vertical pans never re-upload (the tick margin is one viewport width, see [`View::cull_range`]).
+pub const CULL_MARGIN_KEYS: i64 = 8;
+
 /// Piano roll view state.
 #[derive(Clone, Debug)]
 pub struct View {
@@ -152,6 +156,23 @@ impl View {
         let lo = (self.p_of(self.h) - 0.5).ceil() as i64;
         let hi = (self.p_of(self.ruler_h) + 0.5).floor() as i64;
         (lo.max(0), hi.min(self.keys - 1))
+    }
+
+    /// Visible rectangle used to cull GPU note instances, in ticks and keys. Expanded by one
+    /// viewport width of ticks on each side and [`CULL_MARGIN_KEYS`] keys above / below, so
+    /// panning inside the margin reuses the uploaded buffers.
+    pub fn cull_range(&self, ppq: i64) -> crate::note_gpu::CullRange {
+        let ppq = ppq.max(1) as f64;
+        let b_lo = self.b_of(self.kb_w);
+        let b_hi = self.b_of(self.w);
+        let margin = (b_hi - b_lo).max(0.0);
+        let (p_lo, p_hi) = self.visible_pitches();
+        crate::note_gpu::CullRange {
+            tick_lo: ticks_floor(b_lo - margin, ppq),
+            tick_hi: ticks_ceil(b_hi + margin, ppq),
+            key_lo: (p_lo - CULL_MARGIN_KEYS).clamp(0, 255) as u32,
+            key_hi: (p_hi + CULL_MARGIN_KEYS).clamp(0, 255) as u32,
+        }
     }
 
     /// Upper limit of the scroll position (pianoroll.clamp_view): hugs the highest key when the whole range fits above.
@@ -228,6 +249,16 @@ impl View {
             self.clamp();
         }
     }
+}
+
+/// Beat position -> tick, rounding down and saturating at the `Note` tick range.
+fn ticks_floor(beats: f64, ppq: f64) -> u32 {
+    (beats * ppq).floor().clamp(0.0, u32::MAX as f64) as u32
+}
+
+/// Beat position -> tick, rounding up and saturating at the `Note` tick range.
+fn ticks_ceil(beats: f64, ppq: f64) -> u32 {
+    (beats * ppq).ceil().clamp(0.0, u32::MAX as f64) as u32
 }
 
 /// Primary-button drag state machine (upstream self.drag).
@@ -409,9 +440,15 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     let _ = response;
-    // GPU notes: rebuild CPU instances only when revision is dirty (all notes, no cull; pan / zoom leave them alone)
+    // GPU notes: rebuild the culling index only when the revision is dirty; pan / zoom upload
+    // only when the margin-expanded view leaves the uploaded range
     if let Some(gpu) = &app.note_gpu {
-        gpu.sync(&app.rendered, &app.sels, app.notes_revision);
+        gpu.sync(
+            &app.rendered,
+            &app.sels,
+            app.notes_revision,
+            app.view.cull_range(app.ppq),
+        );
     }
     paint(app, &painter, rect);
     crate::roll_menu::menu_ui(app, ui);

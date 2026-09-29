@@ -381,6 +381,7 @@ impl App {
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
         let t_load = Instant::now();
         app.load_autosave();
+        app.apply_view_env();
         app.loaded = true;
         app.sync_funnel_text();
         app.shapes_changed();
@@ -446,6 +447,18 @@ impl App {
                     None => rust_i18n::t!("status.autosave_broken").to_string(),
                 };
             }
+        }
+    }
+
+    /// Applies the `SPIDERWEB_VIEW="t,top,sx,sy"` override after the autosave loaded, so a bench
+    /// run can start at a fixed view (perf hook; see TESTING.md).
+    fn apply_view_env(&mut self) {
+        let Ok(raw) = std::env::var("SPIDERWEB_VIEW") else {
+            return;
+        };
+        match parse_view_env(&raw) {
+            Some(v) => self.view.apply_state(Some(v)),
+            None => eprintln!("SPIDERWEB_VIEW: expected \"t,top,sx,sy\", got {raw:?}"),
         }
     }
 
@@ -1771,6 +1784,22 @@ impl eframe::App for App {
     }
 }
 
+/// Parses the `SPIDERWEB_VIEW="t,top,sx,sy"` perf override; `None` when it is not exactly four
+/// finite numbers (the fields of `ViewState`).
+fn parse_view_env(raw: &str) -> Option<spiderweb_io::project::ViewState> {
+    let parsed: Option<Vec<f64>> = raw
+        .split(',')
+        .map(|part| part.trim().parse::<f64>().ok())
+        .collect();
+    let v = parsed.filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
+    Some(spiderweb_io::project::ViewState {
+        t: v[0],
+        top: v[1],
+        sx: v[2],
+        sy: v[3],
+    })
+}
+
 /// A rendered note row (start, end, pitch, velocity, slot, owner).
 #[cfg(test)]
 fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> Note {
@@ -1780,6 +1809,24 @@ fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> Note {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SPIDERWEB_VIEW perf override takes exactly four finite ViewState fields.
+    #[test]
+    fn spiderweb_view_env_parses_four_finite_numbers() {
+        let v = parse_view_env("0,127.5,500,20").unwrap();
+        assert_eq!((v.t, v.top, v.sx, v.sy), (0.0, 127.5, 500.0, 20.0));
+        let spaced = parse_view_env(" 1 , 2 , 3.5 , 4 ").unwrap();
+        assert_eq!(
+            (spaced.t, spaced.top, spaced.sx, spaced.sy),
+            (1.0, 2.0, 3.5, 4.0)
+        );
+        assert!(parse_view_env("").is_none());
+        assert!(parse_view_env("1,2,3").is_none());
+        assert!(parse_view_env("1,2,3,4,5").is_none());
+        assert!(parse_view_env("1,2,x,4").is_none());
+        assert!(parse_view_env("1,2,inf,4").is_none());
+        assert!(parse_view_env("1,2,NaN,4").is_none());
+    }
 
     /// Python `{n:,}` number formatting in the status lines.
     #[test]

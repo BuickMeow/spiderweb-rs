@@ -97,7 +97,21 @@ SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app
 
 - HUD (top right): frame-time EMA, shape count, note count
 - stderr: `[perf] load+render … ms`, `[perf] shapes_changed … ms`,
-  `[perf] note_gpu: … instance chunks` (device buffer limit and chunks per rebuild)
+  `[perf] note_gpu: … instance chunks` (device buffer limit, uploaded slice's
+  tick / key range and instance count per rebuild)
+
+Start a bench run at a fixed view instead of the autosaved / fit view:
+
+```bash
+SPIDERWEB_PERF=1 SPIDERWEB_VIEW="0,127.5,500,20" cargo run --release -p spiderweb-app
+```
+
+`SPIDERWEB_VIEW` is `t,top,sx,sy` (the `ViewState` fields: beats at the left edge,
+highest visible key, pixels per beat, pixels per key), applied after the autosave
+loads. A zoomed-in view uploads only the visible note slice, so `[perf] note_gpu`
+should show far fewer instances than a fit view. Note culling only: a fully
+zoomed-out project still draws every note, and level-of-detail for that case is
+the planned follow-up.
 
 ### 3.3 Record table (same-screen performance)
 
