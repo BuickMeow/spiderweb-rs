@@ -590,12 +590,12 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut clips = std::mem::take(&mut app.help.clips);
 
     // Body must be at least this tall: egui windows shrink to content height, and without this they would be much shorter than upstream's 900x620
-    let body_h = (ctx.viewport_rect().height() * 0.72).clamp(520.0, 900.0);
+    let body_h = (ctx.viewport_rect().height() * 0.72).clamp(280.0, 900.0);
     egui::Window::new(rust_i18n::t!("help.title", version = VERSION))
         .open(&mut open)
         .default_size([960.0, 760.0])
         .min_width(600.0)
-        .min_height(520.0)
+        .min_height(280.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(body_h);
@@ -730,6 +730,12 @@ fn about_banner_ui(ui: &mut egui::Ui, cache: &mut Option<(bool, egui::TextureHan
     }
 }
 
+/// The default egui font has no arrow glyphs, so the generated help texts
+/// (verbatim upstream) show boxes for them; draw `->` instead.
+fn display_text(s: &str) -> String {
+    s.replace('\u{2192}', "->")
+}
+
 fn show_topic(
     ui: &mut egui::Ui,
     id: Option<&str>,
@@ -762,7 +768,7 @@ fn show_topic(
             HelpPart::Text(text) => {
                 let text = text.trim_end_matches('\n');
                 if !text.is_empty() {
-                    ui.label(text);
+                    ui.label(display_text(text));
                 }
             }
             HelpPart::Clip(name) => show_clip(ui, clips, name),
@@ -828,7 +834,7 @@ pub fn tips_ui(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.label(egui::RichText::new(topic.title).strong());
             ui.add_space(4.0);
-            ui.label(topic.tip);
+            ui.label(display_text(topic.tip));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.checkbox(&mut on, rust_i18n::t!("tip.show")).changed() {

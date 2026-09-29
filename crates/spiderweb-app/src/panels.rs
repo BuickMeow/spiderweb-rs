@@ -1274,7 +1274,7 @@ impl App {
                     ui.label(rust_i18n::t!("panel.defaults.velocity"));
                     let r0 = ui
                         .add(egui::TextEdit::singleline(&mut self.vel_text[0]).desired_width(50.0));
-                    ui.label("→");
+                    ui.label("->");
                     let r1 = ui
                         .add(egui::TextEdit::singleline(&mut self.vel_text[1]).desired_width(50.0));
                     if r0.changed() || r1.changed() {
@@ -1787,7 +1787,7 @@ impl App {
                         }
                     });
                     if new.vary {
-                        ui.label("→");
+                        ui.label("->");
                         if ui
                             .add(egui::TextEdit::singleline(&mut text[1]).desired_width(52.0))
                             .changed()

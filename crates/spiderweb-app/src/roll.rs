@@ -2220,7 +2220,9 @@ fn paint_ruler(app: &App, painter: &egui::Painter, rect: Rect) {
     }
     let mut b = (v.b_of(v.kb_w).max(0.0) / step).floor() * step;
     while b <= v.b_of(v.w) {
-        let x = rect.min.x + v.x_of(b);
+        // Same whole-pixel rounding as the roll's grid columns, so the ruler
+        // ticks and the grid lines line up exactly.
+        let x = rect.min.x + v.x_of(b).round();
         if x >= rect.min.x + v.kb_w {
             painter.line_segment(
                 [Pos2::new(x, top - 6.0), Pos2::new(x, top)],
