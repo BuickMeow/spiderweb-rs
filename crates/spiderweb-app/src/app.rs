@@ -280,8 +280,8 @@ impl App {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
         let perf = std::env::var("SPIDERWEB_PERF").is_ok();
-        if perf {
-            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+        if perf && let Some(rs) = cc.wgpu_render_state.as_ref() {
+            {
                 let info = rs.adapter.get_info();
                 eprintln!(
                     "[perf] gpu: {} ({:?}, {:?})",

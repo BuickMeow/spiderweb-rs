@@ -95,10 +95,10 @@ fn main() {
             if let Some(mode) = present_mode_from_env() {
                 cfg.surface.present_mode = mode;
             }
-            if let Ok(latency) = std::env::var("SPIDERWEB_LATENCY") {
-                if let Ok(n) = latency.parse::<u32>() {
-                    cfg.surface.desired_maximum_frame_latency = Some(n.clamp(1, 3));
-                }
+            if let Ok(latency) = std::env::var("SPIDERWEB_LATENCY")
+                && let Ok(n) = latency.parse::<u32>()
+            {
+                cfg.surface.desired_maximum_frame_latency = Some(n.clamp(1, 3));
             }
             if std::env::var("SPIDERWEB_PERF").is_ok() {
                 eprintln!(
