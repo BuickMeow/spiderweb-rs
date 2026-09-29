@@ -1,6 +1,9 @@
 # Spiderweb 英语文案：逐字取自原版 Python 源码（scripts/ 下），不要自创。
 app:
   startup_failed: "Spiderweb couldn't start because of an error.\n\n%{e}\n\nPlease include errors.log when you report it."
+  draw: "Draw: %{shape_label}"
+  paste: "Paste"
+  turn_90: "Turn 90°"
 
 common:
   yes: "Yes"
@@ -49,6 +52,8 @@ toolbar:
   show_lines: "Show lines"
   show_notes: "Show notes"
   velocity_pane: "Velocity pane"
+  history: "History"
+  history_tip: "The History list: every change as a step; click one to go back to it."
   fit_view: "Fit view"
   undo: "Undo"
   redo: "Redo"
@@ -56,6 +61,16 @@ toolbar:
   stop: "■ Stop (Space)"
   help: "Help (F1)"
   help_tip: "Every tip, searchable. Opens at the tool you're using."
+
+history:
+  history: "History"
+  start: "Start"
+  dock: "Dock"
+  undock: "Undock"
+  click_a_step_to_go_back: "Click a step to go back to it."
+  dock_tip: "Puts the list in a window of its own (Undock) or back in the side panel (Dock)."
+  tumour: "Tumour %{key}"
+  tumours: "Tumours"
 
 panel:
   freehand:
@@ -103,6 +118,9 @@ panel:
     outline_spam: "Outline spam (the outline in notes of one gate)"
     gate: "gate"
     gate_hint: "ticks (Enter to apply)"
+    inside_fill: "Inside fill"
+    spam_gate: "Spam gate"
+    spam_start: "Spam start"
     spam_ends: "Spam ends"
     ends: "ends"
     ends_round: "Round to a gate"
@@ -194,6 +212,7 @@ panel:
     click_type: "Click on the piano roll and type. Click a text to retype it."
     dbl_click: "Double-click the text (or right-click → Edit text) to retype it."
     all_texts: "%{info}  Changes go to all %{n} selected texts."
+    text_setting: "Text setting"
   points:
     title: "Points"
     point: "Point"
@@ -227,6 +246,7 @@ panel:
     info_draw: "Draw the funnel's line, then its wall (drag, or click twice each)."
     info_notes: "%{n} notes.  "
     error_formula: "Can't use the formula \"%{text}\":\n%{e}"
+    funnel_setting: "Funnel setting"
 
 join_split:
   lines_polylines_freehand_strokes_curves: "lines, polylines, freehand strokes, curves and arcs"
@@ -240,9 +260,36 @@ join_split:
   split_into_separate_shapes_or_ctrl: "\n\nSplit into separate shapes (or Ctrl+Z) gives the old shapes back."
   turned_the_shape_into_a_live: "Turned the shape into a live shape (Split into separate shapes gives it back)"
   turned_shapes_into_a_live_shape: "Turned %{n} shapes into a live shape (Split into separate shapes gives them back)"
+  join: "Join"
+  split: "Split"
 
 roll_funnel:
   and: " and "
+  funnel_curve: "Funnel curve"
+  add_a_funnel_line: "Add a funnel line"
+  remove_a_funnel_point: "Remove a funnel point"
+  delete_highlighted: "Delete highlighted"
+  change_curves: "Change curves"
+
+roll_curve:
+  add_an_anchor: "Add an anchor"
+  remove_a_point: "Remove a point"
+
+roll_live:
+  draw_into_the_live_shape: "Draw into the live shape"
+  remove_a_point: "Remove a point"
+  add_an_anchor: "Add an anchor"
+  delete_a_stroke: "Delete a stroke"
+
+roll_text:
+  type: "Type: %{text}"
+
+pianoroll:
+  drag_a_point: "Drag a point"
+  move: "Move"
+  turn: "Turn"
+  skew: "Skew"
+  add_a_point: "Add a point"
 
 convert:
   tumours_become_fixed_points_they_can: "Tumours become fixed points: they can't be changed with the tumour settings any more."
@@ -366,6 +413,7 @@ velocity:
   curve: "Curve"
   pencil: "Pencil"
   hint: "Ctrl = flat · Shift = snap · Enter = done · select a shape to edit only its notes"
+  draw_velocity: "Draw velocity"
 
 drawer:
   title: "Spiderweb — custom shape drawer"

@@ -410,7 +410,14 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
         Some(i) => {
             // 这次输入的第一次改动才压撤销步（原版 ty["undo"]）
             if !app.typing.as_ref().map(|t| t.undo).unwrap_or(false) {
-                app.push_undo();
+                // the History name: what the text was (upstream ty["was"])
+                let was = app
+                    .shapes
+                    .get(i)
+                    .map(|sh| sh.name.clone())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "?".to_string());
+                app.push_undo(&rust_i18n::t!("roll_text.type", text = was));
                 if let Some(ty) = app.typing.as_mut() {
                     ty.undo = true;
                 }
@@ -506,7 +513,7 @@ pub fn set_text_setting(app: &mut App, changes: &TextChange) {
         let old_cap = text::text_font(&tx).cap;
         let new_cap = text::text_font(&changes.apply(&tx)).cap;
         if app.typing.as_ref().and_then(|t| t.i).is_some() {
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("panel.text.text_setting"));
         }
         let (new_tx, new_axes) = text::restyle(&tx, axes, changes, old_cap, new_cap);
         retype(app, new_tx, new_axes);
@@ -524,7 +531,7 @@ pub fn set_text_setting(app: &mut App, changes: &TextChange) {
             })
             .collect();
         if !idxs.is_empty() {
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("panel.text.text_setting"));
         }
         for i in idxs {
             let (tx, axes) = {

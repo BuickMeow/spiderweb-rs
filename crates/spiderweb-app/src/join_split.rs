@@ -193,9 +193,9 @@ impl App {
     }
 
     /// Shape i replaced by parts (selected), their velocities kept where they were.
-    pub fn replace_shape(&mut self, i: usize, parts: Vec<Shape>, velocity: bool) {
+    pub fn replace_shape(&mut self, i: usize, parts: Vec<Shape>, velocity: bool, name: &str) {
         self.cancel_draft();
-        self.push_undo();
+        self.push_undo(name);
         if let Some(sels) = replace_shape_in(&mut self.shapes, i, parts, velocity) {
             let primary = sels.iter().next().copied();
             self.select_many(sels, primary);
@@ -223,7 +223,7 @@ impl App {
         };
         let n = self.sels.len();
         self.cancel_draft();
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("join_split.join"));
         let sels = self.sels.clone();
         let got = join_command(&mut self.shapes, &sels, k, &touch);
         if let Some((at, pieces)) = got {
@@ -261,7 +261,7 @@ impl App {
             return;
         };
         let n = parts.len();
-        self.replace_shape(i, parts, true);
+        self.replace_shape(i, parts, true, &rust_i18n::t!("join_split.split"));
         self.status = rust_i18n::t!("join.split_into", n = n.to_string()).to_string();
     }
 
@@ -306,7 +306,12 @@ impl App {
             self.status = rust_i18n::t!("join.can_t_split").to_string();
             return;
         };
-        self.replace_shape(i, vec![left, right], true);
+        self.replace_shape(
+            i,
+            vec![left, right],
+            true,
+            &rust_i18n::t!("join.split_here"),
+        );
         self.status = rust_i18n::t!("join.split_in_two").to_string();
     }
 

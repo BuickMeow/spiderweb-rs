@@ -374,7 +374,7 @@ fn add_poly_point(app: &mut App, i: usize, pos: Pos2, shift: bool) {
         .collect();
     let q = [view.x_of(pt[0]), view.y_of(pt[1])];
     let k = poly_insert_index(&screen, q);
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("pianoroll.add_a_point"));
     if let Some(sh) = app.shapes.get_mut(i) {
         sh.pts.insert(k, pt);
     }

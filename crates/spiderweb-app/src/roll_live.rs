@@ -350,7 +350,7 @@ pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
             true
         }
         Some(i) => {
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("roll_live.draw_into_the_live_shape"));
             let k = app
                 .shapes
                 .get_mut(i)
@@ -793,7 +793,7 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
             let Some((to_screen, _)) = stroke_maps(app, &fr.frame) else {
                 return;
             };
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("roll_live.remove_a_point"));
             bezier::delete_point(&mut c, j, &to_screen, false);
             let mut strokes = fr.strokes;
             if let Some(PathStroke::Curve {
@@ -850,7 +850,7 @@ pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) ->
     if !bezier::add_anchor(&mut c, seg, t, uv, &to_screen, false) {
         return false;
     }
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("roll_live.add_an_anchor"));
     let mut strokes = fr.strokes;
     if let Some(PathStroke::Curve {
         pts, sharp, sym, ..
@@ -875,7 +875,7 @@ pub fn delete_stroke(app: &mut App, i: usize, k: usize) {
     if k >= n {
         return;
     }
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("roll_live.delete_a_stroke"));
     if let Some(target) = app.shapes.get_mut(i) {
         target.strokes.remove(k);
         refit(target);

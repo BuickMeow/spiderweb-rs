@@ -106,7 +106,7 @@ fn turn_live_now(app: &mut App, order: &[usize], olds: &[Shape]) {
     let cd = crate::roll_live::core_custom_defaults(app);
     let new = Cv::to_live(olds, &paths, &app.defaults, &cd);
     app.cancel_draft();
-    app.push_undo();
+    app.push_undo(&rust_i18n::t!("join_split.turn_into_live_shape"));
     for &i in order.iter().rev() {
         if i < app.shapes.len() {
             app.shapes.remove(i);

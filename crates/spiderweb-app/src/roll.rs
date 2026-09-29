@@ -675,7 +675,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
     if app.draft.is_none()
         && let Some(h) = hit_handle(app, pos)
     {
-        app.push_undo();
+        app.push_undo(&rust_i18n::t!("pianoroll.drag_a_point"));
         app.drag = Some(match h {
             HandleId::Point(i) => Drag::Handle { i },
             HandleId::Stroke(id) => Drag::StrokeHandle(id),
@@ -688,7 +688,12 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
     if let Some(hit) = custom_hit
         && let Some(drag) = custom_box_drag(app, hit, pos, input.shift)
     {
-        app.push_undo();
+        let name = match hit {
+            crate::roll_custom::CustomHit::Turn(_) => rust_i18n::t!("pianoroll.turn"),
+            crate::roll_custom::CustomHit::Skew(_) => rust_i18n::t!("pianoroll.skew"),
+            _ => std::borrow::Cow::Borrowed("Resize"),
+        };
+        app.push_undo(&name);
         app.drag = Some(drag);
         return;
     }
@@ -769,7 +774,7 @@ fn on_press(app: &mut App, pos: Pos2, input: &Inputs) {
             {
                 part = Some(crate::roll_live::stroke_at(app, sh, pos, 6.0));
             }
-            app.push_undo();
+            app.push_undo(&rust_i18n::t!("pianoroll.move"));
             let orig: Vec<(usize, Vec<Pt>)> = app
                 .sels
                 .iter()

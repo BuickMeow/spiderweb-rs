@@ -163,7 +163,7 @@ impl App {
         if !bezier::add_anchor(&mut c, seg, t, pt, &to_screen, false) {
             return false;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("roll_curve.add_an_anchor"));
         if let Some(sh) = self.shapes.get_mut(idx) {
             apply_curve(sh, c);
         }
@@ -224,7 +224,7 @@ impl App {
             Some(_) => {}
         }
         let (to_screen, _) = view_maps(&self.view);
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("roll_curve.remove_a_point"));
         bezier::delete_point(&mut c, i, &to_screen, false);
         if let Some(sh) = self.shapes.get_mut(idx) {
             apply_curve(sh, c);

@@ -283,6 +283,8 @@ impl App {
             {
                 self.tips.show("velocity");
             }
+            ui.checkbox(&mut self.show_history, rust_i18n::t!("toolbar.history"))
+                .on_hover_text(rust_i18n::t!("toolbar.history_tip"));
             if ui.button(rust_i18n::t!("toolbar.fit_view")).clicked() {
                 self.view.fit_shapes(&self.shapes, self.beats);
             }
@@ -324,6 +326,7 @@ impl App {
             self.show_kind_tip();
         }
         self.project_section(ui);
+        crate::history::history_section(self, ui);
         self.shapes_section(ui);
         self.defaults_section(ui);
         self.freehand_section(ui);
@@ -458,7 +461,7 @@ impl App {
         }
         let key = format!("smooth:{:?}", self.sels);
         if self.edit_key.as_deref() != Some(key.as_str()) {
-            self.push_undo();
+            self.push_undo(&rust_i18n::t!("panel.freehand.straighten"));
             self.edit_key = Some(key);
         }
         let k = self.tumour_k();
@@ -796,7 +799,18 @@ impl App {
         }
         let key = format!("tumour:{}:{:?}", change.key(), self.sels);
         if self.edit_key.as_deref() != Some(key.as_str()) {
-            self.push_undo();
+            // the History name: a number box names its setting, the rest are just "Tumours"
+            // (upstream tumour_window.set: group=True for the number boxes)
+            let name = match change {
+                TumourChange::Size(_)
+                | TumourChange::Length(_)
+                | TumourChange::Dist(_)
+                | TumourChange::Ease(_)
+                | TumourChange::Start(_)
+                | TumourChange::End(_) => rust_i18n::t!("history.tumour", key = change.key()),
+                _ => rust_i18n::t!("history.tumours"),
+            };
+            self.push_undo(&name);
             self.edit_key = Some(key);
         }
         for &i in targets {
@@ -1162,7 +1176,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("tool.custom"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.name = name.to_string();
@@ -1178,7 +1192,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.inside_fill"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.fill = fill;
@@ -1193,7 +1207,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.spam_start"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.align = align;
@@ -1208,7 +1222,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.spam_ends"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.ends = ends;
@@ -1224,7 +1238,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.overlaps_cancel_out"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.union = union;
@@ -1239,7 +1253,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.normal_outline"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.apart = apart;
@@ -1262,7 +1276,7 @@ impl App {
             self.schedule_autosave();
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.custom.spam_gate"));
         for &i in placed {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.gate = gate;
@@ -1584,7 +1598,7 @@ impl App {
         } else {
             self.sels.iter().copied().collect()
         };
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.defaults.velocity"));
         if idx.is_empty() {
             self.defaults.vel0 = v0 as f64;
             self.defaults.vel1 = v1 as f64;
@@ -1607,7 +1621,7 @@ impl App {
             self.defaults.end_dot = value;
             return;
         }
-        self.push_undo();
+        self.push_undo(&rust_i18n::t!("panel.defaults.last_note"));
         for i in self.sels.iter().copied().collect::<Vec<_>>() {
             if let Some(sh) = self.shapes.get_mut(i) {
                 sh.end_dot = value;
@@ -2159,7 +2173,7 @@ impl App {
     fn apply_funnel_settings(&mut self, s: FunnelSettings) {
         let targets = self.funnel_target_indices();
         if !targets.is_empty() {
-            self.push_undo();
+            self.push_undo(&rust_i18n::t!("panel.funnel.funnel_setting"));
         }
         if targets.is_empty() {
             self.funnel_defaults = FunnelDefaults {
