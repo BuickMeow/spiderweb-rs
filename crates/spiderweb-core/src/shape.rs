@@ -71,7 +71,10 @@ pub enum Sym {
     Turn,
 }
 
-/// 自定义形状的一条笔画（custom.py 的 stroke 字典）。
+/// A custom shape's stroke (custom.py's stroke dictionary).
+///
+/// `src` is which shape the stroke came from (convert.py's "Turn into live shape"): strokes from
+/// one shape share a number; None = no `src` (grouped as -1, like Python's missing key).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stroke {
     Poly {
@@ -80,19 +83,45 @@ pub enum Stroke {
         free: bool,
         smooth: i64,
         k: f64,
+        src: Option<i64>,
     },
     Curve {
         pts: Vec<Pt>,
         sharp: Vec<usize>,
         sym: Option<Sym>,
+        src: Option<i64>,
     },
     Arc {
         pts: Vec<Pt>,
         k: f64,
+        src: Option<i64>,
     },
     Ellipse {
         box_: [f64; 4],
+        src: Option<i64>,
     },
+}
+
+impl Stroke {
+    /// Which shape the stroke came from (convert.py's `st.get("src")`); None = no `src`.
+    pub fn src(&self) -> Option<i64> {
+        match self {
+            Stroke::Poly { src, .. }
+            | Stroke::Curve { src, .. }
+            | Stroke::Arc { src, .. }
+            | Stroke::Ellipse { src, .. } => *src,
+        }
+    }
+
+    /// Set [`Stroke::src`].
+    pub fn set_src(&mut self, value: Option<i64>) {
+        match self {
+            Stroke::Poly { src, .. }
+            | Stroke::Curve { src, .. }
+            | Stroke::Arc { src, .. }
+            | Stroke::Ellipse { src, .. } => *src = value,
+        }
+    }
 }
 
 /// 肿瘤形状（tumour.py SHAPES）。
@@ -271,6 +300,16 @@ pub enum WallMode {
     Past,
 }
 
+/// The shapes a live shape was made of (convert.py's `sh["from"]`): the originals, plus the new
+/// shape's strokes and box frame right after the conversion. "Split into separate shapes" uses it
+/// to give the originals back, as long as the drawing wasn't changed (moving the whole shape is ok).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeFrom {
+    pub shapes: Vec<Shape>,
+    pub strokes: Vec<Stroke>,
+    pub pts: Vec<Pt>,
+}
+
 /// 一个形状。字段与 Python 形状字典一一对应（各类型专属字段并存，按 kind 生效）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
@@ -291,7 +330,7 @@ pub struct Shape {
     pub sharp: Vec<usize>,
     pub sym: Option<Sym>,
     /// Segments of a joined curve that aren't drawn and make no notes
-    /// (1.2.0 joined.py `sh["gaps"]`).
+    /// (1.2.0 joined.py `sh["gaps"]`; convert.py splits a curve into one stroke per piece here).
     pub gaps: Vec<usize>,
     /// Anchors where a new tumour section starts inside a piece of a joined curve
     /// (1.2.0 joined.py `sh["splits"]`).
@@ -315,6 +354,8 @@ pub struct Shape {
     /// 粘贴的音符（pack_notes 的文本）。
     pub notes: Option<String>,
     pub own_vel: bool,
+    /// Which shapes this live shape was made of (convert.py's `from`; new in 1.2.0).
+    pub from: Option<ShapeFrom>,
     // ---- funnel ----
     pub starts: Vec<FunnelStart>,
     pub funnel_fill: FunnelFill,
@@ -354,6 +395,7 @@ impl Default for Shape {
             text: None,
             notes: None,
             own_vel: false,
+            from: None,
             starts: Vec::new(),
             funnel_fill: FunnelFill::Spam,
             gate0: 0.0625,

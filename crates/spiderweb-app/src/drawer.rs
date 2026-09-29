@@ -429,7 +429,10 @@ impl Drawer {
 
     /// 拖曲线的点（锚点 / 手柄），原版 drag_point 的 exact 模式。
     fn drag_pen(&mut self, i: usize, j: usize, pt: Pt, alt: bool) {
-        let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get(i) else {
+        let Some(Stroke::Curve {
+            pts, sharp, sym, ..
+        }) = self.strokes.get(i)
+        else {
             return;
         };
         let mut c = bezier::Curve {
@@ -443,7 +446,10 @@ impl Drawer {
             let from_screen = self.point_map();
             bezier::drag_point(&mut c, j, pt, alt, &to_screen, &from_screen, true);
         }
-        if let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get_mut(i) {
+        if let Some(Stroke::Curve {
+            pts, sharp, sym, ..
+        }) = self.strokes.get_mut(i)
+        {
             *pts = c.pts;
             *sharp = c.sharp;
             *sym = c.sym;
@@ -455,7 +461,10 @@ impl Drawer {
         let Some(i) = dt::selected_curve(&self.strokes, self.sel) else {
             return;
         };
-        let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get(i) else {
+        let Some(Stroke::Curve {
+            pts, sharp, sym, ..
+        }) = self.strokes.get(i)
+        else {
             return;
         };
         if *sym == mode {
@@ -479,7 +488,10 @@ impl Drawer {
             let map = self.screen_map();
             bezier::set_symmetry(&mut c, mode, source as u8, &map, true);
         }
-        if let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get_mut(i) {
+        if let Some(Stroke::Curve {
+            pts, sharp, sym, ..
+        }) = self.strokes.get_mut(i)
+        {
             *pts = c.pts;
             *sharp = c.sharp;
             *sym = c.sym;
@@ -492,7 +504,10 @@ impl Drawer {
         let Some((i, j)) = self.pen_handle_at(pos) else {
             return false;
         };
-        let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get(i) else {
+        let Some(Stroke::Curve {
+            pts, sharp, sym, ..
+        }) = self.strokes.get(i)
+        else {
             return false;
         };
         let mut c = bezier::Curve {
@@ -513,7 +528,10 @@ impl Drawer {
                     let map = self.screen_map();
                     bezier::delete_point(&mut c, j, &map, true);
                 }
-                if let Some(Stroke::Curve { pts, sharp, sym }) = self.strokes.get_mut(i) {
+                if let Some(Stroke::Curve {
+                    pts, sharp, sym, ..
+                }) = self.strokes.get_mut(i)
+                {
                     *pts = c.pts;
                     *sharp = c.sharp;
                     *sym = c.sym;
@@ -588,6 +606,7 @@ impl Drawer {
                         free: false,
                         smooth: 0,
                         k: 1.0,
+                        src: None,
                     });
                     self.drag = Some(BoardDrag::Poly);
                 } else {
@@ -600,6 +619,7 @@ impl Drawer {
                     free: false,
                     smooth: 0,
                     k: 1.0,
+                    src: None,
                 });
                 self.drag = Some(BoardDrag::Free { last: pos });
             }
@@ -608,6 +628,7 @@ impl Drawer {
                     self.draft = Some(Stroke::Arc {
                         pts: vec![pt, pt],
                         k: 1.0,
+                        src: None,
                     });
                 }
                 Some(Stroke::Arc { pts, .. }) => {
@@ -722,7 +743,7 @@ impl Drawer {
                     opp[0].max(pt[0]),
                     opp[1].max(pt[1]),
                 ];
-                if let Some(Stroke::Ellipse { box_ }) = self.strokes.get_mut(i) {
+                if let Some(Stroke::Ellipse { box_, .. }) = self.strokes.get_mut(i) {
                     *box_ = new;
                 }
                 self.drag = Some(BoardDrag::Corner { i, k, box_ });
@@ -864,7 +885,7 @@ impl Drawer {
             self.sel = Some(i);
             self.drag = Some(match spot {
                 Spot::Corner(k) => match self.strokes.get(i) {
-                    Some(Stroke::Ellipse { box_ }) => BoardDrag::Corner { i, k, box_: *box_ },
+                    Some(Stroke::Ellipse { box_, .. }) => BoardDrag::Corner { i, k, box_: *box_ },
                     _ => return,
                 },
                 Spot::Pen { j, .. } => BoardDrag::Pen { i, j },
@@ -926,6 +947,7 @@ impl Drawer {
                 free: false,
                 smooth: 0,
                 k: 1.0,
+                src: None,
             });
             return;
         }
@@ -950,6 +972,7 @@ impl Drawer {
                 free: false,
                 smooth: 0,
                 k: 1.0,
+                src: None,
             });
         }
     }
@@ -975,23 +998,27 @@ impl Drawer {
                 free: false,
                 smooth: 0,
                 k: 1.0,
+                src: None,
             },
             DrawerTool::Curve => Stroke::Curve {
                 pts: dt::curve_pts(start, pt),
                 sharp: Vec::new(),
                 sym: None,
+                src: None,
             },
             DrawerTool::Square => Stroke::Poly {
                 pts: dt::box_pts(start, pt),
                 free: false,
                 smooth: 0,
                 k: 1.0,
+                src: None,
             },
             DrawerTool::Triangle => Stroke::Poly {
                 pts: dt::triangle_pts(start, pt),
                 free: false,
                 smooth: 0,
                 k: 1.0,
+                src: None,
             },
             _ => Stroke::Ellipse {
                 box_: [
@@ -1000,6 +1027,7 @@ impl Drawer {
                     start[0].max(pt[0]),
                     start[1].max(pt[1]),
                 ],
+                src: None,
             },
         });
     }
@@ -1011,7 +1039,7 @@ impl Drawer {
             return;
         };
         let ok = match &st {
-            Stroke::Ellipse { box_ } => box_[2] > box_[0] && box_[3] > box_[1],
+            Stroke::Ellipse { box_, .. } => box_[2] > box_[0] && box_[3] > box_[1],
             Stroke::Poly { pts, .. } => {
                 let us: Vec<f64> = pts.iter().map(|p| p[0]).collect();
                 let vs: Vec<f64> = pts.iter().map(|p| p[1]).collect();
@@ -1334,7 +1362,7 @@ impl Drawer {
 
     fn paint_draft_points(&self, painter: &egui::Painter, st: &Stroke) {
         let pts: Vec<Pt> = match st {
-            Stroke::Ellipse { box_ } => vec![
+            Stroke::Ellipse { box_, .. } => vec![
                 [box_[0], box_[1]],
                 [box_[2], box_[1]],
                 [box_[2], box_[3]],
@@ -1677,6 +1705,7 @@ impl Drawer {
                     free: false,
                     smooth: 0,
                     k: 1.0,
+                    src: None,
                 });
             }
         });
@@ -1929,6 +1958,7 @@ mod tests {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         }
     }
 
@@ -1939,6 +1969,7 @@ mod tests {
             poly(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]),
             Stroke::Ellipse {
                 box_: [0.1, 0.2, 0.9, 0.8],
+                src: None,
             },
             Stroke::Curve {
                 // 7 点 = 两段：sharp / sym 才有效（原版 clean_curve 对短曲线会丢弃）
@@ -1953,6 +1984,7 @@ mod tests {
                 ],
                 sharp: vec![1],
                 sym: Some(Sym::Mirror),
+                src: None,
             },
         ];
         save_shape(&dir, "Spider", &strokes).expect("写库文件");
@@ -1970,7 +2002,8 @@ mod tests {
         assert_eq!(
             circle,
             vec![Stroke::Ellipse {
-                box_: [0.0, 0.0, 1.0, 1.0]
+                box_: [0.0, 0.0, 1.0, 1.0],
+                src: None
             }]
         );
         assert!(load_shape(&dir, "Nothing").is_none());

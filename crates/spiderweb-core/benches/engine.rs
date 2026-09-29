@@ -67,6 +67,7 @@ fn spam_shape(notes: i64) -> Shape {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         }],
         fill: Fill::Spam,
         gate: GATE,
@@ -119,8 +120,13 @@ fn main() {
     // render：把 spam 的音符跑一遍重叠处理 + 通道分配
     let notes = engine::shape_notes_default(&spam, PPQ);
     bench("render_single_100k", 10, || {
-        let (rendered, _) =
-            engine::render(std::slice::from_ref(&notes), Mode::Single, Split::Key, None);
+        let (rendered, _) = engine::render(
+            std::slice::from_ref(&notes),
+            Mode::Single,
+            Split::Key,
+            None,
+            None,
+        );
         rendered.len()
     });
 }

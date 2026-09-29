@@ -5,6 +5,7 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod app;
+mod convert_ui;
 mod drawer;
 mod drawer_tools;
 mod errors;

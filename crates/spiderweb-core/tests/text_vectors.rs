@@ -125,6 +125,7 @@ fn shape(v: &Value) -> Shape {
                     pts: pts(&s["pts"]),
                     sharp: Vec::new(),
                     sym: None,
+                    src: None,
                 })
                 .collect()
         })
@@ -469,7 +470,10 @@ fn build_smoke() {
     assert_eq!(sh.name, "“Hi”");
 
     for st in &sh.strokes {
-        let Stroke::Curve { pts, sharp, sym } = st else {
+        let Stroke::Curve {
+            pts, sharp, sym, ..
+        } = st
+        else {
             panic!("文本笔画应当是曲线");
         };
         assert!(sharp.is_empty() && sym.is_none());

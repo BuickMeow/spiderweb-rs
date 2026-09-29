@@ -113,12 +113,14 @@ fn stroke_of(v: &Value) -> Stroke {
     let kind = v["kind"]
         .as_str()
         .unwrap_or_else(|| panic!("笔画没有 kind: {v}"));
+    let src = v.get("src").and_then(Value::as_i64);
     match kind {
         "poly" => Stroke::Poly {
             pts: pts(&v["pts"]),
             free: v.get("free").is_some_and(b),
             smooth: v.get("smooth").map_or(0, i),
             k: v.get("k").map_or(1.0, f),
+            src,
         },
         "curve" => Stroke::Curve {
             pts: pts(&v["pts"]),
@@ -128,15 +130,18 @@ fn stroke_of(v: &Value) -> Stroke {
                 .map(|a| a.iter().map(|x| i(x) as usize).collect())
                 .unwrap_or_default(),
             sym: v.get("sym").map(sym_of).unwrap_or(None),
+            src,
         },
         "arc" => Stroke::Arc {
             pts: pts(&v["pts"]),
             k: v.get("k").map_or(1.0, f),
+            src,
         },
         "ellipse" => {
             let b = floats(&v["box"]);
             Stroke::Ellipse {
                 box_: [b[0], b[1], b[2], b[3]],
+                src,
             }
         }
         other => panic!("未知笔画 {other}"),
@@ -377,6 +382,24 @@ fn mode_of(s: &str) -> E::Mode {
     }
 }
 
+/// The `apart` groups of an `assign_slots` case (missing or null = none).
+fn apart_of(v: Option<&Value>) -> Vec<Vec<usize>> {
+    v.and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|g| {
+                    g.as_array()
+                        .expect("apart 组不是数组")
+                        .iter()
+                        .map(|x| i(x) as usize)
+                        .collect()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn note_lists_of(v: &Value) -> Vec<Vec<[i64; 4]>> {
     v.as_array()
         .expect("note_lists 不是数组")
@@ -456,7 +479,8 @@ fn engine_vectors() {
             }
             "assign_slots" => {
                 let lists = note_lists_of(&args[0]);
-                let got = E::assign_slots(&lists, split_of(args[1].as_str().unwrap()));
+                let apart = apart_of(args.get(2));
+                let got = E::assign_slots(&lists, split_of(args[1].as_str().unwrap()), &apart);
                 let want: Vec<usize> = out
                     .as_array()
                     .unwrap()
@@ -475,11 +499,16 @@ fn engine_vectors() {
                         .map(|t| t.as_array().map(|r| r.iter().map(i).collect()))
                         .collect()
                 });
+                let apart: Option<Vec<bool>> = args
+                    .get(4)
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(b).collect());
                 let (notes, count) = E::render(
                     &lists,
                     mode_of(args[1].as_str().unwrap()),
                     split_of(args[2].as_str().unwrap()),
                     tracks.as_deref(),
+                    apart.as_deref(),
                 );
                 assert_rows6_eq(&notes, &out[0], &ctx);
                 assert_eq!(count as i64, i(&out[1]), "{ctx}.count");

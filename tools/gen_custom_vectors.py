@@ -496,6 +496,32 @@ def gen():
 
     # ------------------------------------------------------------ stroke_groups / outline_apart
     add("stroke_groups", [many], C.stroke_groups(many))
+    # Strokes from different shapes (convert.py's "src"): groups ordered by src.
+    def groups_out(sh):
+        got = C.stroke_groups(sh)
+        return None if got is None else [got[k] for k in sorted(got)]
+
+    split_1 = [poly(SQUARE), poly([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]), poly([[2.0, 2.0], [3.0, 3.0]])]
+    src_shape = shape([dict(split_1[0], src=0), dict(split_1[1], src=0), dict(split_1[2], src=1)])
+    add("stroke_groups", [src_shape], groups_out(src_shape))
+    add("clean_strokes", [[dict(split_1[0], src=0), dict(split_1[2], src=1)]],
+        C.clean_strokes([dict(split_1[0], src=0), dict(split_1[2], src=1)]))
+    # A bad stroke (too few points) doesn't stop the src: Python puts it on the last accepted one.
+    bad_src = [dict(split_1[0]), {"kind": "curve", "pts": [[0, 0], [1, 1]], "src": 7},
+               dict(split_1[2]), {"pts": [], "src": 9}]
+    add("clean_strokes", [bad_src], C.clean_strokes(bad_src))
+    # src that isn't an int (float / string) isn't accepted
+    add("clean_strokes", [[dict(split_1[0], src=1.0), dict(split_1[2], src="2")]],
+        C.clean_strokes([dict(split_1[0], src=1.0), dict(split_1[2], src="2")]))
+    # src mixed with strokes that have none (those group under -1)
+    mixed_src = shape([dict(split_1[0], src=5), dict(split_1[1]), dict(split_1[2], src=2)])
+    add("stroke_groups", [mixed_src], groups_out(mixed_src))
+    for s in [src_shape, mixed_src]:
+        add("custom_notes_groups", [s, 960.0], C.custom_notes_groups(s, 960.0))
+        add("outline_groups", [s, 960.0, False], C.outline_groups(s, 960.0))
+        add("outline_groups", [s, 960.0, True], C.outline_groups(s, 960.0, spam=True))
+    src_spam = dict(src_shape, fill="outline_spam", gate=0.25)
+    add("outline_spam", [src_spam, 960.0], C.outline_spam(src_spam, 960.0))
     add("outline_apart", [shape([poly(SQUARE)], fill="fill", apart=True)], C.outline_apart(shape([poly(SQUARE)], fill="fill", apart=True)))
     add("outline_apart", [shape([poly(SQUARE)], fill="spam")], C.outline_apart(shape([poly(SQUARE)], fill="spam")))
     add("outline_apart", [shape([poly(SQUARE)], fill="empty", apart=True)], C.outline_apart(shape([poly(SQUARE)], fill="empty", apart=True)))

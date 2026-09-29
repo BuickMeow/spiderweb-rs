@@ -134,6 +134,7 @@ fn stroke_of(v: &Value) -> Stroke {
             free: v.get("free").is_some_and(b),
             smooth: v.get("smooth").map_or(0, i),
             k: v.get("k").map_or(1.0, f),
+            src: v.get("src").and_then(Value::as_i64),
         },
         "curve" => Stroke::Curve {
             pts: pts(&v["pts"]),
@@ -147,15 +148,18 @@ fn stroke_of(v: &Value) -> Stroke {
                 Some("turn") => Some(Sym::Turn),
                 _ => None,
             },
+            src: v.get("src").and_then(Value::as_i64),
         },
         "arc" => Stroke::Arc {
             pts: pts(&v["pts"]),
             k: v.get("k").map_or(1.0, f),
+            src: v.get("src").and_then(Value::as_i64),
         },
         "ellipse" => {
             let b = floats(&v["box"]);
             Stroke::Ellipse {
                 box_: [b[0], b[1], b[2], b[3]],
+                src: v.get("src").and_then(Value::as_i64),
             }
         }
         other => panic!("未知笔画 {other}"),
@@ -235,6 +239,7 @@ fn shape_of(v: &Value) -> Shape {
 
 fn assert_stroke_eq(got: &Stroke, want: &Value, ctx: &str) {
     let w = stroke_of(want);
+    assert_eq!(got.src(), w.src(), "{ctx}.src");
     match (got, &w) {
         (
             Stroke::Poly {
@@ -242,6 +247,7 @@ fn assert_stroke_eq(got: &Stroke, want: &Value, ctx: &str) {
                 free: gf,
                 smooth: gs,
                 k: gk,
+                ..
             },
             Stroke::Poly {
                 free: wf,
@@ -260,6 +266,7 @@ fn assert_stroke_eq(got: &Stroke, want: &Value, ctx: &str) {
                 pts: gp,
                 sharp: gsh,
                 sym: gsy,
+                ..
             },
             Stroke::Curve {
                 sharp: wsh,
@@ -271,11 +278,11 @@ fn assert_stroke_eq(got: &Stroke, want: &Value, ctx: &str) {
             assert_eq!(gsh, wsh, "{ctx}.sharp");
             assert_eq!(gsy, wsy, "{ctx}.sym");
         }
-        (Stroke::Arc { pts: gp, k: gk }, Stroke::Arc { k: wk, .. }) => {
+        (Stroke::Arc { pts: gp, k: gk, .. }, Stroke::Arc { k: wk, .. }) => {
             assert_pts_eq(gp, &want["pts"], &format!("{ctx}.pts"));
             close_f(*gk, *wk, &format!("{ctx}.k"));
         }
-        (Stroke::Ellipse { box_: gb }, Stroke::Ellipse { box_: wb }) => {
+        (Stroke::Ellipse { box_: gb, .. }, Stroke::Ellipse { box_: wb, .. }) => {
             for j in 0..4 {
                 close_f(gb[j], wb[j], &format!("{ctx}.box[{j}]"));
             }
@@ -505,11 +512,22 @@ fn custom_vectors() {
                 assert_rows3_eq(&g, out, &ctx);
             }
             "stroke_groups" => {
-                assert_eq!(
-                    C::stroke_groups(&shape_of(&args[0])).is_none(),
-                    out.is_null(),
-                    "{ctx}"
-                );
+                let got = C::stroke_groups(&shape_of(&args[0]));
+                match (got, out.as_array()) {
+                    (None, None) => {}
+                    (Some(groups), Some(want)) => {
+                        let got: Vec<Vec<i64>> = groups
+                            .iter()
+                            .map(|g| g.iter().map(|&x| x as i64).collect())
+                            .collect();
+                        let want: Vec<Vec<i64>> = want
+                            .iter()
+                            .map(|g| g.as_array().expect("组不是数组").iter().map(i).collect())
+                            .collect();
+                        assert_eq!(got, want, "{ctx}");
+                    }
+                    (got, want) => panic!("{ctx}: 分组不同 got={got:?} want={want:?}"),
+                }
             }
             "outline_apart" => {
                 assert_eq!(C::outline_apart(&shape_of(&args[0])), b(out), "{ctx}");

@@ -20,6 +20,7 @@ pub enum MenuAction {
     SaveToLibrary,
     Join,
     SplitHere,
+    TurnIntoLive,
     SplitPieces,
     Delete,
     Duplicate,
@@ -69,6 +70,8 @@ pub struct MenuTarget {
     pub line_kind: bool,
     /// The selected shapes can be joined
     pub can_join: bool,
+    /// The selection can be turned into a live shape (no problem at all).
+    pub live: bool,
     /// The hit shape can be split into separate shapes
     pub can_split: bool,
 }
@@ -98,6 +101,7 @@ pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
         picked_curve,
         line_kind: spiderweb_core::joined::LINE_KINDS.contains(&sh.kind),
         can_join: app.can_join(),
+        live: crate::convert_ui::live_problem(app).is_none(),
         can_split: app.can_split_pieces(sh),
     })
 }
@@ -163,6 +167,14 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
         out.push(item(
             rust_i18n::t!("menu.split_here"),
             MenuAction::SplitHere,
+            true,
+        ));
+    }
+    // "Turn into live shape" (convert.py)
+    if t.live {
+        out.push(item(
+            rust_i18n::t!("menu.turn_into_live_shape"),
+            MenuAction::TurnIntoLive,
             true,
         ));
     }
@@ -316,6 +328,7 @@ fn apply_action(app: &mut App, action: MenuAction, i: usize, pos: Pos2, shift: b
         MenuAction::SaveToLibrary => {}
         MenuAction::Join => app.join_selected(),
         MenuAction::SplitHere => app.split_here(i, pos),
+        MenuAction::TurnIntoLive => crate::convert_ui::turn_into_live(app),
         MenuAction::SplitPieces => app.split_pieces_shape(i),
         MenuAction::Delete => app.delete_selected(),
         MenuAction::Duplicate => app.duplicate(),
@@ -406,6 +419,7 @@ mod tests {
             picked_curve: None,
             line_kind: spiderweb_core::joined::LINE_KINDS.contains(&kind),
             can_join: false,
+            live: false,
             can_split: false,
         }
     }
@@ -468,6 +482,14 @@ mod tests {
         let mut text = target(Kind::Custom);
         text.has_text = true;
         assert!(enabled(&menu_entries_for(&text), MenuAction::EditText));
+    }
+
+    #[test]
+    fn live_item_shows_only_when_the_selection_can_be_turned() {
+        let mut t = target(Kind::Line);
+        assert!(find(&menu_entries_for(&t), MenuAction::TurnIntoLive).is_none());
+        t.live = true;
+        assert!(enabled(&menu_entries_for(&t), MenuAction::TurnIntoLive));
     }
 
     #[test]

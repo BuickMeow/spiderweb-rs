@@ -117,6 +117,7 @@ pub static BOX_STROKE: LazyLock<Stroke> = LazyLock::new(|| Stroke::Poly {
     free: false,
     smooth: 0,
     k: 1.0,
+    src: None,
 });
 
 /// 带 track 列的 packed 音符的前缀（custom.TRACKS）。
@@ -163,6 +164,21 @@ fn py_int(v: &Value) -> Option<i64> {
         }
         Value::Bool(b) => Some(i64::from(*b)),
         Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+/// Python `isinstance(x, int)`: integers and bools (True = 1); floats and strings don't count.
+fn py_src(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i)
+            } else {
+                n.as_u64().and_then(|u| i64::try_from(u).ok())
+            }
+        }
+        Value::Bool(b) => Some(i64::from(*b)),
         _ => None,
     }
 }
@@ -245,6 +261,7 @@ pub fn clean_curve(st: &Value, pts: &[Pt]) -> Stroke {
         pts: pts.to_vec(),
         sharp,
         sym,
+        src: None,
     }
 }
 
@@ -312,38 +329,50 @@ pub fn clean_strokes(strokes: &Value) -> Vec<Stroke> {
             if box_.len() == 4 {
                 out.push(Stroke::Ellipse {
                     box_: [box_[0], box_[1], box_[2], box_[3]],
+                    src: None,
                 });
             }
-            continue;
+        } else {
+            let Some(pts) = d.get("pts").and_then(point_list) else {
+                continue;
+            };
+            match d.get("kind").and_then(Value::as_str) {
+                Some("curve") => {
+                    if pts.len() >= 4 {
+                        let n = pts.len() - (pts.len() - 1) % 3;
+                        out.push(clean_curve(st, &pts[..n]));
+                    }
+                }
+                Some("arc") => {
+                    if pts.len() == 3 {
+                        out.push(Stroke::Arc {
+                            pts,
+                            k: arc_k(st),
+                            src: None,
+                        });
+                    }
+                }
+                _ => {
+                    if !pts.is_empty() {
+                        let free = d.get("free").is_some_and(py_bool);
+                        let smooth =
+                            clean_level(d.get("smooth").and_then(py_float).unwrap_or(f64::NAN));
+                        out.push(Stroke::Poly {
+                            pts,
+                            free,
+                            smooth,
+                            k: arc_k(st),
+                            src: None,
+                        });
+                    }
+                }
+            }
         }
-        let Some(pts) = d.get("pts").and_then(point_list) else {
-            continue;
-        };
-        match d.get("kind").and_then(Value::as_str) {
-            Some("curve") => {
-                if pts.len() >= 4 {
-                    let n = pts.len() - (pts.len() - 1) % 3;
-                    out.push(clean_curve(st, &pts[..n]));
-                }
-            }
-            Some("arc") => {
-                if pts.len() == 3 {
-                    out.push(Stroke::Arc { pts, k: arc_k(st) });
-                }
-            }
-            _ => {
-                if !pts.is_empty() {
-                    let free = d.get("free").is_some_and(py_bool);
-                    let smooth =
-                        clean_level(d.get("smooth").and_then(py_float).unwrap_or(f64::NAN));
-                    out.push(Stroke::Poly {
-                        pts,
-                        free,
-                        smooth,
-                        k: arc_k(st),
-                    });
-                }
-            }
+        // Python attaches the source to the last accepted stroke, even when this one was bad.
+        if let Some(src) = d.get("src").and_then(py_src)
+            && let Some(last) = out.last_mut()
+        {
+            last.set_src(Some(src));
         }
     }
     out
@@ -354,7 +383,7 @@ pub fn clean_strokes(strokes: &Value) -> Vec<Stroke> {
 /// 一条笔画作为 (u, v) 点列；椭圆从最左点开始、终点精确回到起点（custom.stroke_points）。
 pub fn stroke_points(st: &Stroke) -> Vec<Pt> {
     match st {
-        Stroke::Ellipse { box_ } => {
+        Stroke::Ellipse { box_, .. } => {
             let (u0, v0, u1, v1) = (box_[0], box_[1], box_[2], box_[3]);
             let (cu, cv, ru, rv) = (
                 (u0 + u1) / 2.0,
@@ -371,7 +400,7 @@ pub fn stroke_points(st: &Stroke) -> Vec<Pt> {
             pts
         }
         Stroke::Curve { pts, .. } => bezier_sample(pts, CURVE_STEPS),
-        Stroke::Arc { pts, k } => arc_points(pts, *k, ARC_STEP),
+        Stroke::Arc { pts, k, .. } => arc_points(pts, *k, ARC_STEP),
         Stroke::Poly { pts, smooth, k, .. } => {
             if *smooth != 0 {
                 smooth_path(pts, *smooth as f64, *k)
@@ -681,6 +710,7 @@ pub fn join_strokes(strokes: &[Stroke]) -> Vec<Stroke> {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         });
     }
     others
@@ -737,11 +767,12 @@ pub fn normalize_strokes(strokes: &[Stroke]) -> (Vec<Stroke>, Option<f64>) {
     };
     let mut out = Vec::with_capacity(strokes.len());
     for st in strokes {
-        if let Stroke::Ellipse { box_ } = st {
+        if let Stroke::Ellipse { box_, .. } = st {
             let a = fix(box_[0], box_[1]);
             let b = fix(box_[2], box_[3]);
             out.push(Stroke::Ellipse {
                 box_: [a[0], a[1], b[0], b[1]],
+                src: None,
             });
             continue;
         }
@@ -761,7 +792,7 @@ pub fn normalize_strokes(strokes: &[Stroke]) -> (Vec<Stroke>, Option<f64>) {
                     *p = fix(p[0], p[1]);
                 }
             }
-            Stroke::Arc { pts, k } => {
+            Stroke::Arc { pts, k, .. } => {
                 for p in pts.iter_mut() {
                     *p = fix(p[0], p[1]);
                 }
@@ -833,7 +864,8 @@ pub fn frame_upright(pts: &[Pt]) -> bool {
 /// 笔画每个点过一遍 fn(u, v) -> (u, v)（custom.map_stroke）。
 /// su / sv：这让笔画宽 / 高了几倍（弧保持圆、椭圆框方向正确用）。
 pub fn map_stroke<F: Fn(f64, f64) -> Pt>(st: &Stroke, f: F, su: f64, sv: f64) -> Stroke {
-    if let Stroke::Ellipse { box_ } = st {
+    // Python builds a fresh dict here, so an ellipse loses its `src`; the other kinds keep it.
+    if let Stroke::Ellipse { box_, .. } = st {
         let a = f(box_[0], box_[1]);
         let b = f(box_[2], box_[3]);
         return Stroke::Ellipse {
@@ -843,6 +875,7 @@ pub fn map_stroke<F: Fn(f64, f64) -> Pt>(st: &Stroke, f: F, su: f64, sv: f64) ->
                 a[0].max(b[0]),
                 a[1].max(b[1]),
             ],
+            src: None,
         };
     }
     let mut new = st.clone();
@@ -861,7 +894,7 @@ pub fn map_stroke<F: Fn(f64, f64) -> Pt>(st: &Stroke, f: F, su: f64, sv: f64) ->
                 *p = f(p[0], p[1]);
             }
         }
-        Stroke::Arc { pts, k } => {
+        Stroke::Arc { pts, k, .. } => {
             for p in pts.iter_mut() {
                 *p = f(p[0], p[1]);
             }
@@ -953,13 +986,14 @@ pub fn stroke_bp(sh: &Shape, k: usize) -> Option<Stroke> {
     let mut st = sh.strokes.get(k)?.clone();
     let to_bp = frame_to_bp(&sh.pts)?;
     if matches!(st, Stroke::Ellipse { .. }) && !frame_upright(&sh.pts) {
-        let Stroke::Ellipse { box_ } = &st else {
+        let Stroke::Ellipse { box_, .. } = &st else {
             return None;
         };
         st = Stroke::Curve {
             pts: ellipse_bezier(*box_),
             sharp: Vec::new(),
             sym: None,
+            src: None,
         };
     }
     let has_k = matches!(st, Stroke::Poly { free: true, .. } | Stroke::Arc { .. });
@@ -981,13 +1015,14 @@ pub fn add_stroke(sh: &mut Shape, st: &Stroke, at: Option<usize>) -> Option<usiz
     let to_uv = frame_to_uv(&sh.pts)?;
     let converted;
     let st = if matches!(st, Stroke::Ellipse { .. }) && !frame_upright(&sh.pts) {
-        let Stroke::Ellipse { box_ } = st else {
+        let Stroke::Ellipse { box_, .. } = st else {
             return None;
         };
         converted = Stroke::Curve {
             pts: ellipse_bezier(*box_),
             sharp: Vec::new(),
             sym: None,
+            src: None,
         };
         &converted
     } else {
@@ -1377,14 +1412,19 @@ pub fn chop_count(sh: &Shape, stretches: &[[i64; 3]], g: i64) -> i64 {
     chop_core(sh, stretches, g, false).0.iter().sum()
 }
 
-/// 形状笔画的分组 `{组: [笔画编号]}`，来自不同形状的笔画（convert.py：每个形状的笔画各自出
-/// 自己的音符）（custom.stroke_groups）；全是一组时 None。
-///
-/// 我们的 [`Stroke`] 还没有 `src`（"Turn into live shape" 属于后续波次），所以现在总是 None；
-/// 分组的消费逻辑（[`outline_groups`] / [`custom_notes_groups`]）已经就位。
+/// Stroke groups of a custom shape whose strokes came from different shapes, as `[[stroke numbers]]`
+/// ordered by the `src` they came from (custom.stroke_groups; convert.py: each shape's strokes make
+/// their notes on their own, like the shapes did). None if they all belong to one group.
 pub fn stroke_groups(sh: &Shape) -> Option<Vec<Vec<usize>>> {
-    let _ = sh;
-    None
+    let mut groups: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (k, st) in sh.strokes.iter().enumerate() {
+        groups.entry(st.src().unwrap_or(-1)).or_default().push(k);
+    }
+    if groups.len() > 1 {
+        Some(groups.into_values().collect())
+    } else {
+        None
+    }
 }
 
 /// 轮廓的音符（spam：像 Outline spam 那样切断）和每个音符属于哪个笔画组（笔画全一组时 None，
@@ -1820,6 +1860,7 @@ mod tests {
             free: false,
             smooth: 0,
             k: 1.0,
+            src: None,
         }
     }
 
@@ -1971,7 +2012,7 @@ mod tests {
         assert!(plan.flat.is_empty());
     }
 
-    /// 没有 src 时笔画全是一组（convert 的 groups 属于后续波次）。
+    /// Without `src` the strokes are all one group; `outline_groups` only splits real sources.
     #[test]
     fn groups_are_one_without_src() {
         let sh = shape(Fill::Empty, Align::Auto, Ends::Drop, false, vec![square()]);

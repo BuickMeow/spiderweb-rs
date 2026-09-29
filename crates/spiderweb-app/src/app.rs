@@ -214,6 +214,8 @@ pub struct App {
     pub pending_big: Option<PendingBig>,
     /// Delete all 的确认框（原版 messagebox.askyesno）：待确认的形状数。
     pub pending_delete_all: Option<usize>,
+    /// "Turn into live shape" warning when something is lost (convert_ui.rs).
+    pub pending_turn_live: Option<crate::convert_ui::PendingTurnLive>,
     pub clipboard: Vec<Shape>,
     pub loaded: bool,
     pub panel_sel: Option<usize>,
@@ -322,6 +324,7 @@ impl App {
             last_autosave: Instant::now(),
             pending_big: None,
             pending_delete_all: None,
+            pending_turn_live: None,
             clipboard: Vec::new(),
             loaded: false,
             panel_sel: None,
@@ -621,6 +624,12 @@ impl App {
         let got: Vec<NotesAndTracks> = self.shapes.iter().map(|sh| self.notes_tracks(sh)).collect();
         let lists: Vec<Vec<[i64; 4]>> = got.iter().map(|(n, _)| n.clone()).collect();
         let tracks: Vec<Option<Vec<i64>>> = got.iter().map(|(_, t)| t.clone()).collect();
+        // Fill / Spam "Outline": the outline and the inside must get channels of their own.
+        let apart: Vec<bool> = self
+            .shapes
+            .iter()
+            .map(spiderweb_core::custom::outline_apart)
+            .collect();
         let (rendered, count) = engine::render(
             &lists,
             match self.channel_mode {
@@ -633,6 +642,7 @@ impl App {
                 ChannelSplit::Time => Split::Time,
             },
             Some(&tracks),
+            Some(&apart),
         );
         self.rendered = rendered;
         self.slot_count = count;
@@ -1335,6 +1345,10 @@ impl App {
             if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::J)) {
                 self.flip(false);
             }
+            // Ctrl+L: turn the selection into one live shape (roll_menu / join_split)
+            if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::L)) {
+                crate::convert_ui::turn_into_live(self);
+            }
             if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::ArrowLeft)) {
                 self.rotate(false);
             }
@@ -1556,6 +1570,8 @@ impl eframe::App for App {
                 self.pending_big = Some(pending);
             }
         }
+
+        crate::convert_ui::dialog_ui(self, &ctx);
 
         if let Some(count) = self.pending_delete_all.take() {
             let mut delete = false;
