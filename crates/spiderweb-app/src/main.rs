@@ -37,11 +37,19 @@ mod tumour_window;
 /// the surface present mode (Mailbox exists on Windows, not on macOS).
 fn present_mode_from_env() -> Option<eframe::egui_wgpu::wgpu::PresentMode> {
     use eframe::egui_wgpu::wgpu::PresentMode;
-    match std::env::var("SPIDERWEB_PRESENT")
-        .ok()?
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    let mode = parse_present_mode(&std::env::var("SPIDERWEB_PRESENT").ok()?)?;
+    // Mailbox is a Vulkan/DX12 mode; Metal has no such present mode, so asking
+    // for it on macOS would fail surface setup. Keep the default there.
+    if cfg!(target_os = "macos") && mode == PresentMode::Mailbox {
+        eprintln!("[perf] Mailbox is not supported on macOS; keeping AutoVsync");
+        return None;
+    }
+    Some(mode)
+}
+
+fn parse_present_mode(name: &str) -> Option<eframe::egui_wgpu::wgpu::PresentMode> {
+    use eframe::egui_wgpu::wgpu::PresentMode;
+    match name.to_ascii_lowercase().as_str() {
         "mailbox" => Some(PresentMode::Mailbox),
         "fifo" | "vsync" => Some(PresentMode::Fifo),
         "immediate" => Some(PresentMode::Immediate),

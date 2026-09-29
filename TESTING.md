@@ -102,7 +102,7 @@ SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app
 Extra switches for GPU/driver experiments:
 
 - `SPIDERWEB_PRESENT=mailbox|fifo|immediate|autovsync|autonovsync` — present mode
-  (Mailbox exists on Windows, not on macOS; default is AutoVsync)
+  (default AutoVsync; Mailbox exists on Windows only and is ignored on macOS)
 - `SPIDERWEB_LATENCY=1|2|3` — queued frames (`desired_maximum_frame_latency`)
 - `SPIDERWEB_VIEW="t,top,sx,sy"` — start at a fixed view for repeatable runs,
   `[perf] note_gpu: … instance chunks` (device buffer limit, uploaded slice's
