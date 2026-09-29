@@ -241,6 +241,8 @@ pub struct App {
     pub perf: bool,
     /// Exponential average frame time (ms)
     pub frame_ms: f32,
+    /// Frame-time samples for the periodic p50/p95 log (SPIDERWEB_PERF)
+    pub perf_samples: Vec<f32>,
     /// Text being typed (upstream roll.typing)
     pub typing: Option<Typing>,
     /// Contents of the text clipboard, written to the system clipboard once a ctx is available
@@ -357,6 +359,7 @@ impl App {
             vel_text: ["127".into(), "127".into()],
             perf,
             frame_ms: 0.0,
+            perf_samples: Vec::new(),
             typing: None,
             text_clipboard: None,
             font_dialog: None,
@@ -1719,6 +1722,19 @@ impl eframe::App for App {
         if self.perf {
             let dt = ctx.input(|i| i.stable_dt); // time taken by the last frame
             self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
+            self.perf_samples.push(dt * 1000.0);
+            if self.perf_samples.len() >= 600 {
+                let mut v = std::mem::take(&mut self.perf_samples);
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let at = |q: f64| v[((v.len() as f64 - 1.0) * q).round() as usize];
+                eprintln!(
+                    "[perf] frames {}: p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+                    v.len(),
+                    at(0.5),
+                    at(0.95),
+                    v.last().copied().unwrap_or(0.0)
+                );
+            }
             egui::Area::new(egui::Id::new("perf_hud"))
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
                 .show(&ctx, |ui| {
