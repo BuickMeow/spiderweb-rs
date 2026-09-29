@@ -1495,7 +1495,13 @@ impl App {
                     self.part_main = None;
                 }
             }
-            if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Delete)) {
+            let mut delete = false;
+            for key in delete_keys() {
+                if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, *key)) {
+                    delete = true;
+                }
+            }
+            if delete {
                 // Highlighted funnel lines and curves take priority (upstream delete_parts)
                 if !self.delete_funnel_parts() {
                     self.delete_pressed();
@@ -1636,6 +1642,17 @@ pub fn scrub_hits(rendered: &[Note], t_from: f64, t_to: f64) -> BTreeMap<(u8, i6
         }
     }
     now
+}
+
+/// The keys that delete the selection. macOS keyboards have no forward-delete
+/// key, so Backspace works there too; text fields are guarded by
+/// `egui_wants_keyboard_input`, so this never eats typing.
+pub(crate) fn delete_keys() -> &'static [egui::Key] {
+    if cfg!(target_os = "macos") {
+        &[egui::Key::Delete, egui::Key::Backspace]
+    } else {
+        &[egui::Key::Delete]
+    }
 }
 
 impl eframe::App for App {
@@ -1887,5 +1904,14 @@ mod tests {
         // Notes whose ranges don't overlap make no sound
         let missed = scrub_hits(&rendered, 500.0, 600.0);
         assert!(missed.is_empty());
+    }
+
+    #[test]
+    fn delete_keys_follow_the_platform() {
+        let keys = delete_keys();
+        #[cfg(target_os = "macos")]
+        assert!(keys.contains(&egui::Key::Backspace), "macOS uses Backspace");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(keys, &[egui::Key::Delete]);
     }
 }
