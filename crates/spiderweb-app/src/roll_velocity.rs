@@ -15,6 +15,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use spiderweb_core::Pt;
 use spiderweb_core::engine;
 use spiderweb_core::envelope::{env_at, paint_env, tidy_env, velocity_env};
+use spiderweb_core::note::Note;
 use spiderweb_core::round_half_even;
 use spiderweb_core::shape::Shape;
 
@@ -403,9 +404,9 @@ fn snap_spots(app: &App) -> Vec<f64> {
     let mut lo = i64::MAX;
     let mut hi = i64::MIN;
     for n in &app.rendered {
-        if app.sels.contains(&(n[5] as usize)) {
-            lo = lo.min(n[0]);
-            hi = hi.max(n[0]);
+        if app.sels.contains(&(n.owner as usize)) {
+            lo = lo.min(n.start as i64);
+            hi = hi.max(n.start as i64);
         }
     }
     if lo > hi {
@@ -744,11 +745,11 @@ fn mark(app: &mut App, seg: &[Pt], only: Option<&BTreeSet<usize>>) {
         return;
     };
     for (k, n) in rendered.iter().enumerate() {
-        let start = n[0] as f64;
+        let start = n.start as f64;
         if start < lo || start > hi {
             continue;
         }
-        let owner = n[5] as usize;
+        let owner = n.owner as usize;
         let allowed = match only {
             Some(set) => set.contains(&owner),
             None => sels.is_empty() || sels.contains(&owner),
@@ -918,9 +919,9 @@ fn collect_bars(app: &App, state: &VelocityState, pane: Pane) -> Vec<Bar> {
     let iw = pane.image_w();
     let preview = state.edit.as_ref().and_then(|e| e.preview.as_ref());
     let mut out = Vec::new();
-    let push = |note: &[i64], layer: usize, vel: f64, out: &mut Vec<Bar>| {
-        let x0 = v.x_of(note[0] as f64 / ppq) - pane.kb;
-        let x1 = v.x_of(note[1] as f64 / ppq) - pane.kb;
+    let push = |note: &Note, layer: usize, vel: f64, out: &mut Vec<Bar>| {
+        let x0 = v.x_of(note.start as f64 / ppq) - pane.kb;
+        let x1 = v.x_of(note.end as f64 / ppq) - pane.kb;
         if x1 < 0.0 || x0 >= iw {
             return;
         }
@@ -936,11 +937,11 @@ fn collect_bars(app: &App, state: &VelocityState, pane: Pane) -> Vec<Bar> {
             .and_then(|p| p.get(k))
             .copied()
             .filter(|&p| p >= 0)
-            .unwrap_or(n[3]) as f64;
-        let slot = n[4].unsigned_abs() as usize % roll::SLOT_COLORS.len();
+            .unwrap_or(n.vel as i64) as f64;
+        let slot = n.slot as usize % roll::SLOT_COLORS.len();
         let layer = if app.sels.is_empty() {
             NORMAL + slot
-        } else if app.sels.contains(&(n[5] as usize)) {
+        } else if app.sels.contains(&(n.owner as usize)) {
             SELECTED
         } else {
             slot // unselected ones fade
@@ -949,7 +950,7 @@ fn collect_bars(app: &App, state: &VelocityState, pane: Pane) -> Vec<Bar> {
     }
     if let Some(d) = &app.draft {
         for n in engine::shape_notes(d, ppq, app.keys) {
-            push(&n, DRAFT, n[3] as f64, &mut out);
+            push(&n, DRAFT, n.vel as f64, &mut out);
         }
     }
     out

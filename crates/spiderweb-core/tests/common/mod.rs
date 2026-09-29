@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
+use spiderweb_core::Note;
 
 pub fn cases(module: &str) -> Vec<Value> {
     let path = format!("{}/tests/vectors/{module}.json", env!("CARGO_MANIFEST_DIR"));
@@ -66,6 +67,16 @@ pub fn rows_i64(v: &Value) -> Vec<Vec<i64>> {
 
 pub fn floats(v: &Value) -> Vec<f64> {
     v.as_array().expect("not an array").iter().map(f).collect()
+}
+
+/// A compact [`Note`] as the `(start, end, key, velocity)` i64 row the vectors use.
+pub fn note_row4(n: &Note) -> [i64; 4] {
+    [n.start as i64, n.end as i64, n.key as i64, n.vel as i64]
+}
+
+/// The compact notes as the `(start, end, key, velocity, slot, owner)` i64 rows the vectors use.
+pub fn note_rows6(notes: &[Note]) -> Vec<[i64; 6]> {
+    notes.iter().map(|n| n.row6()).collect()
 }
 
 fn close(a: f64, b: f64) -> bool {

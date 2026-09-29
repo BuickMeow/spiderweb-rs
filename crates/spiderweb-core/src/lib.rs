@@ -13,6 +13,7 @@
 //! - [`funnel`] funnel
 //! - [`text`] text -> glyph outlines
 //! - [`engine`] assembly: shapes -> notes, overlap handling, channel assignment
+//! - [`note`] the compact 16-byte rendered note ([`Note`])
 
 pub mod arc;
 pub mod bezier;
@@ -23,6 +24,7 @@ pub mod envelope;
 pub mod fonts;
 pub mod funnel;
 pub mod joined;
+pub mod note;
 pub mod paths;
 pub mod pyrandom;
 pub mod shape;
@@ -36,11 +38,7 @@ pub type Pt = [f64; 2];
 /// (start, end, key) note row; ticks are integers.
 pub type Note3 = [i64; 3];
 
-/// (start, end, key, velocity) note row.
-pub type Note4 = [i64; 4];
-
-/// (start, end, key, velocity, slot, owner) note row (the final form of engine.render).
-pub type Note6 = [i64; 6];
+pub use note::Note;
 
 /// Reimplementation of CPython 3.9 `math.hypot`: scale by the largest component,
 /// then use Neumaier compensated summation

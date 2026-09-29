@@ -7,6 +7,7 @@ mod common;
 
 use common::*;
 use serde_json::Value;
+use spiderweb_core::Note;
 use spiderweb_core::Pt;
 use spiderweb_core::engine as E;
 use spiderweb_core::shape::{
@@ -60,12 +61,13 @@ fn rows6(v: &Value) -> Vec<[i64; 6]> {
         .collect()
 }
 
-fn assert_rows4_eq(got: &[[i64; 4]], want: &Value, ctx: &str) {
-    assert_eq!(got, rows4(want).as_slice(), "{ctx}");
+fn assert_rows4_eq(got: &[Note], want: &Value, ctx: &str) {
+    let rows: Vec<[i64; 4]> = got.iter().map(note_row4).collect();
+    assert_eq!(rows, rows4(want).as_slice(), "{ctx}");
 }
 
-fn assert_rows6_eq(got: &[[i64; 6]], want: &Value, ctx: &str) {
-    assert_eq!(got, rows6(want).as_slice(), "{ctx}");
+fn assert_rows6_eq(got: &[Note], want: &Value, ctx: &str) {
+    assert_eq!(note_rows6(got), rows6(want), "{ctx}");
 }
 
 // ---------------------------------------------------------------- shape dict -> Shape
@@ -400,11 +402,16 @@ fn apart_of(v: Option<&Value>) -> Vec<Vec<usize>> {
         .unwrap_or_default()
 }
 
-fn note_lists_of(v: &Value) -> Vec<Vec<[i64; 4]>> {
+fn note_lists_of(v: &Value) -> Vec<Vec<Note>> {
     v.as_array()
         .expect("note_lists is not an array")
         .iter()
-        .map(rows4)
+        .map(|l| {
+            rows4(l)
+                .iter()
+                .map(|r| Note::new(r[0], r[1], r[2], r[3]))
+                .collect()
+        })
         .collect()
 }
 
@@ -474,7 +481,9 @@ fn engine_vectors() {
                 let keys = args.get(2).map_or(128, i);
                 let (notes, tracks) = E::shape_notes_tracks(&shape_of(&args[0]), f(&args[1]), keys);
                 assert_rows4_eq(&notes, &out[0], &ctx);
-                let want: Option<Vec<i64>> = out[1].as_array().map(|a| a.iter().map(i).collect());
+                let want: Option<Vec<u32>> = out[1]
+                    .as_array()
+                    .map(|a| a.iter().map(|x| i(x) as u32).collect());
                 assert_eq!(tracks, want, "{ctx}.tracks");
             }
             "assign_slots" => {
@@ -490,13 +499,20 @@ fn engine_vectors() {
                 assert_eq!(got, want, "{ctx}");
             }
             "resolve_overlaps" => {
-                assert_rows6_eq(&E::resolve_overlaps(&rows6(&args[0])), out, &ctx);
+                let input: Vec<Note> = rows6(&args[0])
+                    .iter()
+                    .map(|r| Note::from_row6(*r))
+                    .collect();
+                assert_rows6_eq(&E::resolve_overlaps(&input), out, &ctx);
             }
             "render" => {
                 let lists = note_lists_of(&args[0]);
-                let tracks: Option<Vec<Option<Vec<i64>>>> = args[3].as_array().map(|a| {
+                let tracks: Option<Vec<Option<Vec<u32>>>> = args[3].as_array().map(|a| {
                     a.iter()
-                        .map(|t| t.as_array().map(|r| r.iter().map(i).collect()))
+                        .map(|t| {
+                            t.as_array()
+                                .map(|r| r.iter().map(|x| i(x) as u32).collect())
+                        })
                         .collect()
                 });
                 let apart: Option<Vec<bool>> = args

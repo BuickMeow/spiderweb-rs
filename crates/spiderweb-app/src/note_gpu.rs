@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use eframe::egui_wgpu::{self, CallbackTrait, RenderState, ScreenDescriptor, wgpu};
 use egui::{PaintCallback, PaintCallbackInfo, Pos2, Rect, Rgba};
+use spiderweb_core::Note;
 
 use crate::roll::{SELECTED_COLOR, SLOT_COLORS, View};
 
@@ -44,17 +45,13 @@ pub struct NoteInstance {
 }
 
 impl NoteInstance {
-    /// Packs a rendered note row `(start, end, pitch, velocity, slot, owner)` into one instance.
-    pub fn pack(n: &[i64; 6], layer: u32) -> Self {
-        let start = n[0].max(0) as u32;
-        let end = n[1].max(0) as u32;
-        let key = n[2].clamp(0, 255) as u32;
-        let vel = n[3].clamp(0, 127) as u32;
-        let slot = (n[4].unsigned_abs() as u32) % SLOT_COLORS.len() as u32;
+    /// Packs a rendered note into one instance (the compact fields are read directly).
+    pub fn pack(n: &Note, layer: u32) -> Self {
+        let slot = n.slot as u32 % SLOT_COLORS.len() as u32;
         Self {
-            start,
-            end,
-            meta: key | (vel << 8) | (slot << 16) | ((layer & 0xff) << 24),
+            start: n.start,
+            end: n.end,
+            meta: n.key as u32 | ((n.vel as u32) << 8) | (slot << 16) | ((layer & 0xff) << 24),
             _pad: 0,
         }
     }
@@ -90,13 +87,11 @@ pub struct PackedInstances {
 }
 
 /// Packs all rendered notes into instances (no visibility cull).
-pub fn pack_instances(rendered: &[[i64; 6]], sels: &BTreeSet<usize>) -> PackedInstances {
+pub fn pack_instances(rendered: &[Note], sels: &BTreeSet<usize>) -> PackedInstances {
     let mut normal: Vec<NoteInstance> = Vec::with_capacity(rendered.len());
     let mut selected: Vec<NoteInstance> = Vec::new();
     for n in rendered {
-        let is_sel = usize::try_from(n[5])
-            .map(|owner| sels.contains(&owner))
-            .unwrap_or(false);
+        let is_sel = sels.contains(&(n.owner as usize));
         let inst = NoteInstance::pack(n, u32::from(is_sel));
         if is_sel {
             selected.push(inst);
@@ -441,7 +436,7 @@ impl NoteGpu {
     }
 
     /// Repacks the CPU instances only when revision changed (no GPU upload here; prepare does the upload).
-    pub fn sync(&self, rendered: &[[i64; 6]], sels: &BTreeSet<usize>, revision: u64) {
+    pub fn sync(&self, rendered: &[Note], sels: &BTreeSet<usize>, revision: u64) {
         let mut inner = self.lock();
         if inner.last_revision == revision {
             return;
@@ -591,7 +586,7 @@ mod tests {
     #[test]
     fn instance_packing_layout() {
         assert_eq!(std::mem::size_of::<NoteInstance>(), 16);
-        let inst = NoteInstance::pack(&[960, 1920, 60, 127, 17, 3], 1);
+        let inst = NoteInstance::pack(&Note::from_row6([960, 1920, 60, 127, 17, 3]), 1);
         assert_eq!(inst.start, 960);
         assert_eq!(inst.end, 1920);
         assert_eq!(inst.key(), 60);
@@ -599,26 +594,29 @@ mod tests {
         assert_eq!(inst.slot(), 2); // 17 % 15
         assert_eq!(inst.layer(), 1);
         assert_eq!(inst._pad, 0);
-        // Negative ticks, out-of-range pitch / velocity and negative slots are clamped into range (256 keys: key up to 255)
-        let weird = NoteInstance::pack(&[-5, -1, 200, 300, -16, 0], 0);
+        // Out-of-range rows saturate on conversion (256 keys: key up to 255)
+        let weird = NoteInstance::pack(&Note::from_row6([-5, -1, 200, 300, -16, 0]), 0);
         assert_eq!(weird.start, 0);
         assert_eq!(weird.end, 0);
         assert_eq!(weird.key(), 200);
         assert_eq!(weird.vel(), 127);
-        let max = NoteInstance::pack(&[0, 10, 999, 300, 0, 0], 0);
+        let max = NoteInstance::pack(&Note::from_row6([0, 10, 999, 300, 0, 0]), 0);
         assert_eq!(max.key(), 255);
-        assert_eq!(weird.slot(), 1); // 16 % 15
+        assert_eq!(weird.slot(), 0); // negative slots saturate to 0
         assert_eq!(weird.layer(), 0);
     }
 
     #[test]
     fn selected_layer_drawn_last() {
-        let rendered = vec![
+        let rendered: Vec<Note> = [
             [0, 10, 60, 100, 0, 0],
             [0, 10, 61, 100, 0, 1],
             [0, 10, 62, 100, 1, 2],
             [0, 10, 63, 100, 2, 1],
-        ];
+        ]
+        .iter()
+        .map(|r| Note::from_row6(*r))
+        .collect();
         let sels: BTreeSet<usize> = [1usize].into_iter().collect();
         let p = pack_instances(&rendered, &sels);
         assert_eq!(p.instances.len(), 4);

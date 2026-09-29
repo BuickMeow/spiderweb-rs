@@ -478,16 +478,17 @@ mod tests {
             line(Kind::Line, vec![[3.5, 61.0], [4.0, 61.0]]),
         ];
         let ppq = 960.0;
-        let before: Vec<Vec<[i64; 4]>> = src
+        let row4 = |n: &crate::Note| [n.start as i64, n.end as i64, n.key as i64, n.vel as i64];
+        let before: Vec<Vec<crate::Note>> = src
             .iter()
             .map(|sh| crate::engine::shape_notes(sh, ppq, 128))
             .collect();
         let paths = paths_of(&src);
         let new = to_live(&src, &paths, &Shape::default(), &CustomDefaults::default());
         let after = crate::engine::shape_notes(&new, ppq, 128);
-        let mut want: Vec<[i64; 4]> = before.iter().flatten().copied().collect();
+        let mut want: Vec<[i64; 4]> = before.iter().flatten().map(row4).collect();
         want.sort_unstable();
-        let mut got = after.clone();
+        let mut got: Vec<[i64; 4]> = after.iter().map(row4).collect();
         got.sort_unstable();
         assert_eq!(got, want, "converted notes should be the originals'");
 
@@ -511,7 +512,7 @@ mod tests {
             line(Kind::Line, vec![[1.0, 60.0], [3.0, 62.0]]),
             line(Kind::Arc, vec![[5.0, 60.0], [6.0, 61.0], [7.0, 60.0]]),
         ];
-        let before_lists: Vec<Vec<[i64; 4]>> = src
+        let before_lists: Vec<Vec<crate::Note>> = src
             .iter()
             .map(|sh| crate::engine::shape_notes(sh, ppq, 128))
             .collect();
@@ -527,7 +528,15 @@ mod tests {
             Some(&[Some(tracks)]),
             None,
         );
-        let row = |r: &[i64; 6]| [r[0], r[1], r[2], r[3], r[4]];
+        let row = |r: &crate::Note| {
+            [
+                r.start as i64,
+                r.end as i64,
+                r.key as i64,
+                r.vel as i64,
+                r.slot as i64,
+            ]
+        };
         let mut a: Vec<[i64; 5]> = before.iter().map(row).collect();
         let mut b: Vec<[i64; 5]> = after.iter().map(row).collect();
         a.sort_unstable();

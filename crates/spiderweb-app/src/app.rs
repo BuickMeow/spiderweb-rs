@@ -11,6 +11,7 @@ use eframe::egui;
 use spiderweb_core::custom::notes_shape;
 use spiderweb_core::engine::{self, Mode, Split};
 use spiderweb_core::joined;
+use spiderweb_core::note::Note;
 use spiderweb_core::shape::{Kind, Shape, TextSettings};
 use spiderweb_domino::DominoStart;
 use spiderweb_io::compat::{shape_from_json, shape_to_json};
@@ -33,7 +34,7 @@ use crate::text_dialog::FontDialog;
 pub const VERSION: &str = "1.2.0";
 
 /// Notes per shape and the track column (for pasted notes).
-type NotesAndTracks = (Vec<[i64; 4]>, Option<Vec<i64>>);
+type NotesAndTracks = (Vec<Note>, Option<Vec<u32>>);
 
 /// Tools (upstream TOOLS + SHAPE_TOOLS).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -203,7 +204,8 @@ pub struct App {
     pub free_smooth: i64,
     pub text_defaults: TextSettings,
     pub playhead: f64,
-    pub rendered: Vec<[i64; 6]>,
+    /// The rendered notes, 16 bytes each (the compact [`Note`] model; the Python original used 48-byte int64 rows).
+    pub rendered: Vec<Note>,
     pub note_counts: Vec<usize>,
     /// Multi channel: how many channels each shape's notes are spread over (upstream `chans`).
     pub shape_channels: Vec<usize>,
@@ -566,12 +568,15 @@ impl App {
             return;
         }
         let path = PathBuf::from(self.pvar.output.clone());
+        // spiderweb-io keeps the int64 row API (the MIDI writer is a byte-identical port), so the
+        // compact notes are converted at this boundary.
+        let rows: Vec<[i64; 6]> = self.rendered.iter().map(|n| n.row6()).collect();
         match spiderweb_io::midi::write_midi(
             &path,
             self.ppq as u16,
             self.bpm,
             self.beats as u8,
-            &self.rendered,
+            &rows,
         ) {
             Ok(()) => {
                 let channels = if self.channel_mode == ChannelMode::Auto {
@@ -589,7 +594,7 @@ impl App {
                 } else {
                     String::new()
                 };
-                if self.rendered.iter().any(|n| n[2] > 127) {
+                if self.rendered.iter().any(|n| n.key > 127) {
                     // 256 keys: keys >127 are written to the file as-is, which many MIDI programs cannot read (project.it_has_keys_above_127_256)
                     note += rust_i18n::t!("status.keys_above_127").as_ref();
                 }
@@ -614,7 +619,7 @@ impl App {
         engine::shape_notes_tracks(sh, self.ppq as f64, self.keys)
     }
 
-    pub fn notes_of(&self, sh: &Shape) -> Vec<[i64; 4]> {
+    pub fn notes_of(&self, sh: &Shape) -> Vec<Note> {
         self.notes_tracks(sh).0
     }
 
@@ -655,8 +660,8 @@ impl App {
     pub fn shapes_changed(&mut self) {
         let t0 = Instant::now();
         let got: Vec<NotesAndTracks> = self.shapes.iter().map(|sh| self.notes_tracks(sh)).collect();
-        let lists: Vec<Vec<[i64; 4]>> = got.iter().map(|(n, _)| n.clone()).collect();
-        let tracks: Vec<Option<Vec<i64>>> = got.iter().map(|(_, t)| t.clone()).collect();
+        let lists: Vec<Vec<Note>> = got.iter().map(|(n, _)| n.clone()).collect();
+        let tracks: Vec<Option<Vec<u32>>> = got.iter().map(|(_, t)| t.clone()).collect();
         // Fill / Spam "Outline": the outline and the inside must get channels of their own.
         let apart: Vec<bool> = self
             .shapes
@@ -681,7 +686,7 @@ impl App {
         self.slot_count = count;
         let mut counts = vec![0usize; self.shapes.len()];
         for n in &self.rendered {
-            let owner = n[5] as usize;
+            let owner = n.owner as usize;
             if owner < counts.len() {
                 counts[owner] += 1;
             }
@@ -690,12 +695,12 @@ impl App {
         // Multi channel: how many channels each shape spreads over (upstream shapes_changed).
         let mut chans = vec![1usize; self.shapes.len()];
         if self.channel_mode == ChannelMode::Auto && !self.rendered.is_empty() {
-            let mut seen: Vec<std::collections::BTreeSet<i64>> =
+            let mut seen: Vec<std::collections::BTreeSet<u8>> =
                 vec![std::collections::BTreeSet::new(); self.shapes.len()];
             for n in &self.rendered {
-                let owner = n[5] as usize;
+                let owner = n.owner as usize;
                 if owner < seen.len() {
-                    seen[owner].insert(n[4]);
+                    seen[owner].insert(n.slot);
                 }
             }
             for (i, s) in seen.iter().enumerate() {
@@ -1004,15 +1009,13 @@ impl App {
     // ------------------------------------------------------------ Domino clipboard
 
     pub fn copy_to_domino(&mut self) {
-        let mut notes: Vec<[i64; 6]> = if self.sels.is_empty() {
-            self.rendered.clone()
-        } else {
-            self.rendered
-                .iter()
-                .filter(|n| self.sels.contains(&(n[5] as usize)))
-                .copied()
-                .collect()
-        };
+        // spiderweb-domino keeps the int64 row API, so the compact notes are converted here.
+        let mut notes: Vec<[i64; 6]> = self
+            .rendered
+            .iter()
+            .filter(|n| self.sels.is_empty() || self.sels.contains(&(n.owner as usize)))
+            .map(|n| n.row6())
+            .collect();
         // Upstream projects have 128 keys: Domino only has 128, so >127 is not copied
         // (project.copy_to_domino). With 256-key projects (the Domino 256k version uses the same
         // clipboard format) everything is copied.
@@ -1263,7 +1266,7 @@ impl App {
             return;
         }
         let quarter = beats as f64 / 4.0;
-        let last = self.rendered.iter().map(|n| n[1]).max().unwrap_or(0) as f64 / ppq as f64;
+        let last = self.rendered.iter().map(|n| n.end).max().unwrap_or(0) as f64 / ppq as f64;
         let stop = ((last.max(self.playhead) + quarter) / quarter - 1e-9).ceil() * quarter;
         self.player
             .start(&self.rendered, ppq, bpm, self.playhead, stop);
@@ -1589,21 +1592,22 @@ pub fn fmt_int(n: i64) -> String {
 /// only the one with the latest start is kept per (channel, pitch), value = (start tick, velocity).
 /// Same hit condition as upstream: the start falls inside the swept range, or the note is being
 /// swept (`s <= t_to < e`).
-pub fn scrub_hits(rendered: &[[i64; 6]], t_from: f64, t_to: f64) -> BTreeMap<(u8, i64), (i64, u8)> {
+pub fn scrub_hits(rendered: &[Note], t_from: f64, t_to: f64) -> BTreeMap<(u8, i64), (i64, u8)> {
     let lo = t_from.min(t_to);
     let hi = t_from.max(t_to);
     let mut now: BTreeMap<(u8, i64), (i64, u8)> = BTreeMap::new();
     for n in rendered {
-        let s = n[0] as f64;
-        let e = n[1] as f64;
+        let s = n.start as f64;
+        let e = n.end as f64;
         if !((lo <= s && s <= hi) || (s <= t_to && t_to < e)) {
             continue;
         }
-        let (_, ch) = spiderweb_io::midi::slot_track_channel(n[4]);
-        let vel = n[3].clamp(0, 127) as u8;
-        let entry = now.entry((ch, n[2])).or_insert((n[0], vel));
-        if n[0] > entry.0 {
-            *entry = (n[0], vel);
+        let (_, ch) = spiderweb_io::midi::slot_track_channel(n.slot as i64);
+        let entry = now
+            .entry((ch, n.key as i64))
+            .or_insert((n.start as i64, n.vel));
+        if (n.start as i64) > entry.0 {
+            *entry = (n.start as i64, n.vel);
         }
     }
     now
@@ -1769,8 +1773,8 @@ impl eframe::App for App {
 
 /// A rendered note row (start, end, pitch, velocity, slot, owner).
 #[cfg(test)]
-fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> [i64; 6] {
-    [s, e, p, v, slot, 0]
+fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> Note {
+    Note::from_row6([s, e, p, v, slot, 0])
 }
 
 #[cfg(test)]

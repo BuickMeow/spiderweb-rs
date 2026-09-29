@@ -7,6 +7,7 @@ use spiderweb_core::Pt;
 use spiderweb_core::engine;
 use spiderweb_core::funnel;
 use spiderweb_core::joined;
+use spiderweb_core::note::Note;
 use spiderweb_core::shape::{Fill, Kind, Shape};
 
 use crate::app::{App, PartId, Tool};
@@ -1824,10 +1825,15 @@ fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
     let t_lo = v.b_of(v.kb_w) * ppq;
     let t_hi = v.b_of(v.w) * ppq;
     let (p_lo, p_hi) = v.visible_pitches();
-    let mut visible: Vec<&[i64; 6]> = app
+    let mut visible: Vec<&Note> = app
         .rendered
         .iter()
-        .filter(|n| n[1] as f64 >= t_lo && n[0] as f64 <= t_hi && n[2] >= p_lo && n[2] <= p_hi)
+        .filter(|n| {
+            n.end as f64 >= t_lo
+                && n.start as f64 <= t_hi
+                && (n.key as i64) >= p_lo
+                && (n.key as i64) <= p_hi
+        })
         .collect();
     // Decimate by stride when there are too many (upstream uses per-pixel images; simple decimation for now)
     let cap = 40_000usize;
@@ -1835,23 +1841,23 @@ fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
     if stride > 1 {
         visible = visible.into_iter().step_by(stride).collect();
     }
-    let selected_owners: std::collections::BTreeSet<i64> =
-        app.sels.iter().map(|&i| i as i64).collect();
+    let selected_owners: std::collections::BTreeSet<u32> =
+        app.sels.iter().map(|&i| i as u32).collect();
     for n in &visible {
-        let x0 = v.x_of(n[0] as f64 / ppq);
-        let x1 = v.x_of(n[1] as f64 / ppq);
+        let x0 = v.x_of(n.start as f64 / ppq);
+        let x1 = v.x_of(n.end as f64 / ppq);
         let lx0 = x0.round().max(v.kb_w - 2.0);
         let lx1 = x1.round().min(v.w + 2.0);
         if lx1 < v.kb_w || lx0 > v.w {
             continue;
         }
-        let (y0, y1) = v.row_y(n[2] as f64);
-        let (fill, outline) = if selected_owners.contains(&n[5]) {
+        let (y0, y1) = v.row_y(n.key as f64);
+        let (fill, outline) = if selected_owners.contains(&n.owner) {
             SELECTED_COLOR
         } else {
-            SLOT_COLORS[(n[4].unsigned_abs() as usize) % SLOT_COLORS.len()]
+            SLOT_COLORS[n.slot as usize % SLOT_COLORS.len()]
         };
-        let level = (n[3].clamp(0, 127) / 4) as f32;
+        let level = (n.vel / 4) as f32;
         let fill = fade(fill, 1.0 - level * 4.0 / 124.0);
         let r = Rect::from_min_max(
             Pos2::new(rect.min.x + lx0, rect.min.y + y0),

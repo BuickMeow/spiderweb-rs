@@ -19,7 +19,7 @@ renderer, a pure-Rust note engine and no Python runtime.
 | Feature parity | upstream **1.2.0** complete (256-key mode, custom fill upgrade, join/split, turn-into-live-shape, tumour graphs/rotation/slant, snap system, Domino start, history panel) |
 | Correctness | **3000+ differential test cases** against the original Python engine (paths, bezier/arc, smooth, tumour, text, custom, convert, funnel, joined, engine) |
 | Formats | MIDI export is **byte-identical** to the original; project JSON and the Domino clipboard format are cross-checked with Python |
-| Tests | 209 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
+| Tests | 215 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
 | CI | `.github/workflows/ci.yml` — fmt / clippy / test / release build on Ubuntu, macOS and Windows |
 | Performance | see below; tracked per commit on the [benchmark dashboard](https://buickmeow.github.io/spiderweb-rs/dev/bench/) |
 
@@ -29,6 +29,10 @@ Rendering is a custom wgpu instanced-quad pipeline (16 bytes per note).
 Panning and zooming only update a uniform buffer — the instance buffers are
 re-uploaded only when the notes or the selection change, and are split into
 chunks smaller than `max_buffer_size`, so tens of millions of notes fit.
+The note model is compact too: every rendered note is a 16-byte struct
+(`start` / `end` ticks, key, velocity, slot, owner) instead of the original's
+int64 NumPy rows, so 100 M notes hold their `rendered` data in ≈1.6 GB
+instead of ≈4.8 GB.
 Core algorithms are scalar Rust ports of the vectorised Python code.
 
 Measured on a **MacBook Air M5 (32 GB, macOS 27.0)**, release build; frame

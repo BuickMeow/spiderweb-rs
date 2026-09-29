@@ -13,11 +13,12 @@ use crate::custom::{block_notes, custom_notes_groups, custom_strokes};
 use crate::envelope::{env_values, velocity_env};
 use crate::funnel::{funnel_notes, funnel_strokes};
 use crate::joined::{is_joined, joined_paths};
+use crate::note::Note;
 use crate::paths::{dedupe, dot_segment_notes, path_notes};
 use crate::shape::{Kind, Shape};
 use crate::smooth::smooth_path;
 use crate::tumour::tumour_path;
-use crate::{Note4, Note6, Pt, round_half_even, round_i64};
+use crate::{Pt, round_half_even, round_i64};
 
 /// kind -> display name (engine.KINDS).
 pub const KINDS: [(Kind, &str); 7] = [
@@ -197,18 +198,18 @@ pub fn unique_rows<T: Ord + Clone>(rows: &[T]) -> Vec<T> {
 
 /// One shape's notes (start, end, pitch, velocity), ticks; keys is the project's key range
 /// (notes are in 0..keys) (engine.shape_notes).
-pub fn shape_notes(sh: &Shape, ppq: f64, keys: i64) -> Vec<Note4> {
+pub fn shape_notes(sh: &Shape, ppq: f64, keys: i64) -> Vec<Note> {
     shape_notes_tracks(sh, ppq, keys).0
 }
 
 /// Convenience wrapper for [`shape_notes`] with the default 128 keys (the original keys=128).
-pub fn shape_notes_default(sh: &Shape, ppq: f64) -> Vec<Note4> {
+pub fn shape_notes_default(sh: &Shape, ppq: f64) -> Vec<Note> {
     shape_notes(sh, ppq, crate::paths::KEYS[0])
 }
 
 /// shape_notes; for pasted notes it additionally returns which track each note came from (one number
-/// per row, None for other shapes) (engine.shape_notes_tracks).
-pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Option<Vec<i64>>) {
+/// per row, None for other shapes) (engine.shape_notes_tracks). Per-shape notes keep slot/owner 0.
+pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note>, Option<Vec<u32>>) {
     let end_dot = sh.end_dot;
     // Drawing uses the same batch of points; dedupe also drops duplicates across stroke boundaries
     let strokes = shape_strokes(sh);
@@ -272,7 +273,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
     for r in &mut raw {
         r[0] = r[0].max(0);
     }
-    let mut tracks: Option<Vec<i64>> = None;
+    let mut tracks: Option<Vec<u32>> = None;
     if let Some(own) = own {
         let own: Vec<[i64; 2]> = own
             .into_iter()
@@ -289,8 +290,10 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
                 .collect();
             let got = unique_rows(&rows);
             return (
-                got.iter().map(|r| [r[0], r[1], r[2], r[3]]).collect(),
-                Some(got.iter().map(|r| r[4]).collect()),
+                got.iter()
+                    .map(|r| Note::new(r[0], r[1], r[2], r[3]))
+                    .collect(),
+                Some(got.iter().map(|r| r[4].max(0) as u32).collect()),
             );
         }
         let rows: Vec<[i64; 4]> = raw
@@ -300,7 +303,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
             .collect();
         let got = unique_rows(&rows);
         raw = got.iter().map(|r| [r[0], r[1], r[2]]).collect();
-        tracks = Some(got.iter().map(|r| r[3]).collect());
+        tracks = Some(got.iter().map(|r| r[3].max(0) as u32).collect());
     } else if let Some(groups) = groups {
         let groups: Vec<i64> = groups
             .into_iter()
@@ -316,7 +319,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
             .collect();
         let got = unique_rows(&rows);
         raw = got.iter().map(|r| [r[0], r[1], r[2]]).collect();
-        tracks = Some(got.iter().map(|r| r[3]).collect());
+        tracks = Some(got.iter().map(|r| r[3].max(0) as u32).collect());
     } else {
         raw = unique_rows(&raw);
     }
@@ -340,13 +343,13 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
     let notes = raw
         .iter()
         .zip(vel.iter())
-        .map(|(r, &v)| [r[0], r[1], r[2], v])
+        .map(|(r, &v)| Note::new(r[0], r[1], r[2], v))
         .collect();
     (notes, tracks)
 }
 
 /// Convenience wrapper for [`shape_notes_tracks`] with the default 128 keys (the original keys=128).
-pub fn shape_notes_tracks_default(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>) {
+pub fn shape_notes_tracks_default(sh: &Shape, ppq: f64) -> (Vec<Note>, Option<Vec<u32>>) {
     shape_notes_tracks(sh, ppq, crate::paths::KEYS[0])
 }
 
@@ -382,27 +385,29 @@ pub fn running_max(values: &[i64], groups: &[i64]) -> Vec<i64> {
 ///
 /// `apart`: groups of note list numbers that always get different slots (a custom shape's outline
 /// and inside, or convert.py's per-source groups).
-pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split, apart: &[Vec<usize>]) -> Vec<usize> {
+pub fn assign_slots(note_lists: &[Vec<Note>], split: Split, apart: &[Vec<usize>]) -> Vec<usize> {
     let n = note_lists.len();
-    let key_of = |r: &Note4| if split == Split::Key { r[2] } else { 0 };
+    let key_of = |r: &Note| if split == Split::Key { r.key as i64 } else { 0 };
     let mut by_pitch: HashMap<i64, Vec<(i64, i64, usize)>> = HashMap::new();
     for (owner, notes) in note_lists.iter().enumerate() {
         for r in notes {
-            if r[1] <= r[0] {
+            if r.end <= r.start {
                 by_pitch
                     .entry(key_of(r))
                     .or_default()
-                    .push((r[0], r[1], owner));
+                    .push((r.start as i64, r.end as i64, owner));
             }
         }
-        let long: Vec<&Note4> = notes.iter().filter(|r| r[1] > r[0]).collect();
+        let long: Vec<&Note> = notes.iter().filter(|r| r.end > r.start).collect();
         if long.is_empty() {
             continue;
         }
         let mut order: Vec<usize> = (0..long.len()).collect();
-        order.sort_by(|&i, &j| (key_of(long[i]), long[i][0]).cmp(&(key_of(long[j]), long[j][0])));
-        let s: Vec<i64> = order.iter().map(|&i| long[i][0]).collect();
-        let e: Vec<i64> = order.iter().map(|&i| long[i][1]).collect();
+        order.sort_by(|&i, &j| {
+            (key_of(long[i]), long[i].start).cmp(&(key_of(long[j]), long[j].start))
+        });
+        let s: Vec<i64> = order.iter().map(|&i| long[i].start as i64).collect();
+        let e: Vec<i64> = order.iter().map(|&i| long[i].end as i64).collect();
         let k: Vec<i64> = order.iter().map(|&i| key_of(long[i])).collect();
         let run = running_max(&e, &k);
         let mut new = vec![true; s.len()];
@@ -451,7 +456,7 @@ pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split, apart: &[Vec<usize>
         .map(|notes| {
             notes
                 .iter()
-                .map(|r| r[0])
+                .map(|r| r.start as i64)
                 .min()
                 .map(|m| m as f64)
                 .unwrap_or(f64::INFINITY)
@@ -480,9 +485,9 @@ pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split, apart: &[Vec<usize>
 /// Overlapping notes at the same pitch and slot: the earlier one is cut where the later one starts,
 /// and the later one is stretched to where the earlier would have ended (if farther). Notes starting
 /// at the same tick merge into one: the highest velocity wins and keeps the longest length.
-/// notes: (start, end, pitch, velocity, slot, owner) rows; returns the fixed rows grouped by
+/// `notes` carry start, end, pitch, velocity, slot and owner; returns the fixed notes grouped by
 /// slot + key (groups in order of first appearance), sorted within a group (engine.resolve_overlaps).
-pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
+pub fn resolve_overlaps(notes: &[Note]) -> Vec<Note> {
     if notes.is_empty() {
         return Vec::new();
     }
@@ -490,7 +495,7 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     let mut group_of_key: HashMap<i64, usize> = HashMap::new();
     let mut group: Vec<usize> = Vec::with_capacity(notes.len());
     for r in notes {
-        let key = r[4] * 256 + r[2];
+        let key = r.slot as i64 * 256 + r.key as i64;
         let next = group_of_key.len();
         group.push(*group_of_key.entry(key).or_insert(next));
     }
@@ -499,14 +504,14 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     order.sort_by(|&i, &j| {
         group[i]
             .cmp(&group[j])
-            .then(notes[i][0].cmp(&notes[j][0]))
-            .then(notes[i][3].cmp(&notes[j][3]))
-            .then(notes[j][1].cmp(&notes[i][1]))
+            .then(notes[i].start.cmp(&notes[j].start))
+            .then(notes[i].vel.cmp(&notes[j].vel))
+            .then(notes[j].end.cmp(&notes[i].end))
     });
-    let a: Vec<Note6> = order.iter().map(|&i| notes[i]).collect();
+    let a: Vec<Note> = order.iter().map(|&i| notes[i]).collect();
     let group: Vec<usize> = order.iter().map(|&i| group[i]).collect();
-    let s: Vec<i64> = a.iter().map(|r| r[0]).collect();
-    let e: Vec<i64> = a.iter().map(|r| r[1]).collect();
+    let s: Vec<i64> = a.iter().map(|r| r.start as i64).collect();
+    let e: Vec<i64> = a.iter().map(|r| r.end as i64).collect();
     let groups: Vec<i64> = group.iter().map(|&g| g as i64).collect();
     // Where all earlier notes in the group ring until
     let run = running_max(&e, &groups);
@@ -539,7 +544,7 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     for i in 0..a.len() {
         if last[i] || end[i] > s[i] {
             let mut r = a[i];
-            r[1] = end[i];
+            r.end = end[i] as u32;
             out.push(r);
         }
     }
@@ -570,19 +575,19 @@ enum SlotMap {
 /// "auto" each track of the shape gets channels as if it were a shape of its own. apart: per shape
 /// True if its tracks must get different channels (Fill / Spam "Outline").
 pub fn render(
-    note_lists: &[Vec<Note4>],
+    note_lists: &[Vec<Note>],
     mode: Mode,
     split: Split,
-    tracks: Option<&[Option<Vec<i64>>]>,
+    tracks: Option<&[Option<Vec<u32>>]>,
     apart: Option<&[bool]>,
-) -> (Vec<Note6>, usize) {
-    let empty: Vec<Option<Vec<i64>>> = Vec::new();
+) -> (Vec<Note>, usize) {
+    let empty: Vec<Option<Vec<u32>>> = Vec::new();
     let tracks = tracks.unwrap_or(&empty);
     let no_apart: Vec<bool> = Vec::new();
     let apart = apart.unwrap_or(&no_apart);
     let (slot_of, count) = if mode == Mode::Auto {
         // shapes, and pasted notes split by track; unit_of = each note's unit
-        let mut units: Vec<Vec<Note4>> = Vec::new();
+        let mut units: Vec<Vec<Note>> = Vec::new();
         let mut unit_of: Vec<SlotMap> = Vec::new();
         let mut forced: Vec<Vec<usize>> = Vec::new();
         for (o, lst) in note_lists.iter().enumerate() {
@@ -590,7 +595,7 @@ pub fn render(
             match tr {
                 Some(tr) if !lst.is_empty() => {
                     // np.unique: ids ascending, which = index of each note's track in ids
-                    let mut ids: Vec<i64> = tr.clone();
+                    let mut ids: Vec<u32> = tr.clone();
                     ids.sort_unstable();
                     ids.dedup();
                     let base = units.len();
@@ -636,15 +641,22 @@ pub fn render(
             usize::from(!note_lists.is_empty()),
         )
     };
-    let mut notes: Vec<Note6> = Vec::new();
+    let mut notes: Vec<Note> = Vec::new();
     for (o, lst) in note_lists.iter().enumerate() {
         for (i, r) in lst.iter().enumerate() {
             let slot = match &slot_of[o] {
                 SlotMap::One(s) => *s,
                 SlotMap::Each(v) => v[i],
             };
-            let slot = slot as i64;
-            notes.push([r[0], r[1], r[2], r[3], slot, o as i64]);
+            notes.push(Note {
+                start: r.start,
+                end: r.end,
+                key: r.key,
+                vel: r.vel,
+                slot: slot.min(254) as u8,
+                flags: 0,
+                owner: o as u32,
+            });
         }
     }
     if mode != Mode::Raw {
@@ -656,4 +668,45 @@ pub fn render(
 /// Slot number -> (track number, MIDI channel 0-15), one channel per track, skipping the drum channel (engine.slot_track_channel).
 pub fn slot_track_channel(slot: usize) -> (usize, u8) {
     (slot, CHANNELS[slot % CHANNELS.len()])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The compact model must not change the rendered rows (the vectors cover this exhaustively;
+    /// this is the small explicit case of the first Python `render` vectors).
+    #[test]
+    fn render_rows_are_unchanged_by_the_compact_model() {
+        let a = vec![Note::new(0, 200, 60, 100)];
+        let b = vec![Note::new(100, 300, 60, 90)];
+        let (notes, count) = render(&[a.clone(), b.clone()], Mode::Raw, Split::Key, None, None);
+        let rows: Vec<[i64; 6]> = notes.iter().map(|n| n.row6()).collect();
+        assert_eq!(
+            rows,
+            vec![[0, 200, 60, 100, 0, 0], [100, 300, 60, 90, 0, 1]]
+        );
+        assert_eq!(count, 1);
+
+        // Auto: the two clashing shapes get one slot each
+        let (notes, count) = render(&[a, b], Mode::Auto, Split::Key, None, None);
+        let rows: Vec<[i64; 6]> = notes.iter().map(|n| n.row6()).collect();
+        assert_eq!(
+            rows,
+            vec![[0, 200, 60, 100, 0, 0], [100, 300, 60, 90, 1, 1]]
+        );
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn shape_notes_keep_slot_and_owner_zero() {
+        let sh = Shape::new(Kind::Line, vec![[0.0, 60.0], [1.0, 64.0]]);
+        let notes = shape_notes(&sh, 960.0, 128);
+        assert!(!notes.is_empty());
+        assert!(
+            notes
+                .iter()
+                .all(|n| n.slot == 0 && n.flags == 0 && n.owner == 0)
+        );
+    }
 }

@@ -6,6 +6,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use midir::{MidiOutput, MidiOutputConnection};
+use spiderweb_core::Note;
 
 pub const DEFAULT_DEVICE: &str = "Microsoft GS Wavetable Synth";
 
@@ -26,7 +27,7 @@ pub fn devices() -> Vec<String> {
 /// playback.Player.start), and note-off comes before note-on at the same tick (off first,
 /// then on).
 pub fn build_events(
-    notes: &[[i64; 6]],
+    notes: &[Note],
     ppq: f64,
     from_beat: f64,
     stop_beat: f64,
@@ -35,19 +36,19 @@ pub fn build_events(
     let stop_tick = (stop_beat * ppq) as i64;
     let mut events: Vec<(i64, bool, u8, u8, u8)> = Vec::with_capacity(notes.len() * 2);
     for n in notes {
-        if n[2] > 127 {
+        if n.key > 127 {
             continue;
         }
-        let (_, ch) = spiderweb_io::midi::slot_track_channel(n[4]);
-        let start = n[0].max(from_tick);
-        let end = n[1].max(start + 1);
+        let (_, ch) = spiderweb_io::midi::slot_track_channel(n.slot as i64);
+        let start = (n.start as i64).max(from_tick);
+        let end = (n.end as i64).max(start + 1);
         if end < from_tick || start > stop_tick {
             continue;
         }
-        if n[0] >= from_tick {
-            events.push((n[0], true, ch, n[2] as u8, n[3] as u8));
+        if (n.start as i64) >= from_tick {
+            events.push((n.start as i64, true, ch, n.key, n.vel));
         }
-        events.push((end.min(stop_tick), false, ch, n[2] as u8, 0));
+        events.push((end.min(stop_tick), false, ch, n.key, 0));
     }
     events.sort_by_key(|e| (e.0, e.1));
     events
@@ -122,14 +123,7 @@ impl Player {
 
     /// Plays from from_beat to stop_beat (ticks queued as us; bpm is minutes per beat).
     #[allow(clippy::too_many_arguments)]
-    pub fn start(
-        &mut self,
-        notes: &[[i64; 6]],
-        ppq: i64,
-        bpm: f64,
-        from_beat: f64,
-        stop_beat: f64,
-    ) {
+    pub fn start(&mut self, notes: &[Note], ppq: i64, bpm: f64, from_beat: f64, stop_beat: f64) {
         self.stop();
         if let Err(e) = self.open(&self.device.clone()) {
             let _ = e;
@@ -206,11 +200,14 @@ mod tests {
     #[test]
     fn events_skip_keys_above_127() {
         // 256-key mode: keys >127 make no sound (the synth has only 128 keys), <=127 behave normally
-        let notes = [
+        let notes: Vec<Note> = [
             [0, 960, 200, 100, 0, 0],
             [0, 960, 126, 90, 0, 0],
             [100, 200, 127, 80, 0, 0],
-        ];
+        ]
+        .iter()
+        .map(|r| Note::from_row6(*r))
+        .collect();
         let events = build_events(&notes, 960.0, 0.0, 8.0);
         assert!(events.iter().all(|e| e.3 <= 127));
         assert_eq!(
@@ -227,11 +224,14 @@ mod tests {
     #[test]
     fn events_stay_inside_the_window() {
         // Notes starting inside the window (0.5..1.5 beats) sound; later ones don't
-        let notes = [
+        let notes: Vec<Note> = [
             [0, 480, 60, 100, 0, 0],
             [960, 1440, 62, 90, 0, 0],
             [1920, 2400, 64, 80, 0, 0],
-        ];
+        ]
+        .iter()
+        .map(|r| Note::from_row6(*r))
+        .collect();
         let events = build_events(&notes, 960.0, 0.5, 1.5);
         assert!(events.contains(&(960, true, 0, 62, 90)));
         assert!(events.contains(&(1440, false, 0, 62, 0)));
