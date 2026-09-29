@@ -281,6 +281,7 @@ panel:
     apply: "Apply"
     info_waiting_wall: "Now draw the wall (Ctrl = centred on the line, right-click = cancel)."
     info_highlighted: "Highlighted: %{parts}. Right-click = curve shapes, Del = delete, Esc = clear. Ctrl+click = one more / one less."
+    info_no_starts: "Middle-click on the line to start a curve there.  A line drawn to its wall = one more line."
     info_start_curve: "Middle-click the line = new curve, near a curve = anchor. Select tool: click a curve again = highlight."
     info_draw: "Draw the funnel's line, then its wall (drag, or click twice each)."
     info_notes: "%{n} notes.  "

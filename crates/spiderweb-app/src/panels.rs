@@ -1715,7 +1715,18 @@ impl App {
             if !parts_text.is_empty() {
                 s += rust_i18n::t!("panel.funnel.info_highlighted", parts = parts_text).as_ref();
             } else if targets.len() == 1 {
-                s += rust_i18n::t!("panel.funnel.info_start_curve").as_ref();
+                // Upstream: the first hint (no curve starts yet) explains that the
+                // start is placed where you middle-click; the other one is the reminder.
+                let no_starts = self
+                    .shapes
+                    .get(targets[0])
+                    .map(|sh| sh.starts.is_empty())
+                    .unwrap_or(false);
+                s += if no_starts {
+                    rust_i18n::t!("panel.funnel.info_no_starts").as_ref()
+                } else {
+                    rust_i18n::t!("panel.funnel.info_start_curve").as_ref()
+                };
             }
             s
         } else {

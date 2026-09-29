@@ -16,7 +16,7 @@ use spiderweb_core::shape::{FunnelCurve, Kind, Shape};
 use spiderweb_io::project::FunnelDefaults;
 
 use crate::app::{App, PartId};
-use crate::roll::{Drag, event_pt};
+use crate::roll::{Drag, View, event_pt};
 
 /// Highlighted lines / the picked curve (upstream roll_draw.PART_COLOR).
 const PART_COLOR: Color32 = Color32::from_rgb(0x7a, 0x1f, 0xe0);
@@ -251,8 +251,15 @@ fn line_at(
     let i = funnel::line_index(line);
     let a = *sh.pts.get(i)?;
     let b = *sh.pts.get(i + 1)?;
-    let (xa, ya) = (app.view.x_of(a[0]), app.view.y_of(a[1]));
-    let (xb, yb) = (app.view.x_of(b[0]), app.view.y_of(b[1]));
+    let snapped = event_pt(app, pos, true, shift);
+    line_at_pt(&app.view, a, b, pos, snapped, near)
+}
+
+/// The projection part of `line_at` (no App): `at` of the click on the line, using
+/// the grid-snapped point like upstream `line_at` (b, p = event_pt(e)).
+fn line_at_pt(view: &View, a: Pt, b: Pt, pos: Pos2, snapped: Pt, near: Option<f32>) -> Option<f64> {
+    let (xa, ya) = (view.x_of(a[0]), view.y_of(a[1]));
+    let (xb, yb) = (view.x_of(b[0]), view.y_of(b[1]));
     let (dx, dy) = (xb - xa, yb - ya);
     let ll = dx * dx + dy * dy;
     if ll == 0.0 {
@@ -265,8 +272,7 @@ fn line_at(
     {
         return None;
     }
-    let pt = event_pt(app, pos, true, shift);
-    Some(along(app.view.x_of(pt[0]), app.view.y_of(pt[1])) as f64)
+    Some(along(view.x_of(snapped[0]), view.y_of(snapped[1])) as f64)
 }
 
 /// Whether a (beat, pitch) point mapped to the screen lands on the funnel's wall (upstream near_wall).
@@ -1249,5 +1255,38 @@ mod tests {
             part_group(&sh, PartId::Line(0)),
             BTreeSet::from([PartId::Line(0)])
         );
+    }
+
+    fn view() -> View {
+        View {
+            t: 0.0,
+            top: 100.0,
+            sx: 100.0,
+            sy: 10.0,
+            kb_w: 50.0,
+            ruler_h: 20.0,
+            w: 800.0,
+            h: 600.0,
+            ready: true,
+            keys: 128,
+        }
+    }
+
+    #[test]
+    fn line_at_projects_clicks_to_the_line() {
+        let v = view();
+        let a = [0.0, 60.0];
+        let b = [4.5, 55.0];
+        let click = |pt: Pt| Pos2::new(v.x_of(pt[0]), v.y_of(pt[1]));
+        // The line's ends and middle project to 0 / 1 / 0.5
+        assert!((line_at_pt(&v, a, b, click(a), a, None).unwrap() - 0.0).abs() < 1e-9);
+        assert!((line_at_pt(&v, a, b, click(b), b, None).unwrap() - 1.0).abs() < 1e-9);
+        let mid = [2.25, 57.5];
+        assert!((line_at_pt(&v, a, b, click(mid), mid, None).unwrap() - 0.5).abs() < 1e-9);
+        // 20% along gives 0.2, so the fan starts exactly where the user clicked
+        let fifth = [0.9, 59.0];
+        assert!((line_at_pt(&v, a, b, click(fifth), fifth, None).unwrap() - 0.2).abs() < 1e-9);
+        // The near limit still rejects clicks far from the line
+        assert!(line_at_pt(&v, a, b, Pos2::new(300.0, 20.0), mid, Some(6.0)).is_none());
     }
 }
