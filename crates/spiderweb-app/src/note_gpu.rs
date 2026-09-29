@@ -4,10 +4,13 @@
 //! - 16 bytes per instance: `start` (tick) | `end` (tick) | `meta` | `pad`,
 //!   `meta = key | vel << 8 | slot << 16 | layer << 24` (layer 1 = notes of selected shapes).
 //! - All coordinate transform happens in the vertex shader (see `note_gpu.wgsl`): pan / zoom
-//!   only touch uniforms, and the instance buffer is only repacked when notes or selection
+//!   only touch uniforms, and the instance buffers are only repacked when notes or selection
 //!   change (`App::notes_revision`).
-//! - Normal notes come first and selected notes after, in two draw calls, so the selection
-//!   is drawn on top.
+//! - Instances are split across chunk buffers, each at most
+//!   `device.limits().max_buffer_size - 1 MiB`, so projects with tens of millions of notes
+//!   stay below the wgpu device limit; chunks are reused / grown across frames.
+//! - Normal notes come first and selected notes after; all chunks draw their normal slice in
+//!   the first pass and their selected slice in the second, so the selection is drawn on top.
 //! - Fallback: without a wgpu render state (`App::note_gpu == None`) the painter path is still used.
 
 use std::collections::BTreeSet;
@@ -20,6 +23,15 @@ use crate::roll::{SELECTED_COLOR, SLOT_COLORS, View};
 
 /// 16 linear color sets: 15 slot colors + selection color.
 type Palette = [[f32; 4]; 16];
+
+/// Size of one packed instance in bytes (must match the wgsl vertex layout).
+const INSTANCE_BYTES: u64 = std::mem::size_of::<NoteInstance>() as u64;
+
+/// Headroom kept below `device.limits().max_buffer_size` when sizing chunk buffers.
+const CHUNK_HEADROOM: u64 = 1 << 20;
+
+/// Sane cap on the chunk count; a project that needs more is not drawn on the GPU.
+const MAX_CHUNKS: usize = 1024;
 
 /// One instance is 16 bytes, corresponding to `@location(0)` of the wgsl vertex entry point.
 #[repr(C)]
@@ -100,6 +112,40 @@ pub fn pack_instances(rendered: &[[i64; 6]], sels: &BTreeSet<usize>) -> PackedIn
     }
 }
 
+/// Splits `total_instances` into contiguous chunks of at most `max_bytes` bytes.
+///
+/// Each tuple is `(base, normal_count, selected_count)` for one chunk: `normal_count` instances
+/// of the normal layer start at `base`, followed by `selected_count` selected-layer instances,
+/// so the chunk's selected range begins at `base + normal_count`. Returns an empty plan when
+/// there is nothing to draw or a single 16-byte instance does not fit into `max_bytes`.
+pub fn chunk_plan(
+    total_instances: usize,
+    max_bytes: u64,
+    normal_count: usize,
+) -> Vec<(usize, usize, usize)> {
+    if total_instances == 0 || max_bytes < INSTANCE_BYTES {
+        return Vec::new();
+    }
+    // Keep every chunk within the draw call's u32 instance range.
+    let per_chunk = (max_bytes / INSTANCE_BYTES).min(u32::MAX as u64) as usize;
+    let normal_count = normal_count.min(total_instances);
+    let mut plan = Vec::new();
+    let mut base = 0usize;
+    while base < total_instances {
+        let len = (total_instances - base).min(per_chunk);
+        let normal_len = normal_count.saturating_sub(base).min(len);
+        plan.push((base, normal_len, len - normal_len));
+        base += len;
+    }
+    plan
+}
+
+/// Grows a chunk's byte size to the next power of two (capped at the device limit) so buffers
+/// are reused across frames while the project grows.
+fn chunk_capacity(needed_bytes: u64, max_bytes: u64) -> u64 {
+    needed_bytes.max(1).next_power_of_two().min(max_bytes)
+}
+
 /// Per-frame uniform; the layout must match `Globals` in `note_gpu.wgsl` (std140 rules).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -163,20 +209,124 @@ fn palette() -> (Palette, Palette) {
     (fill, outline)
 }
 
+/// One instance chunk: a vertex buffer of at most `Inner::max_chunk_bytes` plus its slice of the
+/// normal and selected layers. The bind group binds the shared globals uniform; keeping one per
+/// chunk means a chunk owns its complete draw state.
+struct Chunk {
+    buffer: wgpu::Buffer,
+    /// Buffer capacity in bytes (>= the bytes currently uploaded).
+    capacity: u64,
+    bind_group: wgpu::BindGroup,
+    /// First instance of this chunk in the packed CPU array.
+    base: usize,
+    /// Instances of the normal layer at the start of the chunk.
+    normal_count: usize,
+    /// Instances of the selected layer after the normal ones.
+    selected_count: usize,
+}
+
 /// Internal state: wgpu resources + CPU-side instances waiting to be uploaded.
 struct Inner {
     pipeline: wgpu::RenderPipeline,
-    bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
     globals_buffer: wgpu::Buffer,
-    vertex_buffer: wgpu::Buffer,
-    /// Current capacity of vertex_buffer (bytes)
-    vertex_bytes: usize,
+    chunks: Vec<Chunk>,
+    /// Per-chunk byte limit derived from `device.limits().max_buffer_size`.
+    max_chunk_bytes: u64,
+    /// SPIDERWEB_PERF: log the device limit once and the chunk count on every rebuild.
+    perf: bool,
     cpu: Vec<NoteInstance>,
     normal_count: usize,
-    /// true = CPU instances changed; re-upload in prepare (possibly growing the buffer first)
+    /// true = CPU instances changed; rebuild / re-upload chunks in prepare
     pending_upload: bool,
     /// App::notes_revision of the last sync
     last_revision: u64,
+    /// true after an upload / allocation failure: GPU notes are skipped until data changes again
+    upload_failed: bool,
+}
+
+impl Inner {
+    /// Rebuilds the chunk list and uploads the packed CPU instances (only when the revision
+    /// changed). Chunk sizes are pre-checked against the device limit, so wgpu validation cannot
+    /// fail here; allocation failures panic inside wgpu and are caught by `prepare`.
+    fn rebuild_chunks(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let plan = chunk_plan(self.cpu.len(), self.max_chunk_bytes, self.normal_count);
+        if (plan.is_empty() && !self.cpu.is_empty()) || plan.len() > MAX_CHUNKS {
+            self.chunks.clear();
+            if !self.upload_failed {
+                self.upload_failed = true;
+                eprintln!(
+                    "note_gpu: cannot chunk {} instances (chunk limit {} bytes, cap {} chunks), skipping GPU notes",
+                    self.cpu.len(),
+                    self.max_chunk_bytes,
+                    MAX_CHUNKS
+                );
+            }
+            return;
+        }
+        let mut chunks: Vec<Chunk> = Vec::with_capacity(plan.len());
+        for (i, &(base, normal_count, selected_count)) in plan.iter().enumerate() {
+            let len = normal_count + selected_count;
+            let needed = len as u64 * INSTANCE_BYTES;
+            // Reuse the previous buffer when it is big enough, else grow (capped at the limit).
+            let (buffer, capacity) = match self.chunks.get(i) {
+                Some(old) if old.capacity >= needed => (old.buffer.clone(), old.capacity),
+                _ => {
+                    let capacity = chunk_capacity(needed, self.max_chunk_bytes);
+                    // Pre-check: never ask wgpu for a buffer above the device limit.
+                    if capacity < needed || capacity > self.max_chunk_bytes {
+                        self.chunks.clear();
+                        if !self.upload_failed {
+                            self.upload_failed = true;
+                            eprintln!(
+                                "note_gpu: chunk size {capacity} out of range, skipping GPU notes"
+                            );
+                        }
+                        return;
+                    }
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("note_gpu_instances"),
+                        size: capacity,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    (buffer, capacity)
+                }
+            };
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("note_gpu_chunk_bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals_buffer.as_entire_binding(),
+                }],
+            });
+            chunks.push(Chunk {
+                buffer,
+                capacity,
+                bind_group,
+                base,
+                normal_count,
+                selected_count,
+            });
+        }
+        self.chunks = chunks;
+        let cpu = &self.cpu;
+        for chunk in &self.chunks {
+            let len = chunk.normal_count + chunk.selected_count;
+            let bytes = bytemuck::cast_slice(&cpu[chunk.base..chunk.base + len]);
+            queue.write_buffer(&chunk.buffer, 0, bytes);
+        }
+        if self.perf {
+            eprintln!(
+                "[perf] note_gpu: {} instance chunks ({} instances, {} bytes/chunk limit)",
+                self.chunks.len(),
+                self.cpu.len(),
+                self.max_chunk_bytes
+            );
+        }
+        self.upload_failed = false;
+    }
 }
 
 /// Note GPU renderer: `Arc<RenderState>` + interior mutable state (pipeline / buffers / CPU instances).
@@ -258,33 +408,34 @@ impl NoteGpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("note_gpu_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
-        });
-        let vertex_bytes = 256 * std::mem::size_of::<NoteInstance>();
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("note_gpu_instances"),
-            size: vertex_bytes as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Chunk buffers stay below the device limit with a little headroom, so no create_buffer
+        // call can ever exceed `device.limits().max_buffer_size`.
+        let max_chunk_bytes = device
+            .limits()
+            .max_buffer_size
+            .saturating_sub(CHUNK_HEADROOM);
+        let perf = std::env::var("SPIDERWEB_PERF").is_ok();
+        if perf {
+            eprintln!(
+                "[perf] note_gpu: max_buffer_size {} bytes, chunk limit {} bytes",
+                device.limits().max_buffer_size,
+                max_chunk_bytes
+            );
+        }
         Self {
             render_state,
             inner: Arc::new(Mutex::new(Inner {
                 pipeline,
-                bind_group,
+                bind_group_layout,
                 globals_buffer,
-                vertex_buffer,
-                vertex_bytes,
+                chunks: Vec::new(),
+                max_chunk_bytes,
+                perf,
                 cpu: Vec::new(),
                 normal_count: 0,
                 pending_upload: false,
                 last_revision: u64::MAX,
+                upload_failed: false,
             })),
         }
     }
@@ -335,34 +486,34 @@ impl CallbackTrait for NoteCallback {
         _egui_encoder: &mut wgpu::CommandEncoder,
         _callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let mut inner = self.gpu.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.pending_upload {
-            let needed = inner.cpu.len() * std::mem::size_of::<NoteInstance>();
-            if needed > inner.vertex_bytes {
-                let cap = needed.next_power_of_two();
-                inner.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("note_gpu_instances"),
-                    size: cap as u64,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                inner.vertex_bytes = cap;
+        // wgpu reports buffer allocation / validation failures by panicking; that must never
+        // unwind through the winit callback. On failure drop the chunks and skip GPU notes.
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut inner = self.gpu.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.pending_upload {
+                inner.rebuild_chunks(device, queue);
+                inner.pending_upload = false;
             }
-            if needed > 0 {
-                let bytes = bytemuck::cast_slice(&inner.cpu);
-                queue.write_buffer(&inner.vertex_buffer, 0, bytes);
-            }
+            // Only the uniform is written every frame (pan / zoom leave the instance buffers alone)
+            let mut g = self.globals;
+            g.ppp = screen_descriptor.pixels_per_point;
+            g.screen_px = [
+                screen_descriptor.size_in_pixels[0] as f32,
+                screen_descriptor.size_in_pixels[1] as f32,
+            ];
+            g.srgb = u32::from(self.render_state.target_format.is_srgb());
+            queue.write_buffer(&inner.globals_buffer, 0, bytemuck::bytes_of(&g));
+        }))
+        .is_ok();
+        if !ok {
+            let mut inner = self.gpu.lock().unwrap_or_else(|e| e.into_inner());
+            inner.chunks.clear();
             inner.pending_upload = false;
+            if !inner.upload_failed {
+                inner.upload_failed = true;
+                eprintln!("note_gpu: instance upload failed, skipping GPU notes");
+            }
         }
-        // Only the uniform is written every frame (pan / zoom leave the instance buffer alone)
-        let mut g = self.globals;
-        g.ppp = screen_descriptor.pixels_per_point;
-        g.screen_px = [
-            screen_descriptor.size_in_pixels[0] as f32,
-            screen_descriptor.size_in_pixels[1] as f32,
-        ];
-        g.srgb = u32::from(self.render_state.target_format.is_srgb());
-        queue.write_buffer(&inner.globals_buffer, 0, bytemuck::bytes_of(&g));
         Vec::new()
     }
 
@@ -373,7 +524,7 @@ impl CallbackTrait for NoteCallback {
         _callback_resources: &egui_wgpu::CallbackResources,
     ) {
         let inner = self.gpu.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.cpu.is_empty() {
+        if inner.chunks.is_empty() {
             return;
         }
         let clip = info.clip_rect_in_pixels();
@@ -399,16 +550,22 @@ impl CallbackTrait for NoteCallback {
             1.0,
         );
         render_pass.set_pipeline(&inner.pipeline);
-        render_pass.set_bind_group(0, &inner.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, inner.vertex_buffer.slice(..));
-        let normal = (inner.normal_count as u32).min(inner.cpu.len() as u32);
-        let total = inner.cpu.len() as u32;
-        // Two draw calls: normal notes first, selected notes after (not relying on primitive order within one draw)
-        if normal > 0 {
-            render_pass.draw(0..4, 0..normal);
+        // Global two-pass layering: all normal instances first, then all selected ones. With one
+        // chunk this is exactly the old two draw calls; with several, up to two draws per chunk.
+        for chunk in &inner.chunks {
+            if chunk.normal_count > 0 {
+                render_pass.set_bind_group(0, &chunk.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, chunk.buffer.slice(..));
+                render_pass.draw(0..4, 0..chunk.normal_count as u32);
+            }
         }
-        if total > normal {
-            render_pass.draw(0..4, normal..total);
+        for chunk in &inner.chunks {
+            if chunk.selected_count > 0 {
+                render_pass.set_bind_group(0, &chunk.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, chunk.buffer.slice(..));
+                let first = chunk.normal_count as u32;
+                render_pass.draw(0..4, first..first + chunk.selected_count as u32);
+            }
         }
     }
 }
@@ -539,5 +696,69 @@ mod tests {
         let (_, y1_min) = shader_y_px(&g, 60, 0.01);
         let (y0_min, _) = shader_y_px(&g, 60, 0.01);
         assert!(y1_min >= y0_min + 1.0);
+    }
+
+    #[test]
+    fn chunk_plan_empty_cases() {
+        assert!(chunk_plan(0, 1 << 20, 0).is_empty());
+        assert!(chunk_plan(0, 0, 0).is_empty());
+        // A limit below one 16-byte instance cannot represent anything
+        assert!(chunk_plan(10, 15, 3).is_empty());
+        assert!(chunk_plan(10, 0, 3).is_empty());
+    }
+
+    #[test]
+    fn chunk_plan_single_chunk_keeps_layer_split() {
+        // 10 instances per chunk (160 bytes); 5 notes with 2 normal / 3 selected fit in one chunk
+        assert_eq!(chunk_plan(5, 160, 2), vec![(0, 2, 3)]);
+        // All normal / all selected
+        assert_eq!(chunk_plan(5, 160, 5), vec![(0, 5, 0)]);
+        assert_eq!(chunk_plan(5, 160, 0), vec![(0, 0, 5)]);
+    }
+
+    #[test]
+    fn chunk_plan_exact_boundaries() {
+        // Exactly one full chunk
+        assert_eq!(chunk_plan(10, 160, 4), vec![(0, 4, 6)]);
+        // Exact multiple: two full chunks, the second all selected
+        assert_eq!(chunk_plan(20, 160, 10), vec![(0, 10, 0), (10, 0, 10)]);
+        // Layer boundary in the middle of the second chunk
+        assert_eq!(chunk_plan(20, 160, 15), vec![(0, 10, 0), (10, 5, 5)]);
+        // Chunk limit not a multiple of the instance size: floor division must hold
+        assert_eq!(chunk_plan(4, 47, 1), vec![(0, 1, 1), (2, 0, 2)]);
+    }
+
+    #[test]
+    fn chunk_plan_many_chunks_cover_all_instances() {
+        let plan = chunk_plan(1_000_003, 16 * 1000, 700_000);
+        assert_eq!(plan.len(), 1001);
+        let (mut base, mut normal, mut selected) = (0, 0, 0);
+        for &(chunk_base, normal_count, selected_count) in &plan {
+            assert_eq!(chunk_base, base);
+            assert!((normal_count + selected_count) as u64 * 16 <= 16 * 1000);
+            base += normal_count + selected_count;
+            normal += normal_count;
+            selected += selected_count;
+        }
+        assert_eq!(base, 1_000_003);
+        assert_eq!(normal, 700_000);
+        assert_eq!(selected, 300_003);
+    }
+
+    #[test]
+    fn chunk_plan_clamps_normal_count() {
+        // normal_count greater than total is clamped to total
+        assert_eq!(chunk_plan(3, 16 * 4, 99), chunk_plan(3, 16 * 4, 3));
+        assert_eq!(chunk_plan(3, 16 * 4, 3), vec![(0, 3, 0)]);
+    }
+
+    #[test]
+    fn chunk_capacity_grows_and_respects_the_limit() {
+        assert_eq!(chunk_capacity(16, 1 << 20), 16);
+        assert_eq!(chunk_capacity(17, 1 << 20), 32);
+        assert_eq!(chunk_capacity(1000, 1 << 20), 1024);
+        // The cap wins over rounding up and never drops below the needed size
+        assert_eq!(chunk_capacity(1000, 1008), 1008);
+        assert_eq!(chunk_capacity(1008, 1008), 1008);
     }
 }

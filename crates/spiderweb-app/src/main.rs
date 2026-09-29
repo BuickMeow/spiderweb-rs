@@ -43,9 +43,36 @@ fn main() {
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
         viewport = viewport.with_icon(icon);
     }
+    // Raise `max_buffer_size` to what the adapter supports so projects with tens of millions of
+    // notes are not capped at wgpu's 256 MiB default; the note renderer chunks its instance
+    // buffers regardless, so a lower limit still works.
+    let mut wgpu_setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    wgpu_setup.device_descriptor = std::sync::Arc::new(|adapter| {
+        use eframe::egui_wgpu::wgpu;
+        let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+            wgpu::Limits::downlevel_webgl2_defaults()
+        } else {
+            wgpu::Limits::default()
+        };
+        wgpu::DeviceDescriptor {
+            label: Some("egui wgpu device"),
+            required_limits: wgpu::Limits {
+                // When using a depth buffer, we have to be able to create a texture large
+                // enough for the entire surface, and we want to support 4k+ displays.
+                max_texture_dimension_2d: 8192,
+                max_buffer_size: adapter.limits().max_buffer_size,
+                ..base_limits
+            },
+            ..Default::default()
+        }
+    });
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
+            ..Default::default()
+        },
         ..Default::default()
     };
     if let Err(e) = eframe::run_native(

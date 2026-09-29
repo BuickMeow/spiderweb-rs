@@ -20,7 +20,7 @@ cargo build --release -p spiderweb-app
 | Domino codec | interoperates with Python (encoded payload byte-identical / Python data decoded) | `crates/spiderweb-domino/tests/` |
 | MIDI export | **byte-identical** to the Python original (hand-written SMF header check, no MIDI library) | `crates/spiderweb-io/tests/midi_vectors.rs` |
 | Project writer | 12-significant-digit rounding (`project.short_shape`, tumour graphs included) matches Python | `crates/spiderweb-io/tests/short_vectors.rs` |
-| App unit tests | input state machine, curve handles, scrub, i18n keys, 256-key mode, custom semantics, join/split commands (incl. back to the old shapes), turn into live shape, drawer undo/redo, tumour window logic, snap steps / custom snap window, history steps / jump, tips queue | `#[cfg(test)]` in `crates/spiderweb-app/src/**` |
+| App unit tests | input state machine, curve handles, scrub, i18n keys, 256-key mode, custom semantics, join/split commands (incl. back to the old shapes), turn into live shape, drawer undo/redo, tumour window logic, snap steps / custom snap window, history steps / jump, tips queue, wgpu instance chunk planning | `#[cfg(test)]` in `crates/spiderweb-app/src/**` |
 
 Current baseline: all workspace tests green, `clippy -D warnings` clean,
 core micro-benchmarks in section 3.4.
@@ -71,7 +71,8 @@ release notes and keep the filled-in list.
 - [ ] Velocity pane: Linear / Curve / Pencil, Enter confirms
 - [ ] Help (F1, searchable), first-use tips, `errors.log`
 - [ ] Window resize, Retina (ppp ≠ 1), side panel scrolling, second monitor
-- [ ] Big-project smoke test: ≥ 1M notes, drag / play / undo without crashing
+- [ ] Big-project smoke test: ≥ 1M notes (and ≥ 25M with the GPU path), drag /
+      play / undo without crashing; no `errors.log` entry
 
 ## 3. Performance measurement
 
@@ -95,7 +96,8 @@ SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app
 ```
 
 - HUD (top right): frame-time EMA, shape count, note count
-- stderr: `[perf] load+render … ms`, `[perf] shapes_changed … ms`
+- stderr: `[perf] load+render … ms`, `[perf] shapes_changed … ms`,
+  `[perf] note_gpu: … instance chunks` (device buffer limit and chunks per rebuild)
 
 ### 3.3 Record table (same-screen performance)
 
