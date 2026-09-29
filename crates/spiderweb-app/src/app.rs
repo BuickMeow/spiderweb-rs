@@ -29,7 +29,7 @@ use crate::snap_picker::CustomSnapWindow;
 use crate::text_dialog::FontDialog;
 
 /// 程序版本（原版 files/about.py 的 VERSION；帮助窗口标题与 about 文案用）。
-pub const VERSION: &str = "1.1.0";
+pub const VERSION: &str = "1.2.0";
 
 /// 每个形状的音符与（粘贴音符的）track 列。
 type NotesAndTracks = (Vec<[i64; 4]>, Option<Vec<i64>>);
