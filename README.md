@@ -31,9 +31,12 @@ re-uploaded only when the notes or the selection change, and are split into
 chunks smaller than `max_buffer_size`, so tens of millions of notes fit.
 Core algorithms are scalar Rust ports of the vectorised Python code.
 
-Measured on an Apple Silicon Mac (release build), for reference only —
-the [CI dashboard](https://buickmeow.github.io/spiderweb-rs/dev/bench/) tracks
-regressions per commit, and `TESTING.md` has the full procedure:
+Measured on a **MacBook Air M5 (32 GB, macOS 27.0)**, release build; frame
+times need the window to be visible. The
+[CI dashboard](https://buickmeow.github.io/spiderweb-rs/dev/bench/) tracks
+regressions per commit, and `TESTING.md` has the full procedure.
+
+Core algorithms (per shape):
 
 | Case | Time |
 |---|---|
@@ -42,7 +45,23 @@ regressions per commit, and `TESTING.md` has the full procedure:
 | Fill a spam shape, 100k notes | ~1.8 ms |
 | Fill a spam funnel, 100k notes | ~4.7 ms |
 | `render` 100k notes (overlaps + channels) | ~2.5 ms |
-| App: load project + first render, 327k notes | ~25 ms |
+
+Large projects, whole roll in view (`cargo xtask bench-project`):
+
+| Notes | Load + first render | Peak RSS | Frame p50 | Frame p95 |
+|---|---|---|---|---|
+| 10 M | 0.56 s | 3.5 GB | 100 ms | 117 ms |
+| 25 M | 1.4 s | 8.5 GB | 267 ms | 284 ms |
+| 50 M | 3.4 s | 9.3 GB | 431 ms | 456 ms |
+| 100 M | 12.6 s | 9.8 GB | 533 ms | 1069 ms |
+
+Frame time scales with the total number of notes: every instance is submitted
+every frame (no visibility paging or LOD yet), so ~10 M notes is the practical
+ceiling for interactive use when the whole roll is on screen. Editing stays
+smooth when zoomed in. The next steps for huge projects are CPU-side
+visible-range paging and summary/LOD blocks for the zoomed-out view. Instance
+buffers are chunked, so projects with tens of millions of notes no longer hit
+wgpu's 256 MiB default buffer limit.
 
 Reproduce locally:
 
