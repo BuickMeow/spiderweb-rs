@@ -18,7 +18,7 @@ cargo build --release -p spiderweb-app
 | core 差分测试 | 8 组对照向量，2000+ 例，全部由 Python 原版生成 | `crates/spiderweb-core/tests/*_vectors.rs` + `tools/gen_*_vectors.py` |
 | Domino 编解码 | 与 Python 互操作（编码解压负载逐字节一致 / 解码 Python 数据） | `crates/spiderweb-domino/tests/` |
 | MIDI 导出 | 与 Python 输出**逐字节一致**（手写 SMF 头校验，不依赖 MIDI 库） | `crates/spiderweb-io/tests/midi_vectors.rs` |
-| app 单测 | 输入状态机、curve 把手、scrub、i18n 键完整性等 | `crates/spiderweb-app/src/**` 的 `#[cfg(test)]` |
+| app 单测 | 输入状态机、curve 把手、scrub、i18n 键完整性、256 键、custom 新语义等 | `crates/spiderweb-app/src/**` 的 `#[cfg(test)]` |
 
 **回归基线**（当前）：workspace 全绿；core 微基准见第 3.4 节。
 
@@ -123,7 +123,7 @@ PR 里给火焰图），或把 `bench.yml` 的 job summary 链接贴到 README�
 Tested on <机器>, <系统>, <分辨率>:
 - 8 differential suites, 2000+ cases vs the original Python engine
 - MIDI export byte-identical to the original; Domino codec cross-checked
-- 87 unit tests, clippy -D warnings clean, release build
+- <N> workspace tests, clippy -D warnings clean, release build
 - Perf dashboard: https://buickmeow.github.io/spiderweb-rs/dev/bench/
 - 5M notes: load <x>s, idle <x>fps, pan <x>fps, drag <x>fps, RSS <x>MB
 - Known gaps: interactive UX tests in progress; Domino path is Windows-only
