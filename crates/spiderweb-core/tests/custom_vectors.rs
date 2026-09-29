@@ -29,18 +29,18 @@ fn assert_pt_eq(got: Pt, want: &Value, ctx: &str) {
 
 fn assert_pts_eq(got: &[Pt], want: &Value, ctx: &str) {
     let w = pts(want);
-    assert_eq!(got.len(), w.len(), "{ctx}: 点数不同");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of points");
     for (k, (g, x)) in got.iter().zip(w.iter()).enumerate() {
         assert!(
             close(g[0], x[0]) && close(g[1], x[1]),
-            "{ctx}: 第 {k} 点 {g:?} != {x:?}"
+            "{ctx}: point {k} differs {g:?} != {x:?}"
         );
     }
 }
 
 fn assert_paths_eq(got: &[Vec<Pt>], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("paths 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 路径数不同");
+    let w = want.as_array().expect("paths is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of paths");
     for (i, (g, x)) in got.iter().zip(w).enumerate() {
         assert_pts_eq(g, x, &format!("{ctx}[{i}]"));
     }
@@ -51,34 +51,38 @@ fn assert_polys_eq(got: &[Vec<Pt>], want: &Value, ctx: &str) {
 }
 
 fn assert_closers_eq(got: &[[Pt; 2]], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("closers 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 直线数不同 got={got:?}");
+    let w = want.as_array().expect("closers is not an array");
+    assert_eq!(
+        got.len(),
+        w.len(),
+        "{ctx}: different number of lines got={got:?}"
+    );
     for (i, (g, x)) in got.iter().zip(w).enumerate() {
         assert_pts_eq(g, x, &format!("{ctx}[{i}]"));
     }
 }
 
 fn ints(v: &Value) -> Vec<i64> {
-    v.as_array().expect("不是数组").iter().map(i).collect()
+    v.as_array().expect("not an array").iter().map(i).collect()
 }
 
 fn bools(v: &Value) -> Vec<bool> {
-    v.as_array().expect("不是数组").iter().map(b).collect()
+    v.as_array().expect("not an array").iter().map(b).collect()
 }
 
 fn assert_ids_eq(got: Option<&[i64]>, want: &Value, ctx: &str) {
     match (got, want.is_null()) {
         (None, true) => {}
         (Some(g), false) => assert_eq!(g, ints(want).as_slice(), "{ctx}"),
-        (g, w) => panic!("{ctx}: ids 不同 got={g:?} want_null={w}"),
+        (g, w) => panic!("{ctx}: ids differ got={g:?} want_null={w}"),
     }
 }
 
 fn assert_spans_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("spans 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 段数不同");
+    let w = want.as_array().expect("spans is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of segments");
     for (i, (g, x)) in got.iter().zip(w).enumerate() {
-        let a = x.as_array().expect("段不是数组");
+        let a = x.as_array().expect("span is not an array");
         close_f(g[0], f(&a[0]), &format!("{ctx}[{i}].a"));
         close_f(g[1], f(&a[1]), &format!("{ctx}[{i}].b"));
     }
@@ -86,10 +90,10 @@ fn assert_spans_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
 
 fn rows5(v: &Value) -> Vec<[i64; 5]> {
     v.as_array()
-        .expect("不是数组")
+        .expect("not an array")
         .iter()
         .map(|r| {
-            let a = r.as_array().expect("行不是数组");
+            let a = r.as_array().expect("row is not an array");
             [i(&a[0]), i(&a[1]), i(&a[2]), i(&a[3]), i(&a[4])]
         })
         .collect()
@@ -101,7 +105,7 @@ fn fill_of(s: &str) -> Fill {
         "fill" => Fill::Fill,
         "spam" => Fill::Spam,
         "outline_spam" => Fill::OutlineSpam,
-        other => panic!("未知 fill {other}"),
+        other => panic!("unknown fill {other}"),
     }
 }
 
@@ -110,7 +114,7 @@ fn align_of(s: &str) -> Align {
         "auto" => Align::Auto,
         "aligned" => Align::Aligned,
         "centred" => Align::Centred,
-        other => panic!("未知 align {other}"),
+        other => panic!("unknown align {other}"),
     }
 }
 
@@ -121,14 +125,14 @@ fn ends_of(s: &str) -> Ends {
         "drop" => Ends::Drop,
         "min" => Ends::Min,
         "stretch" => Ends::Stretch,
-        other => panic!("未知 ends {other}"),
+        other => panic!("unknown ends {other}"),
     }
 }
 
 fn stroke_of(v: &Value) -> Stroke {
     let kind = v["kind"]
         .as_str()
-        .unwrap_or_else(|| panic!("笔画没有 kind: {v}"));
+        .unwrap_or_else(|| panic!("stroke has no kind: {v}"));
     match kind {
         "poly" => Stroke::Poly {
             pts: pts(&v["pts"]),
@@ -163,13 +167,13 @@ fn stroke_of(v: &Value) -> Stroke {
                 src: v.get("src").and_then(Value::as_i64),
             }
         }
-        other => panic!("未知笔画 {other}"),
+        other => panic!("unknown stroke {other}"),
     }
 }
 
 fn strokes_of(v: &Value) -> Vec<Stroke> {
     v.as_array()
-        .expect("strokes 不是数组")
+        .expect("strokes is not an array")
         .iter()
         .map(stroke_of)
         .collect()
@@ -288,20 +292,20 @@ fn assert_stroke_eq(got: &Stroke, want: &Value, ctx: &str) {
                 close_f(gb[j], wb[j], &format!("{ctx}.box[{j}]"));
             }
         }
-        _ => panic!("{ctx}: 笔画种类不同 got={got:?} want={w:?}"),
+        _ => panic!("{ctx}: different stroke kind got={got:?} want={w:?}"),
     }
 }
 
 fn assert_strokes_eq(got: &[Stroke], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("strokes 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 笔画数不同");
+    let w = want.as_array().expect("strokes is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of strokes");
     for (k, (g, x)) in got.iter().zip(w).enumerate() {
         assert_stroke_eq(g, x, &format!("{ctx}[{k}]"));
     }
 }
 
 fn assert_shape_eq(got: &Shape, want: &Value, ctx: &str) {
-    let obj = want.as_object().expect("形状不是对象");
+    let obj = want.as_object().expect("shape is not an object");
     for (key, v) in obj {
         match key.as_str() {
             "kind" => assert_eq!(got.kind, Kind::Custom, "{ctx}.kind"),
@@ -319,12 +323,13 @@ fn assert_shape_eq(got: &Shape, want: &Value, ctx: &str) {
             "vel1" => close_f(got.vel1, f(v), &format!("{ctx}.vel1")),
             "end_dot" => assert_eq!(got.end_dot, b(v), "{ctx}.end_dot"),
             "notes" => {
-                let want_rows = C::unpack_notes(v.as_str().unwrap()).expect("want notes 解不开");
-                let got_rows = C::unpack_notes(got.notes.as_deref().expect("got 没有 notes"))
-                    .expect("got notes 解不开");
+                let want_rows =
+                    C::unpack_notes(v.as_str().unwrap()).expect("want notes cannot be unpacked");
+                let got_rows = C::unpack_notes(got.notes.as_deref().expect("got has no notes"))
+                    .expect("got notes cannot be unpacked");
                 assert_eq!(got_rows, want_rows, "{ctx}.notes");
             }
-            other => panic!("{ctx}: 未知形状字段 {other}"),
+            other => panic!("{ctx}: unknown shape field {other}"),
         }
     }
 }
@@ -455,7 +460,7 @@ fn custom_vectors() {
                     "scale" => Box::new(move |u, v| [u * params[0], v * params[1]]),
                     "shear" => Box::new(move |u, v| [u + params[0] * v, v + params[1] * u]),
                     "mix" => Box::new(|u, v| [0.5 * u + 0.2 * v + 0.1, -0.3 * u + 0.7 * v - 0.05]),
-                    other => panic!("未知映射 {other}"),
+                    other => panic!("unknown mapping {other}"),
                 };
                 let g = C::map_stroke(&st, map, su, sv);
                 assert_stroke_eq(&g, out, &ctx);
@@ -523,11 +528,17 @@ fn custom_vectors() {
                             .collect();
                         let want: Vec<Vec<i64>> = want
                             .iter()
-                            .map(|g| g.as_array().expect("组不是数组").iter().map(i).collect())
+                            .map(|g| {
+                                g.as_array()
+                                    .expect("group is not an array")
+                                    .iter()
+                                    .map(i)
+                                    .collect()
+                            })
                             .collect();
                         assert_eq!(got, want, "{ctx}");
                     }
-                    (got, want) => panic!("{ctx}: 分组不同 got={got:?} want={want:?}"),
+                    (got, want) => panic!("{ctx}: groups differ got={got:?} want={want:?}"),
                 }
             }
             "outline_apart" => {
@@ -625,13 +636,16 @@ fn custom_vectors() {
             "pack_notes" => {
                 let rows = rows5(&args[0]);
                 let py_text = out.as_str().unwrap();
-                let py_rows = C::unpack_notes(py_text).expect("Python 的文本应能解");
-                assert_eq!(py_rows, rows, "{ctx}: Python 文本");
+                let py_rows = C::unpack_notes(py_text).expect("Python text should unpack");
+                assert_eq!(py_rows, rows, "{ctx}: Python text");
                 let got = C::pack_notes(&rows);
-                let got_rows = C::unpack_notes(&got).expect("Rust 的文本应能解");
-                assert_eq!(got_rows, rows, "{ctx}: Rust 往返");
+                let got_rows = C::unpack_notes(&got).expect("Rust text should unpack");
+                assert_eq!(got_rows, rows, "{ctx}: Rust round trip");
                 if !rows.is_empty() {
-                    assert!(C::check_notes(&got), "{ctx}: Rust 文本应通过 check_notes");
+                    assert!(
+                        C::check_notes(&got),
+                        "{ctx}: Rust text should pass check_notes"
+                    );
                 }
             }
             "unpack_notes" => {
@@ -654,11 +668,11 @@ fn custom_vectors() {
                 let g = C::block_notes(&sh, f(&args[1])).expect("block_notes");
                 assert_eq!(g, rows5(out), "{ctx}");
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 400, "用例太少：{checked}");
+    assert!(checked >= 400, "too few cases: {checked}");
 
     // ------------------------------------------------------------ constants
     assert_eq!(
@@ -698,6 +712,6 @@ fn custom_vectors() {
         assert_eq!(pts.len(), 5);
         assert_eq!(pts[0], pts[4]);
     } else {
-        panic!("BOX_STROKE 应是折线");
+        panic!("BOX_STROKE should be a polyline");
     }
 }

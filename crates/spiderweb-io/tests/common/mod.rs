@@ -6,22 +6,23 @@ use serde_json::{Map, Value};
 
 pub fn cases(module: &str, key: &str) -> Vec<Value> {
     let path = format!("{}/tests/vectors/{module}.json", env!("CARGO_MANIFEST_DIR"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("缺少向量文件 {path}（先运行 tools/gen_io_vectors.py）：{e}"));
-    let data: Value = serde_json::from_str(&text).expect("向量 JSON 解析失败");
-    data[key].as_array().expect("cases 不是数组").clone()
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("missing vector file {path} (run tools/gen_io_vectors.py first): {e}")
+    });
+    let data: Value = serde_json::from_str(&text).expect("failed to parse vector JSON");
+    data[key].as_array().expect("cases is not an array").clone()
 }
 
 pub fn f(v: &Value) -> f64 {
-    v.as_f64().unwrap_or_else(|| panic!("不是数字: {v}"))
+    v.as_f64().unwrap_or_else(|| panic!("not a number: {v}"))
 }
 
 pub fn i(v: &Value) -> i64 {
-    v.as_i64().unwrap_or_else(|| panic!("不是整数: {v}"))
+    v.as_i64().unwrap_or_else(|| panic!("not an integer: {v}"))
 }
 
 pub fn s(v: &Value) -> &str {
-    v.as_str().unwrap_or_else(|| panic!("不是字符串: {v}"))
+    v.as_str().unwrap_or_else(|| panic!("not a string: {v}"))
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -123,6 +124,6 @@ pub fn project_want(v: &Value) -> Value {
 pub fn unhex(s: &str) -> Vec<u8> {
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("不是十六进制"))
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("not hexadecimal"))
         .collect()
 }

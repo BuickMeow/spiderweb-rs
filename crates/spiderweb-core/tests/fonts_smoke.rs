@@ -45,10 +45,13 @@ fn usable_font() -> Option<Arc<Font>> {
 #[test]
 fn families_are_sorted_and_unique() {
     let families = font_families();
-    assert!(!families.is_empty(), "系统里应当至少装了一个字体");
+    assert!(
+        !families.is_empty(),
+        "at least one font should be installed"
+    );
     assert!(
         families.iter().all(|f| !f.starts_with('@')),
-        "@ 开头的竖排变体要去掉"
+        "@ vertical variants should be dropped"
     );
 
     let mut sorted = families.clone();
@@ -57,22 +60,22 @@ fn families_are_sorted_and_unique() {
             .cmp(&b.to_lowercase())
             .then_with(|| a.cmp(b))
     });
-    assert_eq!(sorted, families, "应按小写名排序");
+    assert_eq!(sorted, families, "should sort by lowercase name");
 
     let mut unique = families.clone();
     unique.dedup();
-    assert_eq!(unique, families, "不应有重复的族名");
+    assert_eq!(unique, families, "no duplicate family names");
 }
 
 #[test]
 fn loads_a_system_font() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     assert!(
         font.found(),
-        "{} 应当匹配到同名 face，实际是 {}",
+        "{} should match a face with the same name, got {}",
         font.family,
         font.face
     );
@@ -93,16 +96,16 @@ fn loads_a_system_font() {
     assert!(font.cap > 0.4 && font.cap < 1.2, "cap = {}", font.cap);
 
     let a = font.glyph('A');
-    assert!(a.advance > 0.0, "'A' 的 advance = {}", a.advance);
-    assert!(!a.contours.is_empty(), "'A' 应当有轮廓");
+    assert!(a.advance > 0.0, "'A' advance = {}", a.advance);
+    assert!(!a.contours.is_empty(), "'A' should have contours");
     for contour in &a.contours {
-        assert!(contour.len() >= 4, "轮廓点数 {}", contour.len());
-        assert_eq!(contour.first(), contour.last(), "轮廓应当闭合");
+        assert!(contour.len() >= 4, "contour point count {}", contour.len());
+        assert_eq!(contour.first(), contour.last(), "contours should be closed");
         for p in contour {
             assert!(p[0].is_finite() && p[1].is_finite());
             assert!(
                 p[0].abs() < 2.0 && p[1].abs() < 2.0,
-                "em 单位下的点 {p:?} 太离谱"
+                "point {p:?} in em units is way out of range"
             );
         }
     }
@@ -124,7 +127,7 @@ fn loads_a_system_font() {
 #[test]
 fn kerning_values_are_em_sized() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     for ((left, right), value) in &font.kerning {

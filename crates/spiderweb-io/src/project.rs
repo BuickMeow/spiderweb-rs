@@ -216,17 +216,17 @@ impl WindowState {
 /// Project file read error; in Python `load_file` returns False on error.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
-    #[error("工程文件读不开: {0}")]
+    #[error("cannot read project file: {0}")]
     Io(#[from] io::Error),
-    #[error("工程文件不是 JSON")]
+    #[error("project file is not JSON")]
     Json(#[from] serde_json::Error),
-    #[error("工程文件不是 JSON 对象")]
+    #[error("project file is not a JSON object")]
     NotObject,
-    #[error("工程文件的 defaults / custom_defaults 坏了")]
+    #[error("project defaults / custom_defaults are bad")]
     Defaults,
-    #[error("工程文件的 shapes 坏了")]
+    #[error("project shapes are bad")]
     Shapes,
-    #[error("工程里的形状坏了: {0}")]
+    #[error("bad shape in project: {0}")]
     Shape(#[from] ShapeError),
 }
 

@@ -27,7 +27,7 @@ fn assert_pts_close(got: &[Pt], want: &[Pt], ctx: &str) {
     assert_eq!(
         got.len(),
         want.len(),
-        "{ctx}: 点数不同 got={got:?} want={want:?}"
+        "{ctx}: different number of points got={got:?} want={want:?}"
     );
     for (k, (g, w)) in got.iter().zip(want.iter()).enumerate() {
         assert!(
@@ -38,7 +38,7 @@ fn assert_pts_close(got: &[Pt], want: &[Pt], ctx: &str) {
 }
 
 fn assert_strokes_close(got: &[Stroke], want: &[Stroke], ctx: &str) {
-    assert_eq!(got.len(), want.len(), "{ctx}: 笔画数不同");
+    assert_eq!(got.len(), want.len(), "{ctx}: different number of strokes");
     for (k, (g, w)) in got.iter().zip(want.iter()).enumerate() {
         assert_stroke_close(g, w, &format!("{ctx}[{k}]"));
     }
@@ -95,7 +95,7 @@ fn assert_stroke_close(got: &Stroke, want: &Stroke, ctx: &str) {
                 close_f(gb[j], wb[j], &format!("{ctx}.box[{j}]"));
             }
         }
-        _ => panic!("{ctx}: 笔画种类不同 got={got:?} want={want:?}"),
+        _ => panic!("{ctx}: different stroke kind got={got:?} want={want:?}"),
     }
 }
 
@@ -125,7 +125,7 @@ fn assert_shape_close(got: &Shape, want: &Shape, ctx: &str) {
     assert_eq!(
         got.vel_env.len(),
         want.vel_env.len(),
-        "{ctx}.vel_env 长度不同"
+        "{ctx}.vel_env length differs"
     );
     for (k, (g, w)) in got.vel_env.iter().zip(want.vel_env.iter()).enumerate() {
         assert!(
@@ -163,7 +163,11 @@ fn assert_shape_close(got: &Shape, want: &Shape, ctx: &str) {
 }
 
 fn assert_shape_from_close(got: &ShapeFrom, want: &ShapeFrom, ctx: &str) {
-    assert_eq!(got.shapes.len(), want.shapes.len(), "{ctx}.shapes 数不同");
+    assert_eq!(
+        got.shapes.len(),
+        want.shapes.len(),
+        "{ctx}.shapes count differs"
+    );
     for (k, (g, w)) in got.shapes.iter().zip(want.shapes.iter()).enumerate() {
         assert_shape_close(g, w, &format!("{ctx}.shapes[{k}]"));
     }
@@ -182,7 +186,7 @@ fn kind_of(s: &str) -> Kind {
         "arc" => Kind::Arc,
         "custom" => Kind::Custom,
         "funnel" => Kind::Funnel,
-        other => panic!("未知 kind {other}"),
+        other => panic!("unknown kind {other}"),
     }
 }
 
@@ -192,7 +196,7 @@ fn fill_of(s: &str) -> Fill {
         "fill" => Fill::Fill,
         "spam" => Fill::Spam,
         "outline_spam" => Fill::OutlineSpam,
-        other => panic!("未知 fill {other}"),
+        other => panic!("unknown fill {other}"),
     }
 }
 
@@ -201,7 +205,7 @@ fn align_of(s: &str) -> Align {
         "auto" => Align::Auto,
         "aligned" => Align::Aligned,
         "centred" => Align::Centred,
-        other => panic!("未知 align {other}"),
+        other => panic!("unknown align {other}"),
     }
 }
 
@@ -212,7 +216,7 @@ fn ends_of(s: &str) -> Ends {
         "drop" => Ends::Drop,
         "min" => Ends::Min,
         "stretch" => Ends::Stretch,
-        other => panic!("未知 ends {other}"),
+        other => panic!("unknown ends {other}"),
     }
 }
 
@@ -227,7 +231,7 @@ fn sym_of(v: &Value) -> Option<Sym> {
 fn stroke_of(v: &Value) -> Stroke {
     let kind = v["kind"]
         .as_str()
-        .unwrap_or_else(|| panic!("笔画没有 kind: {v}"));
+        .unwrap_or_else(|| panic!("stroke has no kind: {v}"));
     let src = v.get("src").and_then(Value::as_i64);
     match kind {
         "poly" => Stroke::Poly {
@@ -259,13 +263,13 @@ fn stroke_of(v: &Value) -> Stroke {
                 src,
             }
         }
-        other => panic!("未知笔画 {other}"),
+        other => panic!("unknown stroke {other}"),
     }
 }
 
 fn strokes_of(v: &Value) -> Vec<Stroke> {
     v.as_array()
-        .expect("strokes 不是数组")
+        .expect("strokes is not an array")
         .iter()
         .map(stroke_of)
         .collect()
@@ -282,7 +286,7 @@ fn tumour_of(v: &Value) -> Tumour {
             "square" => TumourShape::Square,
             "circle" => TumourShape::Circle,
             "parabola" => TumourShape::Parabola,
-            other => panic!("未知肿瘤形状 {other}"),
+            other => panic!("unknown tumour shape {other}"),
         };
     }
     if let Some(s) = v.get("side").and_then(Value::as_str) {
@@ -291,14 +295,14 @@ fn tumour_of(v: &Value) -> Tumour {
             "left" => TumourSide::Left,
             "right" => TumourSide::Right,
             "random" => TumourSide::Random,
-            other => panic!("未知肿瘤方向 {other}"),
+            other => panic!("unknown tumour side {other}"),
         };
     }
     if let Some(s) = v.get("wrap").and_then(Value::as_str) {
         tm.wrap = match s {
             "simple" => TumourWrap::Simple,
             "wrap" => TumourWrap::Wrap,
-            other => panic!("未知肿瘤跟随 {other}"),
+            other => panic!("unknown tumour wrap {other}"),
         };
     }
     if let Some(x) = v.get("size") {
@@ -335,7 +339,7 @@ fn tumour_of(v: &Value) -> Tumour {
 }
 
 fn shape_of(v: &Value) -> Shape {
-    let kind = kind_of(v["kind"].as_str().expect("形状没有 kind"));
+    let kind = kind_of(v["kind"].as_str().expect("shape has no kind"));
     let mut sh = Shape {
         kind,
         pts: v.get("pts").map(pts).unwrap_or_default(),
@@ -441,7 +445,7 @@ fn shape_from_of(fr: &Value) -> ShapeFrom {
     ShapeFrom {
         shapes: fr["shapes"]
             .as_array()
-            .expect("from.shapes 不是数组")
+            .expect("from.shapes is not an array")
             .iter()
             .map(shape_of)
             .collect(),
@@ -452,7 +456,7 @@ fn shape_from_of(fr: &Value) -> ShapeFrom {
 
 fn shapes_of(v: &Value) -> Vec<Shape> {
     v.as_array()
-        .expect("shapes 不是数组")
+        .expect("shapes is not an array")
         .iter()
         .map(shape_of)
         .collect()
@@ -460,11 +464,11 @@ fn shapes_of(v: &Value) -> Vec<Shape> {
 
 fn paths_of(v: &Value) -> Vec<Vec<Vec<Pt>>> {
     v.as_array()
-        .expect("paths 不是数组")
+        .expect("paths is not an array")
         .iter()
         .map(|p| {
             p.as_array()
-                .expect("path 不是数组")
+                .expect("path is not an array")
                 .iter()
                 .map(pts)
                 .collect()
@@ -492,7 +496,7 @@ fn loss_key(sentence: &str) -> String {
         "\"Last note: starts on it\" is dropped (every stroke ends on its last point)." => {
             "end_dot".to_string()
         }
-        other => panic!("未知的损失句子：{other}"),
+        other => panic!("unknown loss sentence: {other}"),
     }
 }
 
@@ -516,7 +520,7 @@ fn convert_vectors() {
                 let sh = shape_of(&args[0]);
                 let paths: Vec<Vec<Pt>> = args[1]
                     .as_array()
-                    .expect("paths 不是数组")
+                    .expect("paths is not an array")
                     .iter()
                     .map(pts)
                     .collect();
@@ -531,9 +535,9 @@ fn convert_vectors() {
                     .collect();
                 let want: Vec<String> = out
                     .as_array()
-                    .expect("losses 不是数组")
+                    .expect("losses is not an array")
                     .iter()
-                    .map(|v| loss_key(v.as_str().expect("损失不是字符串")))
+                    .map(|v| loss_key(v.as_str().expect("loss is not a string")))
                     .collect();
                 assert_eq!(got, want, "{ctx}");
             }
@@ -551,17 +555,21 @@ fn convert_vectors() {
                 match (got, out.as_array()) {
                     (None, None) => {}
                     (Some(back), Some(want)) => {
-                        assert_eq!(back.len(), want.len(), "{ctx}: 原形状数不同");
+                        assert_eq!(
+                            back.len(),
+                            want.len(),
+                            "{ctx}: different number of original shapes"
+                        );
                         for (k, (g, w)) in back.iter().zip(want.iter()).enumerate() {
                             assert_shape_close(g, &shape_of(w), &format!("{ctx}[{k}]"));
                         }
                     }
-                    (got, want) => panic!("{ctx}: originals 不同 got={got:?} want={want:?}"),
+                    (got, want) => panic!("{ctx}: originals differ got={got:?} want={want:?}"),
                 }
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 25, "用例太少：{checked}");
+    assert!(checked >= 25, "too few cases: {checked}");
 }

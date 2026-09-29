@@ -731,7 +731,7 @@ impl SmoothCurve {
 /// Err when the formula cannot be worked out (Err / non-finite) or the ends are equally high.
 pub fn formula_curve(f: &dyn Fn(f64) -> Result<f64, String>, n: usize) -> Result<Vec<Pt>, String> {
     if n == 0 {
-        return Err("x = i / n 需要 n > 0".to_string());
+        return Err("x = i / n needs n > 0".to_string());
     }
     let mut pts = Vec::with_capacity(n + 1);
     for i in 0..=n {

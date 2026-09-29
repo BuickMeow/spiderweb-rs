@@ -21,18 +21,18 @@ fn close(a: f64, b: f64) -> bool {
 
 fn assert_pts_eq(got: &[Pt], want: &Value, ctx: &str) {
     let w = pts(want);
-    assert_eq!(got.len(), w.len(), "{ctx}: 点数不同");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of points");
     for (k, (g, x)) in got.iter().zip(w.iter()).enumerate() {
         assert!(
             close(g[0], x[0]) && close(g[1], x[1]),
-            "{ctx}: 第 {k} 点 {g:?} != {x:?}"
+            "{ctx}: point {k} differs {g:?} != {x:?}"
         );
     }
 }
 
 fn assert_paths_eq(got: &[Vec<Pt>], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("paths 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 路径数不同");
+    let w = want.as_array().expect("paths is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of paths");
     for (i, (g, x)) in got.iter().zip(w).enumerate() {
         assert_pts_eq(g, x, &format!("{ctx}[{i}]"));
     }
@@ -40,10 +40,10 @@ fn assert_paths_eq(got: &[Vec<Pt>], want: &Value, ctx: &str) {
 
 fn rows4(v: &Value) -> Vec<[i64; 4]> {
     v.as_array()
-        .expect("不是数组")
+        .expect("not an array")
         .iter()
         .map(|r| {
-            let a = r.as_array().expect("行不是数组");
+            let a = r.as_array().expect("row is not an array");
             [i(&a[0]), i(&a[1]), i(&a[2]), i(&a[3])]
         })
         .collect()
@@ -51,10 +51,10 @@ fn rows4(v: &Value) -> Vec<[i64; 4]> {
 
 fn rows6(v: &Value) -> Vec<[i64; 6]> {
     v.as_array()
-        .expect("不是数组")
+        .expect("not an array")
         .iter()
         .map(|r| {
-            let a = r.as_array().expect("行不是数组");
+            let a = r.as_array().expect("row is not an array");
             [i(&a[0]), i(&a[1]), i(&a[2]), i(&a[3]), i(&a[4]), i(&a[5])]
         })
         .collect()
@@ -79,7 +79,7 @@ fn kind_of(s: &str) -> Kind {
         "arc" => Kind::Arc,
         "custom" => Kind::Custom,
         "funnel" => Kind::Funnel,
-        other => panic!("未知 kind {other}"),
+        other => panic!("unknown kind {other}"),
     }
 }
 
@@ -89,7 +89,7 @@ fn fill_of(s: &str) -> Fill {
         "fill" => Fill::Fill,
         "spam" => Fill::Spam,
         "outline_spam" => Fill::OutlineSpam,
-        other => panic!("未知 fill {other}"),
+        other => panic!("unknown fill {other}"),
     }
 }
 
@@ -97,7 +97,7 @@ fn align_of(s: &str) -> Align {
     match s {
         "auto" => Align::Auto,
         "aligned" => Align::Aligned,
-        other => panic!("未知 align {other}"),
+        other => panic!("unknown align {other}"),
     }
 }
 
@@ -112,7 +112,7 @@ fn sym_of(v: &Value) -> Option<Sym> {
 fn stroke_of(v: &Value) -> Stroke {
     let kind = v["kind"]
         .as_str()
-        .unwrap_or_else(|| panic!("笔画没有 kind: {v}"));
+        .unwrap_or_else(|| panic!("stroke has no kind: {v}"));
     let src = v.get("src").and_then(Value::as_i64);
     match kind {
         "poly" => Stroke::Poly {
@@ -144,13 +144,13 @@ fn stroke_of(v: &Value) -> Stroke {
                 src,
             }
         }
-        other => panic!("未知笔画 {other}"),
+        other => panic!("unknown stroke {other}"),
     }
 }
 
 fn strokes_of(v: &Value) -> Vec<Stroke> {
     v.as_array()
-        .expect("strokes 不是数组")
+        .expect("strokes is not an array")
         .iter()
         .map(stroke_of)
         .collect()
@@ -194,7 +194,7 @@ fn tumour_of(v: &Value) -> Tumour {
             "square" => TumourShape::Square,
             "circle" => TumourShape::Circle,
             "parabola" => TumourShape::Parabola,
-            other => panic!("未知肿瘤形状 {other}"),
+            other => panic!("unknown tumour shape {other}"),
         };
     }
     if let Some(s) = v.get("side").and_then(Value::as_str) {
@@ -203,14 +203,14 @@ fn tumour_of(v: &Value) -> Tumour {
             "left" => TumourSide::Left,
             "right" => TumourSide::Right,
             "random" => TumourSide::Random,
-            other => panic!("未知肿瘤方向 {other}"),
+            other => panic!("unknown tumour side {other}"),
         };
     }
     if let Some(s) = v.get("wrap").and_then(Value::as_str) {
         tm.wrap = match s {
             "simple" => TumourWrap::Simple,
             "wrap" => TumourWrap::Wrap,
-            other => panic!("未知肿瘤跟随 {other}"),
+            other => panic!("unknown tumour wrap {other}"),
         };
     }
     if let Some(x) = v.get("size") {
@@ -247,7 +247,7 @@ fn tumour_of(v: &Value) -> Tumour {
 }
 
 fn shape_of(v: &Value) -> Shape {
-    let kind = kind_of(v["kind"].as_str().expect("形状没有 kind"));
+    let kind = kind_of(v["kind"].as_str().expect("shape has no kind"));
     let mut sh = Shape {
         kind,
         pts: pts(&v["pts"]),
@@ -369,7 +369,7 @@ fn split_of(s: &str) -> E::Split {
     match s {
         "key" => E::Split::Key,
         "time" => E::Split::Time,
-        other => panic!("未知 split {other}"),
+        other => panic!("unknown split {other}"),
     }
 }
 
@@ -378,7 +378,7 @@ fn mode_of(s: &str) -> E::Mode {
         "raw" => E::Mode::Raw,
         "single" => E::Mode::Single,
         "auto" => E::Mode::Auto,
-        other => panic!("未知 mode {other}"),
+        other => panic!("unknown mode {other}"),
     }
 }
 
@@ -390,7 +390,7 @@ fn apart_of(v: Option<&Value>) -> Vec<Vec<usize>> {
                 .iter()
                 .map(|g| {
                     g.as_array()
-                        .expect("apart 组不是数组")
+                        .expect("apart group is not an array")
                         .iter()
                         .map(|x| i(x) as usize)
                         .collect()
@@ -402,7 +402,7 @@ fn apart_of(v: Option<&Value>) -> Vec<Vec<usize>> {
 
 fn note_lists_of(v: &Value) -> Vec<Vec<[i64; 4]>> {
     v.as_array()
-        .expect("note_lists 不是数组")
+        .expect("note_lists is not an array")
         .iter()
         .map(rows4)
         .collect()
@@ -519,11 +519,11 @@ fn engine_vectors() {
                 assert_eq!(track as i64, i(&want[0]), "{ctx}.track");
                 assert_eq!(channel as i64, i(&want[1]), "{ctx}.channel");
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 120, "用例太少：{checked}");
+    assert!(checked >= 120, "too few cases: {checked}");
 
     // ------------------------------------------------------------ constants
     assert_eq!(E::KINDS.len(), 7);

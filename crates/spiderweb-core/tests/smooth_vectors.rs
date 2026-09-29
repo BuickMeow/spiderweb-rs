@@ -30,9 +30,9 @@ fn smooth_vectors() {
                 let got = S::smooth_path(&pts(&args[0]), f(&args[1]), f(&args[2]));
                 assert_pts_eq(&got, out, &ctx);
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked > 150, "用例太少：{checked}");
+    assert!(checked > 150, "too few cases: {checked}");
 }

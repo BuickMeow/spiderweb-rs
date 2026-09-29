@@ -19,7 +19,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 fn pt_of(v: &Value) -> Pt {
-    let a = v.as_array().expect("点不是数组");
+    let a = v.as_array().expect("point is not an array");
     [f(&a[0]), f(&a[1])]
 }
 
@@ -28,7 +28,7 @@ fn bend_of(v: &Value) -> Pt {
 }
 
 fn box_of(v: &Value) -> (Pt, Pt, Pt) {
-    let a = v.as_array().expect("方盒不是数组");
+    let a = v.as_array().expect("box is not an array");
     (pt_of(&a[0]), pt_of(&a[1]), pt_of(&a[2]))
 }
 
@@ -98,17 +98,17 @@ fn shape_of(v: &Value) -> Shape {
 
 fn map_spans(v: &Value) -> BTreeMap<i64, Vec<[f64; 2]>> {
     let mut spans = BTreeMap::new();
-    for (k, vv) in v.as_object().expect("spans 不是对象") {
+    for (k, vv) in v.as_object().expect("spans is not an object") {
         let list: Vec<[f64; 2]> = vv
             .as_array()
-            .expect("spans 值不是数组")
+            .expect("spans value is not an array")
             .iter()
             .map(|p| {
-                let a = p.as_array().expect("区间不是数组");
+                let a = p.as_array().expect("interval is not an array");
                 [f(&a[0]), f(&a[1])]
             })
             .collect();
-        spans.insert(k.parse().expect("key 不是整数"), list);
+        spans.insert(k.parse().expect("key is not an integer"), list);
     }
     spans
 }
@@ -128,7 +128,9 @@ fn got_spans(g: &F::Spans) -> BTreeMap<i64, Vec<[f64; 2]>> {
 }
 
 fn assert_pt(g: &[f64; 2], w: &Value, ctx: &str) {
-    let a = w.as_array().unwrap_or_else(|| panic!("{ctx}: 不是点 {w}"));
+    let a = w
+        .as_array()
+        .unwrap_or_else(|| panic!("{ctx}: not a point {w}"));
     assert!(
         close(g[0], f(&a[0])) && close(g[1], f(&a[1])),
         "{ctx}: got={g:?} want={w}"
@@ -140,21 +142,21 @@ fn assert_poly(g: &[Pt], w: &Value, ctx: &str) {
     assert_eq!(
         g.len(),
         wp.len(),
-        "{ctx}: 点数 got={} want={}",
+        "{ctx}: point count got={} want={}",
         g.len(),
         wp.len()
     );
     for (k, (a, b)) in g.iter().zip(wp.iter()).enumerate() {
         assert!(
             close(a[0], b[0]) && close(a[1], b[1]),
-            "{ctx}: 第 {k} 点 got={a:?} want={b:?}"
+            "{ctx}: point {k} got={a:?} want={b:?}"
         );
     }
 }
 
 fn assert_polys(g: &[Vec<Pt>], w: &Value, ctx: &str) {
     let a = w.as_array().unwrap();
-    assert_eq!(g.len(), a.len(), "{ctx}: 折线数");
+    assert_eq!(g.len(), a.len(), "{ctx}: polyline count");
     for (k, (p, wv)) in g.iter().zip(a).enumerate() {
         assert_poly(p, wv, &format!("{ctx}: poly {k}"));
     }
@@ -162,7 +164,7 @@ fn assert_polys(g: &[Vec<Pt>], w: &Value, ctx: &str) {
 
 fn assert_segs(g: &[[Pt; 2]], w: &Value, ctx: &str) {
     let a = w.as_array().unwrap();
-    assert_eq!(g.len(), a.len(), "{ctx}: 段数");
+    assert_eq!(g.len(), a.len(), "{ctx}: number of segments");
     for (k, (p, wv)) in g.iter().zip(a).enumerate() {
         assert_poly(p, wv, &format!("{ctx}: seg {k}"));
     }
@@ -236,12 +238,12 @@ fn assert_layout(g: &F::FunnelLayout, w: &Value, ctx: &str) {
             (k.parse().unwrap(), [f(&p[0]), f(&p[1])])
         })
         .collect();
-    assert_eq!(g.walls.len(), walls.len(), "{ctx}: walls 数");
+    assert_eq!(g.walls.len(), walls.len(), "{ctx}: wall count");
     for (k, wv) in &walls {
         let gv = g
             .walls
             .get(k)
-            .unwrap_or_else(|| panic!("{ctx}: 缺 wall key {k}"));
+            .unwrap_or_else(|| panic!("{ctx}: missing wall key {k}"));
         assert!(
             close(gv[0], wv[0]) && close(gv[1], wv[1]),
             "{ctx}: wall {k} got={gv:?} want={wv:?}"
@@ -257,12 +259,12 @@ fn assert_floats_eq(g: &[f64], w: &Value, ctx: &str) {
     assert_eq!(
         g.len(),
         wf.len(),
-        "{ctx}: 个数 got={} want={}",
+        "{ctx}: count got={} want={}",
         g.len(),
         wf.len()
     );
     for (k, (a, b)) in g.iter().zip(wf.iter()).enumerate() {
-        assert!(close(*a, *b), "{ctx}: 第 {k} 个 got={a} want={b}");
+        assert!(close(*a, *b), "{ctx}: item {k} got={a} want={b}");
     }
 }
 
@@ -276,15 +278,15 @@ fn json_close(g: &Value, w: &Value, ctx: &str) {
             assert!(close(x, y), "{ctx}: got={g} want={w}");
         }
         (Value::Array(a), Value::Array(b)) => {
-            assert_eq!(a.len(), b.len(), "{ctx}: 长度 got={g} want={w}");
+            assert_eq!(a.len(), b.len(), "{ctx}: length got={g} want={w}");
             for (k, (x, y)) in a.iter().zip(b).enumerate() {
                 json_close(x, y, &format!("{ctx}[{k}]"));
             }
         }
         (Value::Object(a), Value::Object(b)) => {
-            assert_eq!(a.len(), b.len(), "{ctx}: 键数 got={g} want={w}");
+            assert_eq!(a.len(), b.len(), "{ctx}: key count got={g} want={w}");
             for (k, x) in a {
-                let y = b.get(k).unwrap_or_else(|| panic!("{ctx}: 缺键 {k}"));
+                let y = b.get(k).unwrap_or_else(|| panic!("{ctx}: missing key {k}"));
                 json_close(x, y, &format!("{ctx}.{k}"));
             }
         }
@@ -293,12 +295,12 @@ fn json_close(g: &Value, w: &Value, ctx: &str) {
 }
 
 fn handle_id_of(v: &Value) -> F::HandleId {
-    let a = v.as_array().expect("id 不是数组");
-    match a[0].as_str().expect("id 名字不是字符串") {
+    let a = v.as_array().expect("id is not an array");
+    match a[0].as_str().expect("id name is not a string") {
         "start" => F::HandleId::Start(i(&a[1]) as usize),
         "ctrl" => F::HandleId::Ctrl(i(&a[1]) as usize, i(&a[2]) as usize, i(&a[3]) as usize),
         "anchor" => F::HandleId::Anchor(i(&a[1]) as usize, i(&a[2]) as usize, i(&a[3]) as usize),
-        other => panic!("未知手柄 id {other}"),
+        other => panic!("unknown handle id {other}"),
     }
 }
 
@@ -317,7 +319,7 @@ fn formula_of(name: &str) -> Box<dyn Fn(f64) -> Result<f64, String>> {
         "nan" => Box::new(|_| Ok(f64::NAN)),
         "domain" => Box::new(|x| Ok((x - 2.0).sqrt())),
         "raise" => Box::new(|_| Err("no".to_string())),
-        other => panic!("未知公式 {other}"),
+        other => panic!("unknown formula {other}"),
     }
 }
 
@@ -387,7 +389,7 @@ fn funnel_vectors() {
                 let sh = shape_of(&args[0]);
                 let g = F::funnel_curves(&sh, b(&args[1]));
                 let a = out.as_array().unwrap();
-                assert_eq!(g.len(), a.len(), "{ctx}: 曲线数");
+                assert_eq!(g.len(), a.len(), "{ctx}: curve count");
                 for (k, (item, wv)) in g.iter().zip(a).enumerate() {
                     let arr = wv.as_array().unwrap();
                     assert_eq!(item.0, i(&arr[0]) as usize, "{ctx}: curve {k} start");
@@ -477,7 +479,7 @@ fn funnel_vectors() {
                         let ws: Vec<f64> = ds.iter().map(|d| o.w(*d)).collect();
                         assert_floats_eq(&ws, out, &ctx);
                     }
-                    _ => panic!("{ctx}: got 状态与 want={out} 不一致"),
+                    _ => panic!("{ctx}: got state does not match want={out}"),
                 }
             }
             "funnel_openness_spans" => {
@@ -528,7 +530,10 @@ fn funnel_vectors() {
                 let sh = shape_of(&args[0]);
                 let g = F::partners(&sh, i(&args[1]) as usize, i(&args[2]) as usize);
                 if is_err {
-                    assert!(g.is_empty(), "{ctx}: 越界应返回空 got={g:?}");
+                    assert!(
+                        g.is_empty(),
+                        "{ctx}: out-of-range should return empty, got={g:?}"
+                    );
                 } else {
                     let a = out.as_array().unwrap();
                     assert_eq!(g.len(), a.len(), "{ctx}");
@@ -562,12 +567,12 @@ fn funnel_vectors() {
                 let sh = shape_of(&args[0]);
                 let g = F::funnel_handles(&sh);
                 let a = out.as_array().unwrap();
-                assert_eq!(g.len(), a.len(), "{ctx}: 手柄数");
+                assert_eq!(g.len(), a.len(), "{ctx}: handle count");
                 for (item, wv) in g.iter().zip(a) {
                     let arr = wv.as_array().unwrap();
                     assert!(
                         close(item.0[0], f(&arr[0])) && close(item.0[1], f(&arr[1])),
-                        "{ctx}: 点 got={:?} want={wv}",
+                        "{ctx}: point got={:?} want={wv}",
                         item.0
                     );
                     assert_eq!(item.1, handle_id_of(&arr[2]), "{ctx}: id");
@@ -577,7 +582,7 @@ fn funnel_vectors() {
                 let sh = shape_of(&args[0]);
                 let g = F::funnel_handle_lines(&sh);
                 let a = out.as_array().unwrap();
-                assert_eq!(g.len(), a.len(), "{ctx}: 手柄线数");
+                assert_eq!(g.len(), a.len(), "{ctx}: handle line count");
                 for (item, wv) in g.iter().zip(a) {
                     let arr = wv.as_array().unwrap();
                     assert_pt(&item.0, &arr[0], &format!("{ctx}: anchor"));
@@ -606,10 +611,10 @@ fn funnel_vectors() {
                     .collect();
                 let ok = F::remove_funnel_parts(&mut sh, &lines, &curves);
                 let a = out.as_array().unwrap();
-                assert_eq!(ok, b(&a[0]), "{ctx}: 返回值");
+                assert_eq!(ok, b(&a[0]), "{ctx}: return value");
                 assert_poly(&sh.pts, &a[1], &format!("{ctx}: pts"));
                 let ws = a[2].as_array().unwrap();
-                assert_eq!(sh.starts.len(), ws.len(), "{ctx}: starts 数");
+                assert_eq!(sh.starts.len(), ws.len(), "{ctx}: start count");
                 for (k, (g, wv)) in sh.starts.iter().zip(ws).enumerate() {
                     assert_start(g, wv, &format!("{ctx}: start {k}"));
                 }
@@ -644,12 +649,12 @@ fn funnel_vectors() {
                     (None, true) => {}
                     (Some(starts), false) => {
                         let a = out.as_array().unwrap();
-                        assert_eq!(starts.len(), a.len(), "{ctx}: starts 数");
+                        assert_eq!(starts.len(), a.len(), "{ctx}: start count");
                         for (k, (g, wv)) in starts.iter().zip(a).enumerate() {
                             assert_start(g, wv, &format!("{ctx}: start {k}"));
                         }
                     }
-                    _ => panic!("{ctx}: got 状态与 want={out} 不一致"),
+                    _ => panic!("{ctx}: got state does not match want={out}"),
                 }
             }
             "clean_curve" => {
@@ -677,7 +682,7 @@ fn funnel_vectors() {
                         assert_poly(&p, &a[0], &format!("{ctx}: pts"));
                         json_close(&starts, &a[1], &format!("{ctx}: starts"));
                     }
-                    _ => panic!("{ctx}: got 状态与 want={out} 不一致"),
+                    _ => panic!("{ctx}: got state does not match want={out}"),
                 }
             }
             "old_curve_points" => {
@@ -685,7 +690,7 @@ fn funnel_vectors() {
                 match (g, out.is_null()) {
                     (None, true) => {}
                     (Some(p), false) => assert_poly(&p, out, &ctx),
-                    _ => panic!("{ctx}: got 状态与 want={out} 不一致"),
+                    _ => panic!("{ctx}: got state does not match want={out}"),
                 }
             }
             "funnel_f" => {
@@ -711,7 +716,7 @@ fn funnel_vectors() {
                 let fform = formula_of(args[0].as_str().unwrap());
                 let g = F::formula_curve(fform.as_ref(), i(&args[1]) as usize);
                 if is_err {
-                    assert!(g.is_err(), "{ctx}: 应报错 got={g:?}");
+                    assert!(g.is_err(), "{ctx}: should error, got={g:?}");
                 } else {
                     assert_poly(&g.expect("formula_curve"), out, &ctx);
                 }
@@ -720,24 +725,24 @@ fn funnel_vectors() {
                 let fform = args[0].as_str().map(formula_of);
                 let g = F::preset_curve(fform.as_deref());
                 if is_err {
-                    assert!(g.is_err(), "{ctx}: 应报错 got={g:?}");
+                    assert!(g.is_err(), "{ctx}: should error, got={g:?}");
                 } else {
                     assert_curve(&g.expect("preset_curve"), out, &ctx);
                 }
             }
             "curve_presets" => {
                 let a = out.as_array().unwrap();
-                assert_eq!(F::CURVE_PRESETS.len(), a.len(), "{ctx}: 预设数");
+                assert_eq!(F::CURVE_PRESETS.len(), a.len(), "{ctx}: preset count");
                 for (k, wv) in a.iter().enumerate() {
                     let item = wv.as_array().unwrap();
                     let (name, formula) = F::CURVE_PRESETS[k];
-                    assert_eq!(name, item[0].as_str().unwrap(), "{ctx}: 名字 {k}");
-                    assert_eq!(formula, item[1].as_str(), "{ctx}: 公式 {k}");
+                    assert_eq!(name, item[0].as_str().unwrap(), "{ctx}: name {k}");
+                    assert_eq!(formula, item[1].as_str(), "{ctx}: formula {k}");
                 }
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked > 150, "用例太少：{checked}");
+    assert!(checked > 150, "too few cases: {checked}");
 }

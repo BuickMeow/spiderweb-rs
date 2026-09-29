@@ -126,15 +126,15 @@ pub const TRACKS: &str = "t:";
 /// Pack / unpack errors for pasted notes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum NotesError {
-    #[error("形状里没有粘贴的音符")]
+    #[error("shape has no pasted notes")]
     Missing,
-    #[error("base64 解码失败")]
+    #[error("base64 decode failed")]
     Base64,
-    #[error("zlib 解压失败")]
+    #[error("zlib decompress failed")]
     Zlib,
-    #[error("音符数据不是 4 / 5 列 int32 行")]
+    #[error("note data is not 4 / 5 int32 columns")]
     Shape,
-    #[error("形状的框缺少三个点")]
+    #[error("shape frame has fewer than three points")]
     Frame,
 }
 
@@ -1908,7 +1908,7 @@ mod tests {
         assert_eq!(
             chop(&round, &[[0, 30, 60]], 60),
             vec![[0, 60, 60]],
-            "round：半个门限算一个"
+            "round: half a gate counts as one"
         );
         let stretch = shape(
             Fill::Spam,
@@ -1946,7 +1946,7 @@ mod tests {
         assert_eq!(
             chop(&min, &[[0, 3, 61]], 60),
             vec![[-6, 9, 61]],
-            "min：长到四分之一门限，居中"
+            "min: grows to a quarter gate, centred"
         );
         let drop = shape(
             Fill::Spam,
@@ -1958,7 +1958,7 @@ mod tests {
         assert_eq!(
             chop(&drop, &[[0, 3, 61]], 60),
             vec![[0, 3, 61]],
-            "drop：短于一个门限的段原样留着"
+            "drop: stretches shorter than one gate stay as they are"
         );
     }
 
@@ -1974,7 +1974,7 @@ mod tests {
             vec![square(), b.clone()],
         );
         let got = inside_spans(&even, 960.0);
-        assert_eq!(got.len(), 6, "重叠抵消：中间留空");
+        assert_eq!(got.len(), 6, "overlap cancels: a gap in the middle");
         assert_eq!(got[0], [60, 0, 960]);
         assert_eq!(got[1], [60, 1920, 2880]);
         let union = shape(Fill::Fill, Align::Auto, Ends::Drop, true, vec![square(), b]);
@@ -1994,7 +1994,7 @@ mod tests {
         ];
         let sh = shape(Fill::Fill, Align::Auto, Ends::Drop, false, near);
         let plan = fill_plan(&sh);
-        assert!(plan.polys.is_empty(), "接上后是扁的");
+        assert!(plan.polys.is_empty(), "flat after joining");
         assert_eq!(plan.flat.len(), 1);
         assert_eq!(plan.closers.len(), 1);
         assert!(near_ends(plan.closers[0][0], plan.closers[0][1]));
@@ -2006,7 +2006,7 @@ mod tests {
         let mut sh = shape(Fill::Fill, Align::Auto, Ends::Drop, false, two);
         sh.pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
         let plan = fill_plan(&sh);
-        assert_eq!(plan.closers.len(), 2, "两个缺口两条虚线");
+        assert_eq!(plan.closers.len(), 2, "two gaps, two dashed lines");
         assert_eq!(plan.polys.len(), 1);
         assert!(plan.flat.is_empty());
     }

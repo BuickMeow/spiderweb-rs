@@ -12,25 +12,25 @@ use spiderweb_io::midi::{CHANNELS, PPQ_WARN, midi_bytes, slot_track_channel, tra
 
 /// Hand-parse the SMF header: "MThd", length 6, format 1, division = ppq; immediately followed by "MTrk".
 fn assert_smf_format1(bytes: &[u8], ppq: u16, name: &str) {
-    assert!(bytes.len() > 14, "{name}: 文件太短");
-    assert_eq!(&bytes[0..4], b"MThd", "{name}: 没有 MThd");
+    assert!(bytes.len() > 14, "{name}: file too short");
+    assert_eq!(&bytes[0..4], b"MThd", "{name}: no MThd");
     let hlen = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    assert_eq!(hlen, 6, "{name}: MThd 长度");
+    assert_eq!(hlen, 6, "{name}: MThd length");
     let format = u16::from_be_bytes([bytes[8], bytes[9]]);
-    assert_eq!(format, 1, "{name}: 不是 format 1");
+    assert_eq!(format, 1, "{name}: not format 1");
     let ntrks = u16::from_be_bytes([bytes[10], bytes[11]]);
-    assert!(ntrks >= 1, "{name}: 没有轨道");
+    assert!(ntrks >= 1, "{name}: no tracks");
     let division = u16::from_be_bytes([bytes[12], bytes[13]]);
-    assert_eq!(division, ppq, "{name}: division 不是 PPQ");
-    assert_eq!(&bytes[14..18], b"MTrk", "{name}: 第一个块不是 MTrk");
+    assert_eq!(division, ppq, "{name}: division is not PPQ");
+    assert_eq!(&bytes[14..18], b"MTrk", "{name}: first chunk is not MTrk");
 }
 
 fn notes6(v: &Value) -> Vec<[i64; 6]> {
     v.as_array()
-        .expect("notes 不是数组")
+        .expect("notes is not an array")
         .iter()
         .map(|row| {
-            let r = row.as_array().expect("音符不是数组");
+            let r = row.as_array().expect("note is not an array");
             let mut n = [0i64; 6];
             for (k, x) in r.iter().enumerate() {
                 n[k] = i(x);
@@ -51,7 +51,7 @@ fn midi_byte_vectors() {
         let notes = notes6(&case["notes"]);
         let got = midi_bytes(ppq, bpm, beats, &notes).unwrap_or_else(|e| panic!("{name}: {e}"));
         let want = unhex(s(&case["hex"]));
-        assert_eq!(got, want, "{name}: MIDI 不是逐字节一致");
+        assert_eq!(got, want, "{name}: MIDI is not byte-identical");
 
         assert_smf_format1(&got, ppq, name);
     }

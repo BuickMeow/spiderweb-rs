@@ -111,11 +111,11 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Empty => write!(f, "没有音符"),
-            Error::BadBar => write!(f, "bar 必须大于 0"),
-            Error::TooLarge => write!(f, "数据太大，放不进 u32"),
-            Error::NotDomino => write!(f, "不是 Domino 的数据"),
-            Error::Damaged => write!(f, "Domino 的数据损坏了"),
+            Error::Empty => write!(f, "no notes"),
+            Error::BadBar => write!(f, "bar must be greater than 0"),
+            Error::TooLarge => write!(f, "data too large for u32"),
+            Error::NotDomino => write!(f, "not Domino data"),
+            Error::Damaged => write!(f, "Domino data is damaged"),
         }
     }
 }

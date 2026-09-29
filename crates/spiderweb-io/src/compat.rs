@@ -56,19 +56,19 @@ pub const LINE_KINDS: [Kind; 5] = [Kind::Line, Kind::Poly, Kind::Free, Kind::Cur
 /// Bad fields in a shape dict; in Python these make `load_file` fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShapeError {
-    #[error("形状不是字典")]
+    #[error("shape is not a dict")]
     NotObject,
-    #[error("形状的 pts 坏了")]
+    #[error("shape pts are bad")]
     Pts,
-    #[error("形状的 vel_env 坏了")]
+    #[error("shape vel_env is bad")]
     VelEnv,
-    #[error("形状的 vel0 / vel1 坏了")]
+    #[error("shape vel0 / vel1 are bad")]
     Vel,
-    #[error("自定义形状的 gate 坏了")]
+    #[error("custom shape gate is bad")]
     Gate,
-    #[error("形状的 strokes 坏了")]
+    #[error("shape strokes are bad")]
     Strokes,
-    #[error("形状的 notes 坏了")]
+    #[error("shape notes are bad")]
     Notes,
 }
 
@@ -1039,8 +1039,8 @@ mod tests {
         let sh = shape_from_json(&custom_json(serde_json::json!({
             "ends": "stretch", "union": true, "apart": true
         })))
-        .expect("能读")
-        .expect("有效");
+        .expect("should read")
+        .expect("should be valid");
         assert_eq!(sh.align, Align::Centred);
         assert_eq!(sh.ends, Ends::Stretch);
         assert!(sh.union && sh.apart);
@@ -1052,12 +1052,12 @@ mod tests {
         let sh = shape_from_json(&custom_json(
             serde_json::json!({"union": 1, "apart": "yes"}),
         ))
-        .expect("能读")
-        .expect("有效");
+        .expect("should read")
+        .expect("should be valid");
         assert_eq!(sh.ends, Ends::Drop);
         assert!(
             !sh.union && !sh.apart,
-            "Python 的 `is True`：1 / \"yes\" 都不算"
+            "Python's `is True`: neither 1 nor \"yes\" counts"
         );
     }
 
@@ -1073,7 +1073,9 @@ mod tests {
             "splits": [1],
             "tumours": [null, {"on": true}, {"on": true, "size": 2.0}],
         });
-        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let sh = shape_from_json(&v)
+            .expect("should read")
+            .expect("should be valid");
         assert_eq!(sh.gaps, vec![2]);
         assert_eq!(sh.splits, vec![1]);
         assert_eq!(sh.tumours.len(), 3);
@@ -1095,13 +1097,17 @@ mod tests {
             "splits": [1],
             "tumours": [null, {"on": true}, {"on": true, "size": 2.0}],
         });
-        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let sh = shape_from_json(&v)
+            .expect("should read")
+            .expect("should be valid");
         let out = shape_to_json(&sh);
         assert_eq!(out["gaps"], Value::Array(vec![Value::from(2)]));
         assert_eq!(out["splits"], Value::Array(vec![Value::from(1)]));
         assert_eq!(out["tumours"].as_array().expect("tumours").len(), 3);
         assert!(out.get("sym").is_none());
-        let again = shape_from_json(&out).expect("能读").expect("有效");
+        let again = shape_from_json(&out)
+            .expect("should read")
+            .expect("should be valid");
         assert_eq!(shape_to_json(&again), out);
     }
 
@@ -1110,8 +1116,8 @@ mod tests {
     #[test]
     fn writes_new_custom_keys() {
         let mut sh = shape_from_json(&custom_json(serde_json::json!({})))
-            .expect("能读")
-            .expect("有效");
+            .expect("should read")
+            .expect("should be valid");
         let out = shape_to_json(&sh);
         assert_eq!(out["ends"], Value::from("drop"));
         assert!(out.get("union").is_none() && out.get("apart").is_none());
@@ -1120,7 +1126,9 @@ mod tests {
         let out = shape_to_json(&sh);
         assert_eq!(out["ends"], Value::from("min"));
         assert_eq!(out["union"], Value::Bool(true));
-        let again = shape_from_json(&out).expect("能读").expect("有效");
+        let again = shape_from_json(&out)
+            .expect("should read")
+            .expect("should be valid");
         assert_eq!(shape_to_json(&again), out);
     }
 
@@ -1139,7 +1147,9 @@ mod tests {
                 },
             },
         });
-        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let sh = shape_from_json(&v)
+            .expect("should read")
+            .expect("should be valid");
         let tm = sh.tumour.as_ref().expect("tumour");
         assert!((tm.rot - 30.5).abs() < 1e-12);
         assert!((tm.slant + 0.25).abs() < 1e-12);
@@ -1147,14 +1157,18 @@ mod tests {
         let out = shape_to_json(&sh);
         let graphs = out["tumour"]["graphs"].as_object().expect("graphs");
         assert_eq!(graphs["size"], serde_json::json!([[0.0, 0.5], [1.0, 2.0]]));
-        let again = shape_from_json(&out).expect("能读").expect("有效");
+        let again = shape_from_json(&out)
+            .expect("should read")
+            .expect("should be valid");
         assert_eq!(shape_to_json(&again), out);
         // a flat graph at 100 % is dropped (as upstream clean_tumour does)
         let v = serde_json::json!({
             "kind": "line", "pts": [[0, 60], [4, 60]],
             "tumour": {"graphs": {"size": [[0, 1.0], [1, 1.0]]}},
         });
-        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let sh = shape_from_json(&v)
+            .expect("should read")
+            .expect("should be valid");
         assert!(sh.tumour.as_ref().expect("tumour").graphs.is_empty());
     }
 }

@@ -14,14 +14,14 @@ fn close(a: f64, b: f64) -> bool {
 
 fn ints(v: &Value) -> Vec<usize> {
     v.as_array()
-        .expect("不是数组")
+        .expect("not an array")
         .iter()
-        .map(|x| x.as_u64().expect("不是整数") as usize)
+        .map(|x| x.as_u64().expect("not an integer") as usize)
         .collect()
 }
 
 fn one(v: &Value) -> [f64; 2] {
-    let a = v.as_array().expect("不是点");
+    let a = v.as_array().expect("not a point");
     [f(&a[0]), f(&a[1])]
 }
 
@@ -29,7 +29,7 @@ fn axis(v: &Value) -> Option<u8> {
     if v.is_null() {
         None
     } else {
-        Some(v.as_u64().expect("不是 0/1") as u8)
+        Some(v.as_u64().expect("not 0/1") as u8)
     }
 }
 
@@ -124,9 +124,9 @@ fn bezier_vectors() {
             "segments" => {
                 let g = B::segments(&pts(&args[0]));
                 let w = out.as_array().unwrap();
-                assert_eq!(g.len(), w.len(), "{ctx}: 段数不同");
+                assert_eq!(g.len(), w.len(), "{ctx}: different number of segments");
                 for (k, seg) in g.iter().enumerate() {
-                    assert_pts_eq(seg, &w[k], &format!("{ctx} 段{k}"));
+                    assert_pts_eq(seg, &w[k], &format!("{ctx} segment {k}"));
                 }
             }
             "sample" => {
@@ -151,7 +151,7 @@ fn bezier_vectors() {
             "symmetric" | "make_symmetric" => {
                 let p = pts(&args[0]);
                 let sharp = ints(&args[1]);
-                let mode = sym_of(&args[2]).expect("缺 mode");
+                let mode = sym_of(&args[2]).expect("missing mode");
                 let (g_pts, g_sharp) = if fname == "symmetric" {
                     B::symmetric(
                         &p,
@@ -195,21 +195,21 @@ fn bezier_vectors() {
             "pen_handles" => {
                 let g = B::pen_handles(&pts(&args[0]), b(&args[1]), &gaps_arg(args.get(2)));
                 let w = out.as_array().unwrap();
-                assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
+                assert_eq!(g.len(), w.len(), "{ctx}: different counts");
                 for (k, (gi, gk)) in g.iter().enumerate() {
                     let kind = match gk {
                         B::HandleKind::Ctrl => "ctrl",
                         B::HandleKind::Anchor => "anchor",
                         B::HandleKind::End => "end",
                     };
-                    assert_eq!(*gi as i64, i(&w[k][0]), "{ctx} #{k} 点号");
-                    assert_eq!(kind, w[k][1].as_str().unwrap(), "{ctx} #{k} 种类");
+                    assert_eq!(*gi as i64, i(&w[k][0]), "{ctx} #{k} point index");
+                    assert_eq!(kind, w[k][1].as_str().unwrap(), "{ctx} #{k} kind");
                 }
             }
             "handle_lines" => {
                 let g = B::handle_lines(&pts(&args[0]), &gaps_arg(args.get(1)));
                 let w = out.as_array().unwrap();
-                assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
+                assert_eq!(g.len(), w.len(), "{ctx}: different counts");
                 for (k, (a, h)) in g.iter().enumerate() {
                     let wa = one(&w[k][0]);
                     let wh = one(&w[k][1]);
@@ -235,12 +235,12 @@ fn bezier_vectors() {
                     &gaps_arg(args.get(5)),
                 );
                 if out.is_null() {
-                    assert!(g.is_none(), "{ctx}: 应为 None");
+                    assert!(g.is_none(), "{ctx}: should be None");
                 } else {
-                    let (gs, gt, gd) = g.expect("应有最近点");
-                    assert_eq!(gs as i64, i(&out[0]), "{ctx} 段号");
+                    let (gs, gt, gd) = g.expect("should have a nearest point");
+                    assert_eq!(gs as i64, i(&out[0]), "{ctx} segment index");
                     assert!(close(gt, f(&out[1])), "{ctx} t");
-                    assert!(close(gd, f(&out[2])), "{ctx} 距离");
+                    assert!(close(gd, f(&out[2])), "{ctx} distance");
                 }
             }
             "keep_symmetric" => {
@@ -249,7 +249,7 @@ fn bezier_vectors() {
                 let (sx, sy) = screen_pair(&args[2]);
                 let (ts, _) = screen(sx, sy);
                 let ret = B::keep_symmetric(&mut c, n, &ts, b(&args[3]));
-                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx} 返回值");
+                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx}: return value");
                 assert_curve_eq(&c, &out["curve"], &ctx);
             }
             "drag_point" => {
@@ -270,7 +270,7 @@ fn bezier_vectors() {
                 let (sx, sy) = screen_pair(&args[4]);
                 let (ts, _) = screen(sx, sy);
                 let ret = B::add_anchor(&mut c, seg, t, new, &ts, b(&args[5]));
-                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx} 返回值");
+                assert_eq!(ret, out["ret"].as_bool().unwrap(), "{ctx}: return value");
                 assert_curve_eq(&c, &out["curve"], &ctx);
             }
             "can_delete" => {
@@ -330,9 +330,9 @@ fn bezier_vectors() {
                 let g = B::fit(&pts(&args[0]), f(&args[1]));
                 assert_pts_eq(&g, out, &ctx);
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 245, "用例太少：{checked}");
+    assert!(checked >= 245, "too few cases: {checked}");
 }

@@ -480,11 +480,15 @@ mod tests {
     }
 
     fn assert_pts(got: &[Pt], want: &[Pt]) {
-        assert_eq!(got.len(), want.len(), "点数不同：{got:?} != {want:?}");
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "different point counts: {got:?} != {want:?}"
+        );
         for (g, w) in got.iter().zip(want) {
             assert!(
                 (g[0] - w[0]).abs() < 1e-6 && (g[1] - w[1]).abs() < 1e-6,
-                "点不同：{g:?} != {w:?}"
+                "different point: {g:?} != {w:?}"
             );
         }
     }

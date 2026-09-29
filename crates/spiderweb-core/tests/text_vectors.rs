@@ -26,22 +26,22 @@ fn close_f(a: f64, b: f64, ctx: &str) {
 }
 
 fn assert_pt_close(g: [f64; 2], w: &Value, ctx: &str) {
-    let a = w.as_array().expect("点不是数组");
+    let a = w.as_array().expect("point is not an array");
     close_f(g[0], f(&a[0]), &format!("{ctx}.x"));
     close_f(g[1], f(&a[1]), &format!("{ctx}.y"));
 }
 
 fn assert_axes_eq(got: T::Axes, want: &Value, ctx: &str) {
-    let w = want.as_array().expect("axes 不是数组");
-    assert_eq!(w.len(), 3, "{ctx}: axes 应有 3 个点");
+    let w = want.as_array().expect("axes is not an array");
+    assert_eq!(w.len(), 3, "{ctx}: axes should have 3 points");
     for (i, g) in [got.0, got.1, got.2].iter().enumerate() {
         assert_pt_close(*g, &w[i], &format!("{ctx}[{i}]"));
     }
 }
 
 fn assert_edges_eq(got: &[[[f64; 2]; 2]], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("边不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 边数不同");
+    let w = want.as_array().expect("edge is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of edges");
     for (i, (g, e)) in got.iter().zip(w).enumerate() {
         assert_pt_close(g[0], &e[0], &format!("{ctx}[{i}].a"));
         assert_pt_close(g[1], &e[1], &format!("{ctx}[{i}].b"));
@@ -49,22 +49,22 @@ fn assert_edges_eq(got: &[[[f64; 2]; 2]], want: &Value, ctx: &str) {
 }
 
 fn assert_spans_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("span 不是数组");
+    let w = want.as_array().expect("span is not an array");
     assert_eq!(
         got.len(),
         w.len(),
-        "{ctx}: span 数不同 got={got:?} want={w:?}"
+        "{ctx}: different number of spans got={got:?} want={w:?}"
     );
     for (i, (g, s)) in got.iter().zip(w).enumerate() {
-        let a = s.as_array().expect("span 不是数组");
+        let a = s.as_array().expect("span is not an array");
         close_f(g[0], f(&a[0]), &format!("{ctx}[{i}].x0"));
         close_f(g[1], f(&a[1]), &format!("{ctx}[{i}].x1"));
     }
 }
 
 fn assert_polys_eq(got: &[Vec<[f64; 2]>], want: &Value, ctx: &str) {
-    let w = want.as_array().expect("polys 不是数组");
-    assert_eq!(got.len(), w.len(), "{ctx}: 轮廓数不同");
+    let w = want.as_array().expect("polys is not an array");
+    assert_eq!(got.len(), w.len(), "{ctx}: different number of contours");
     for (i, (g, p)) in got.iter().zip(w).enumerate() {
         assert_pts_eq(g, p, &format!("{ctx}[{i}]"));
     }
@@ -141,7 +141,7 @@ fn shape(v: &Value) -> Shape {
 }
 
 fn axes(v: &Value) -> T::Axes {
-    let a = v.as_array().expect("axes 不是数组");
+    let a = v.as_array().expect("axes is not an array");
     (
         [f(&a[0][0]), f(&a[0][1])],
         [f(&a[1][0]), f(&a[1][1])],
@@ -287,7 +287,7 @@ fn text_vectors() {
             "clean_text" => {
                 let got = T::clean_text(&args[0]);
                 if out.is_null() {
-                    assert!(got.is_none(), "{ctx}: 应为 None，得到 {got:?}");
+                    assert!(got.is_none(), "{ctx}: should be None, got {got:?}");
                 } else {
                     assert_tx_eq(&got.expect(&ctx), out, &ctx);
                 }
@@ -299,7 +299,7 @@ fn text_vectors() {
             "text_axes" => {
                 let got = T::text_axes(&shape(&args[0]));
                 assert_axes_eq(
-                    got.unwrap_or_else(|| panic!("{ctx}: 应当能算轴")),
+                    got.unwrap_or_else(|| panic!("{ctx}: axes should be computable")),
                     out,
                     &ctx,
                 );
@@ -313,7 +313,7 @@ fn text_vectors() {
             "from_roll" => {
                 let got = T::from_roll(axes(&args[0]), f(&args[1]), f(&args[2]));
                 if out.is_null() {
-                    assert!(got.is_none(), "{ctx}: 平轴应为 None");
+                    assert!(got.is_none(), "{ctx}: flat axes should be None");
                 } else {
                     let a = out.as_array().unwrap();
                     let got = got.expect(&ctx);
@@ -356,11 +356,11 @@ fn text_vectors() {
                 let got = T::text_polys(&shape(&args[0]));
                 assert_polys_eq(&got, out, &ctx);
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 150, "用例太少：{checked}");
+    assert!(checked >= 150, "too few cases: {checked}");
 }
 
 // ---------------------------------------------------------------- font smoke tests
@@ -406,7 +406,7 @@ fn usable_font() -> Option<Arc<Font>> {
 #[test]
 fn layout_smoke() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     let tx = TextSettings {
@@ -415,18 +415,21 @@ fn layout_smoke() {
         ..TextSettings::default()
     };
     let (contours, carets) = T::layout(&tx, &font);
-    assert!(!contours.is_empty(), "应当有字母轮廓");
-    assert_eq!(carets.len(), 5, "AB 行 3 个光标 + C 行 2 个");
-    assert!(contours.iter().all(|c| c.glyph < 3), "字符序号 0..2");
-    assert!(contours.iter().any(|c| c.glyph == 2), "C 也要有轮廓");
+    assert!(!contours.is_empty(), "should have letter contours");
+    assert_eq!(carets.len(), 5, "AB line has 3 carets + C line 2");
+    assert!(contours.iter().all(|c| c.glyph < 3), "glyph indices 0..2");
+    assert!(
+        contours.iter().any(|c| c.glyph == 2),
+        "C should have a contour too"
+    );
 
     let step = font.line_height * tx.leading / 100.0;
-    close_f(carets[3][0], 0.0, "第二行行首");
-    close_f(carets[3][1], -step, "第二行基线");
+    close_f(carets[3][0], 0.0, "second line start");
+    close_f(carets[3][1], -step, "second line baseline");
     let w = font.glyph('A').advance
         + font.kerning.get(&('A', 'B')).copied().unwrap_or(0.0)
         + font.glyph('B').advance;
-    close_f(carets[2][0], w, "第一行行尾");
+    close_f(carets[2][0], w, "first line end");
     assert!(font.glyph('A').advance > 0.0 && font.glyph('B').advance > 0.0);
 
     // centred: shift the whole line left by half
@@ -435,8 +438,8 @@ fn layout_smoke() {
         ..tx
     };
     let (_, carets) = T::layout(&tx, &font);
-    close_f(carets[0][0], -w / 2.0, "居中行首");
-    close_f(carets[2][0], w / 2.0, "居中行尾");
+    close_f(carets[0][0], -w / 2.0, "centred line start");
+    close_f(carets[2][0], w / 2.0, "centred line end");
 
     // an empty line has only the caret at its end
     let tx = TextSettings {
@@ -451,7 +454,7 @@ fn layout_smoke() {
 #[test]
 fn build_smoke() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     let tx = TextSettings {
@@ -465,9 +468,12 @@ fn build_smoke() {
         ..Shape::default()
     };
     let axes = T::new_axes(&tx, 10.0, 60.0, 1.0, font.cap);
-    assert!(T::build(&mut sh, &tx, &font, axes), "有字母就应当建出形状");
-    assert_eq!(sh.strokes.len(), contours.len(), "每条轮廓一条笔画");
-    assert_eq!(sh.pts.len(), 3, "框是 3 个点");
+    assert!(
+        T::build(&mut sh, &tx, &font, axes),
+        "letters should build a shape"
+    );
+    assert_eq!(sh.strokes.len(), contours.len(), "one stroke per contour");
+    assert_eq!(sh.pts.len(), 3, "frame has 3 points");
     assert_eq!(sh.name, "“Hi”");
 
     for st in &sh.strokes {
@@ -475,7 +481,7 @@ fn build_smoke() {
             pts, sharp, sym, ..
         } = st
         else {
-            panic!("文本笔画应当是曲线");
+            panic!("text strokes should be curves");
         };
         assert!(sharp.is_empty() && sym.is_none());
         assert!(!pts.is_empty());
@@ -483,12 +489,12 @@ fn build_smoke() {
             // normalised to [0, 1], within the error of round(x, 7)
             assert!(
                 (-1e-6..=1.0 + 1e-6).contains(&p[0]) && (-1e-6..=1.0 + 1e-6).contains(&p[1]),
-                "归一化点 {p:?}"
+                "normalised point {p:?}"
             );
         }
     }
 
-    let settings = sh.text.as_ref().expect("应当写入设置");
+    let settings = sh.text.as_ref().expect("settings should be written");
     assert_eq!(settings.cap, font.cap);
     assert!(settings.bbox[2] > settings.bbox[0] && settings.bbox[3] > settings.bbox[1]);
 
@@ -501,7 +507,10 @@ fn build_smoke() {
         kind: Kind::Custom,
         ..Shape::default()
     };
-    assert!(!T::build(&mut blank, &spaces, &font, axes), "空格不建形状");
+    assert!(
+        !T::build(&mut blank, &spaces, &font, axes),
+        "spaces build no shape"
+    );
     assert!(blank.strokes.is_empty() && blank.text.is_none());
     let mut empty = Shape {
         kind: Kind::Custom,
@@ -517,7 +526,7 @@ fn build_smoke() {
 #[test]
 fn text_font_and_cap_smoke() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     let tx = TextSettings {
@@ -538,19 +547,19 @@ fn text_font_and_cap_smoke() {
     close_f(
         T::em_keys(&rows, None, font.cap),
         rows.size / font.cap,
-        "cap 兜底",
+        "cap fallback",
     );
     close_f(
         T::em_keys(&rows, Some(10.0), font.cap),
         10.0 / font.cap,
-        "cap 兜底（显式 size）",
+        "cap fallback (explicit size)",
     );
 }
 
 #[test]
 fn find_holes_on_o_smoke() {
     let Some(font) = usable_font() else {
-        eprintln!("跳过：这个系统里没有能读出 'A' 轮廓的字体");
+        eprintln!("skipped: no font with an 'A' outline on this system");
         return;
     };
     let tx = TextSettings {
@@ -559,7 +568,11 @@ fn find_holes_on_o_smoke() {
     };
     let (contours, _) = T::layout(&tx, &font);
     if font.glyph('O').contours.len() == 2 {
-        assert_eq!(T::find_holes(&contours), vec![1], "O 的内轮廓是洞");
+        assert_eq!(
+            T::find_holes(&contours),
+            vec![1],
+            "O's inner contour is a hole"
+        );
     }
     // an empty outline neither panics nor counts as a hole (the original Python crashes here)
     let empty = vec![T::Contour {

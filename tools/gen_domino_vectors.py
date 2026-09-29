@@ -104,7 +104,7 @@ def clip_error_cases():
         except ValueError:
             kind = "empty"
         else:
-            raise AssertionError(f"{name} 原版竟然没报错")
+            raise AssertionError(f"{name}: the original unexpectedly did not error")
         cases.append({"name": name, "notes": rows5(notes).tolist(), "ppq": ppq, "bar": bar,
                       "start": "bar", "error": kind})
     # the note start: length is max_end - min_start (no bar padding); over u32 it errors too

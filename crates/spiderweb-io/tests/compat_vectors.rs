@@ -21,8 +21,8 @@ fn legacy_funnel() {
             input["starts"] = serde_json::Value::Null;
         }
         let shape = shape_from_json(&input)
-            .expect("旧漏斗应当能读")
-            .expect("旧漏斗应当有效");
+            .expect("old funnel should read")
+            .expect("old funnel should be valid");
         assert_eq!(shape.pts.len(), 4);
         assert_eq!(shape.starts.len(), 1);
         assert_eq!(shape.starts[0].line, 0);
@@ -44,29 +44,37 @@ fn shape_from_json_vectors() {
         if let Some(err_name) = case.get("error").and_then(Value::as_str) {
             assert!(
                 got.is_err(),
-                "{name}: Python 抛 {err_name}，Rust 却解析成功: {got:?}"
+                "{name}: Python raised {err_name}, Rust parsed successfully: {got:?}"
             );
             continue;
         }
         if case.get("non_numeric_vel").is_some() {
             // Python keeps bad vel0/vel1 as they are (they only blow up later when used); Rust's Shape uses f64, so it errors immediately
-            assert!(got.is_err(), "{name}: 坏速度应当报错");
+            assert!(got.is_err(), "{name}: bad velocity should error");
             continue;
         }
         let clean = &case["clean"];
         match (got, clean.is_null()) {
             (Ok(None), true) => {}
-            (Ok(None), false) => panic!("{name}: Python 有结果，Rust 返回 None"),
-            (Ok(Some(_)), true) => panic!("{name}: Python 返回 None，Rust 却有结果"),
-            (Err(e), _) => panic!("{name}: Rust 报错 {e}"),
+            (Ok(None), false) => panic!("{name}: Python has a result, Rust returned None"),
+            (Ok(Some(_)), true) => panic!("{name}: Python returned None, Rust has a result"),
+            (Err(e), _) => panic!("{name}: Rust errored {e}"),
             (Ok(Some(shape)), false) => {
                 let json = shape_to_json(&shape);
                 assert_json_eq(&json, &shape_want(clean), name);
                 // parsing it back must give the same shape
                 let again = shape_from_json(&json)
-                    .unwrap_or_else(|e| panic!("{name}: 自己写出的 JSON 读不回: {e}"))
-                    .unwrap_or_else(|| panic!("{name}: 自己写出的 JSON 读回是 None"));
-                assert_json_eq(&shape_to_json(&again), &json, &format!("{name}（二次）"));
+                    .unwrap_or_else(|e| {
+                        panic!("{name}: JSON written by ourselves cannot be read back: {e}")
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{name}: JSON written by ourselves reads back as None")
+                    });
+                assert_json_eq(
+                    &shape_to_json(&again),
+                    &json,
+                    &format!("{name} (second pass)"),
+                );
             }
         }
     }

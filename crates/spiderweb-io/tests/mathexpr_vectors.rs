@@ -16,7 +16,7 @@ fn close(a: f64, b: f64) -> bool {
 
 #[test]
 fn calc_vectors() {
-    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    let data = cases("mathexpr", "cases").into_iter().next().expect("case");
     for case in data["calc"].as_array().expect("calc") {
         let expr = s(&case["expr"]);
         let got = calc(expr);
@@ -24,16 +24,18 @@ fn calc_vectors() {
             let want = s(&case["error"]);
             let e = match got {
                 Err(e) => e,
-                Ok(v) => panic!("{expr:?}: Python 报 {want}，Rust 得到 {v:?}"),
+                Ok(v) => panic!("{expr:?}: Python says {want}, Rust produced {v:?}"),
             };
-            assert_eq!(e.to_string(), want, "表达式 {expr:?}");
+            assert_eq!(e.to_string(), want, "expression {expr:?}");
             continue;
         }
-        let got = got.unwrap_or_else(|e| panic!("{expr:?}: Rust 报错 {e}"));
+        let got = got.unwrap_or_else(|e| panic!("{expr:?}: Rust errored {e}"));
         match case["kind"].as_str().expect("kind") {
             "int" => match got {
-                CalcValue::Int(v) => assert_eq!(v, i(&case["value"]) as i128, "表达式 {expr:?}"),
-                other => panic!("{expr:?}: 想要整数，得到 {other:?}"),
+                CalcValue::Int(v) => {
+                    assert_eq!(v, i(&case["value"]) as i128, "expression {expr:?}")
+                }
+                other => panic!("{expr:?}: wanted an integer, got {other:?}"),
             },
             "float" => match got {
                 CalcValue::Float(v) => {
@@ -43,7 +45,7 @@ fn calc_vectors() {
                         f(&case["value"])
                     )
                 }
-                other => panic!("{expr:?}: 想要浮点，得到 {other:?}"),
+                other => panic!("{expr:?}: wanted a float, got {other:?}"),
             },
             "complex" => match got {
                 CalcValue::Complex(re, im) => {
@@ -54,16 +56,16 @@ fn calc_vectors() {
                         f(&case["im"])
                     );
                 }
-                other => panic!("{expr:?}: 想要复数，得到 {other:?}"),
+                other => panic!("{expr:?}: wanted a complex, got {other:?}"),
             },
-            other => panic!("未知 kind {other}"),
+            other => panic!("unknown kind {other}"),
         }
     }
 }
 
 #[test]
 fn calc_int_vectors() {
-    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    let data = cases("mathexpr", "cases").into_iter().next().expect("case");
     for case in data["calc_int"].as_array().expect("calc_int") {
         let expr = s(&case["expr"]);
         let lo = case["lo"].as_i64();
@@ -72,15 +74,15 @@ fn calc_int_vectors() {
         if case["ok"].as_bool().expect("ok") {
             let want = i(&case["value"]);
             assert_eq!(
-                got.unwrap_or_else(|e| panic!("{expr:?}: Rust 报错 {e}")),
+                got.unwrap_or_else(|e| panic!("{expr:?}: Rust errored {e}")),
                 want
             );
         } else {
             let want = s(&case["error"]);
             assert_eq!(
-                got.expect_err("应当报错").to_string(),
+                got.expect_err("should error").to_string(),
                 want,
-                "表达式 {expr:?}"
+                "expression {expr:?}"
             );
         }
     }
@@ -88,32 +90,32 @@ fn calc_int_vectors() {
 
 #[test]
 fn formula_vectors() {
-    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    let data = cases("mathexpr", "cases").into_iter().next().expect("case");
     for case in data["formula"].as_array().expect("formula") {
         let text = s(&case["text"]);
         if let Some(want) = case.get("compile_error").and_then(Value::as_str) {
-            let e = formula(text).expect_err("应当编译失败");
-            assert_eq!(e.to_string(), want, "公式 {text:?}");
+            let e = formula(text).expect_err("should fail to compile");
+            assert_eq!(e.to_string(), want, "formula {text:?}");
             continue;
         }
-        let fn_ = formula(text).unwrap_or_else(|e| panic!("{text:?}: 编译失败 {e}"));
+        let fn_ = formula(text).unwrap_or_else(|e| panic!("{text:?}: compile failed {e}"));
         for ev in case["evals"].as_array().expect("evals") {
             let x = f(&ev["x"]);
             let got = fn_.eval(x);
             if ev["ok"].as_bool().expect("ok") {
                 let want = f(&ev["value"]);
-                let got = got.unwrap_or_else(|e| panic!("{text:?}({x}): Rust 报错 {e}"));
+                let got = got.unwrap_or_else(|e| panic!("{text:?}({x}): Rust errored {e}"));
                 assert!(close(got, want), "{text:?}({x}): {got} != {want}");
             } else {
                 let want = s(&ev["error"]);
                 let e = match got {
                     Err(e) => e,
-                    Ok(v) => panic!("{text:?}({x}): Python 报 {want}，Rust 得到 {v}"),
+                    Ok(v) => panic!("{text:?}({x}): Python says {want}, Rust produced {v}"),
                 };
                 if want == "type" {
                     continue; // Python's TypeError message differs from Rust; only an error is required
                 }
-                assert_eq!(e.to_string(), want, "公式 {text:?}({x})");
+                assert_eq!(e.to_string(), want, "formula {text:?}({x})");
             }
         }
     }
@@ -121,7 +123,7 @@ fn formula_vectors() {
 
 #[test]
 fn fmt_vectors() {
-    let data = cases("mathexpr", "cases").into_iter().next().expect("用例");
+    let data = cases("mathexpr", "cases").into_iter().next().expect("case");
     for case in data["fmt"].as_array().expect("fmt") {
         assert_eq!(fmt(f(&case["x"])), s(&case["text"]));
     }

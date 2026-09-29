@@ -12,7 +12,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 fn one(v: &Value) -> [f64; 2] {
-    let a = v.as_array().expect("不是点");
+    let a = v.as_array().expect("not a point");
     [f(&a[0]), f(&a[1])]
 }
 
@@ -28,17 +28,17 @@ fn arc_vectors() {
             "circle" => {
                 let g = A::circle(one(&args[0]), one(&args[1]), one(&args[2]));
                 if out.is_null() {
-                    assert!(g.is_none(), "{ctx}: 应无圆");
+                    assert!(g.is_none(), "{ctx}: should have no circle");
                 } else {
-                    let (c, r) = g.expect("应有圆");
+                    let (c, r) = g.expect("should have a circle");
                     let wc = one(&out[0]);
                     assert!(
                         close(c[0], wc[0]) && close(c[1], wc[1]),
-                        "{ctx}: 圆心 got={c:?} want={wc:?}"
+                        "{ctx}: centre got={c:?} want={wc:?}"
                     );
                     assert!(
                         close(r, f(&out[1])),
-                        "{ctx}: 半径 got={r} want={}",
+                        "{ctx}: radius got={r} want={}",
                         f(&out[1])
                     );
                 }
@@ -46,27 +46,27 @@ fn arc_vectors() {
             "full_circle" => {
                 let g = A::full_circle(one(&args[0]), one(&args[1]), one(&args[2]));
                 if out.is_null() {
-                    assert!(g.is_none(), "{ctx}: 应为 None");
+                    assert!(g.is_none(), "{ctx}: should be None");
                 } else {
-                    let (c, r, t0, span) = g.expect("应有整圆");
+                    let (c, r, t0, span) = g.expect("should have a full circle");
                     let wc = one(&out[0]);
-                    assert!(close(c[0], wc[0]) && close(c[1], wc[1]), "{ctx}: 圆心");
-                    assert!(close(r, f(&out[1])), "{ctx}: 半径");
-                    assert!(close(t0, f(&out[2])), "{ctx}: 起始角");
-                    assert!(close(span, f(&out[3])), "{ctx}: 扫角");
+                    assert!(close(c[0], wc[0]) && close(c[1], wc[1]), "{ctx}: centre");
+                    assert!(close(r, f(&out[1])), "{ctx}: radius");
+                    assert!(close(t0, f(&out[2])), "{ctx}: start angle");
+                    assert!(close(span, f(&out[3])), "{ctx}: sweep angle");
                 }
             }
             "arc_circle" => {
                 let g = A::arc_circle(&pts(&args[0]), f(&args[1]));
                 if out.is_null() {
-                    assert!(g.is_none(), "{ctx}: 应为 None");
+                    assert!(g.is_none(), "{ctx}: should be None");
                 } else {
-                    let (c, r, t0, span) = g.expect("应有圆弧");
+                    let (c, r, t0, span) = g.expect("should have an arc");
                     let wc = one(&out[0]);
-                    assert!(close(c[0], wc[0]) && close(c[1], wc[1]), "{ctx}: 圆心");
-                    assert!(close(r, f(&out[1])), "{ctx}: 半径");
-                    assert!(close(t0, f(&out[2])), "{ctx}: 起始角");
-                    assert!(close(span, f(&out[3])), "{ctx}: 扫角");
+                    assert!(close(c[0], wc[0]) && close(c[1], wc[1]), "{ctx}: centre");
+                    assert!(close(r, f(&out[1])), "{ctx}: radius");
+                    assert!(close(t0, f(&out[2])), "{ctx}: start angle");
+                    assert!(close(span, f(&out[3])), "{ctx}: sweep angle");
                 }
             }
             "arc_points" => {
@@ -90,7 +90,7 @@ fn arc_vectors() {
                 let k = match &args[0] {
                     Value::Number(n) => n.as_f64().unwrap(),
                     Value::String(s) => s.parse::<f64>().unwrap(),
-                    other => panic!("{ctx}: 参数 {other}"),
+                    other => panic!("{ctx}: argument {other}"),
                 };
                 assert!(
                     close(A::clean_k(k), f(out)),
@@ -98,9 +98,9 @@ fn arc_vectors() {
                     A::clean_k(k)
                 );
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked >= 55, "用例太少：{checked}");
+    assert!(checked >= 55, "too few cases: {checked}");
 }

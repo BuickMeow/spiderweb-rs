@@ -16,12 +16,12 @@ fn project_load_vectors() {
     for case in &cases {
         let name = s(&case["name"]);
         if let Some(err) = case.get("error").and_then(Value::as_str) {
-            panic!("向量 {name} 生成失败: {err}");
+            panic!("failed to generate vector {name}: {err}");
         }
         let saved = s(&case["saved"]);
-        let data: Value = serde_json::from_str(saved).expect("saved 不是 JSON");
-        let project =
-            Project::from_json(&data).unwrap_or_else(|e| panic!("{name}: 工程解析失败: {e}"));
+        let data: Value = serde_json::from_str(saved).expect("saved is not JSON");
+        let project = Project::from_json(&data)
+            .unwrap_or_else(|e| panic!("{name}: project parse failed: {e}"));
         let got = project.to_json();
         assert_json_eq(
             &got,
@@ -32,36 +32,36 @@ fn project_load_vectors() {
         // Python layout -> valid JSON -> semantically identical to to_json (Python can read it back)
         let text = project.to_project_json();
         let reparsed: Value = serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("{name}: to_project_json 不是 JSON: {e}\n{text}"));
+            .unwrap_or_else(|e| panic!("{name}: to_project_json is not JSON: {e}\n{text}"));
         assert_json_eq(&reparsed, &got, &format!("{name}: to_project_json"));
 
         // atomic write to disk and read back is exactly identical
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("project.json");
-        project.write(&path, None).expect("写工程");
-        let loaded = Project::load(&path).expect("读工程");
-        assert_eq!(loaded, project, "{name}: 写盘再读回");
+        project.write(&path, None).expect("write project");
+        let loaded = Project::load(&path).expect("read project");
+        assert_eq!(loaded, project, "{name}: write then read back");
     }
 }
 
 #[test]
 fn keys_round_trip() {
     // 1.2.0's 256-key setting: 256 round-trips; missing / any other value is always 128
-    let p = Project::from_json(&serde_json::json!({"keys": 256})).expect("读工程");
+    let p = Project::from_json(&serde_json::json!({"keys": 256})).expect("read project");
     assert_eq!(p.keys, 256);
     assert_eq!(p.to_json()["keys"], serde_json::json!(256));
     let text = p.to_project_json();
-    let again = Project::from_json(&serde_json::from_str(&text).expect("JSON")).expect("读回");
+    let again = Project::from_json(&serde_json::from_str(&text).expect("JSON")).expect("read back");
     assert_eq!(again.keys, 256);
     assert_eq!(
         Project::from_json(&serde_json::json!({}))
-            .expect("读工程")
+            .expect("read project")
             .keys,
         128
     );
     assert_eq!(
         Project::from_json(&serde_json::json!({"keys": "256"}))
-            .expect("读工程")
+            .expect("read project")
             .keys,
         128
     );
@@ -76,22 +76,24 @@ fn read_project_settings() {
         beats: "3+1".to_string(),
         ..Project::default()
     };
-    assert_eq!(p.read_project().expect("求值"), (1920, 120.0, 4));
+    assert_eq!(p.read_project().expect("evaluate"), (1920, 120.0, 4));
     p.ppq = "0".to_string();
     assert_eq!(
-        p.read_project().expect_err("PPQ 越界").to_string(),
+        p.read_project().expect_err("PPQ out of range").to_string(),
         "PPQ must be a whole number from 1 to 65535"
     );
     p.ppq = "960".to_string();
     p.bpm = "1".to_string();
     assert_eq!(
-        p.read_project().expect_err("BPM 太小").to_string(),
+        p.read_project().expect_err("BPM too small").to_string(),
         "BPM must be a number, at least 4"
     );
     p.bpm = "120".to_string();
     p.beats = "33".to_string();
     assert_eq!(
-        p.read_project().expect_err("拍数越界").to_string(),
+        p.read_project()
+            .expect_err("beats out of range")
+            .to_string(),
         "Beats per bar must be a whole number from 1 to 32"
     );
 }
@@ -106,12 +108,15 @@ fn project_error_vectors() {
         serde_json::json!({"defaults": {"vel0": "abc"}}),
         serde_json::json!({"shapes": [{"kind": "line", "pts": [[0]]}]}),
     ] {
-        assert!(Project::from_json(&bad).is_err(), "坏工程应当报错: {bad}");
+        assert!(
+            Project::from_json(&bad).is_err(),
+            "bad project should error: {bad}"
+        );
     }
     // Unsupported shape kinds are just skipped, not a read failure
     let p = Project::from_json(&serde_json::json!({
         "shapes": [{"kind": "blob", "pts": [[0, 0], [1, 1]]}, {"kind": "line", "pts": [[0, 0], [1, 1]]}]
     }))
-    .expect("应当读开");
+    .expect("should read");
     assert_eq!(p.shapes.len(), 1);
 }

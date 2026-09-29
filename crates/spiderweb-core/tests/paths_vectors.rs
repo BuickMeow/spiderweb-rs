@@ -101,11 +101,11 @@ fn paths_vectors() {
                 let g = P::dot_segment_notes(&pts(&args[0]));
                 assert_rows3_eq(&g, out, &ctx);
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked > 30, "用例太少：{checked}");
+    assert!(checked > 30, "too few cases: {checked}");
 }
 
 #[test]

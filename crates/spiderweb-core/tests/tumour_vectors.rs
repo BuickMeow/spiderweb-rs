@@ -52,7 +52,7 @@ fn mark_numbers(text: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8(out).expect("标记后的 JSON 不是 UTF-8")
+    String::from_utf8(out).expect("marked JSON is not UTF-8")
 }
 
 /// Restore `"@<token>"` into exactly parsed numbers.
@@ -61,11 +61,12 @@ fn unmark_numbers(v: &mut Value) {
         Value::String(s) if s.starts_with('@') => {
             let t = &s[1..];
             let n = if t.contains(['.', 'e', 'E']) {
-                serde_json::Number::from_f64(t.parse::<f64>().expect("坏浮点")).expect("非有限浮点")
+                serde_json::Number::from_f64(t.parse::<f64>().expect("bad float"))
+                    .expect("non-finite float")
             } else if let Ok(i) = t.parse::<i64>() {
                 serde_json::Number::from(i)
             } else {
-                serde_json::Number::from(t.parse::<u64>().expect("坏整数"))
+                serde_json::Number::from(t.parse::<u64>().expect("bad integer"))
             };
             *v = Value::Number(n);
         }
@@ -86,11 +87,15 @@ fn unmark_numbers(v: &mut Value) {
 fn cases_exact(module: &str) -> Vec<Value> {
     let path = format!("{}/tests/vectors/{module}.json", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("缺少向量文件 {path}（先运行 tools/gen_{module}_vectors.py）：{e}")
+        panic!("missing vector file {path} (run tools/gen_{module}_vectors.py first): {e}")
     });
-    let mut data: Value = serde_json::from_str(&mark_numbers(&text)).expect("向量 JSON 解析失败");
+    let mut data: Value =
+        serde_json::from_str(&mark_numbers(&text)).expect("failed to parse vector JSON");
     unmark_numbers(&mut data);
-    data["cases"].as_array().expect("cases 不是数组").clone()
+    data["cases"]
+        .as_array()
+        .expect("cases is not an array")
+        .clone()
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -104,7 +109,7 @@ fn shape_of(name: &str) -> TumourShape {
         "square" => TumourShape::Square,
         "circle" => TumourShape::Circle,
         "parabola" => TumourShape::Parabola,
-        other => panic!("未知 shape {other}"),
+        other => panic!("unknown shape {other}"),
     }
 }
 
@@ -135,10 +140,10 @@ fn wrap_name(wrap: TumourWrap) -> &'static str {
 
 fn assert_tumour_eq(got: Option<Tumour>, want: &Value, ctx: &str) {
     if want.is_null() {
-        assert!(got.is_none(), "{ctx}: 应为 None");
+        assert!(got.is_none(), "{ctx}: should be None");
         return;
     }
-    let got = got.unwrap_or_else(|| panic!("{ctx}: 不应为 None"));
+    let got = got.unwrap_or_else(|| panic!("{ctx}: should not be None"));
     assert_eq!(
         shape_name(got.shape),
         want["shape"].as_str().unwrap(),
@@ -268,7 +273,8 @@ fn tumour_vectors() {
                 assert_pts_eq(&g, out, &ctx);
             }
             "graph_fn" => {
-                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let tm =
+                    T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm is invalid"));
                 let got = T::graph_fn(&tm, args[1].as_str().unwrap(), f(&args[2]));
                 match (got, out.is_null()) {
                     (None, true) => {}
@@ -287,9 +293,10 @@ fn tumour_vectors() {
                 }
             }
             "graph_starts" => {
-                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let tm =
+                    T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm is invalid"));
                 let dg =
-                    T::graph_fn(&tm, "dist", 1.0).unwrap_or_else(|| panic!("{ctx}: 无 dist graph"));
+                    T::graph_fn(&tm, "dist", 1.0).unwrap_or_else(|| panic!("{ctx}: no dist graph"));
                 let (starts, stretch) = T::graph_starts(
                     &dg,
                     f(&args[1]),
@@ -313,7 +320,8 @@ fn tumour_vectors() {
                 );
             }
             "split_tumour" => {
-                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let tm =
+                    T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm is invalid"));
                 let (l, r) = T::split_tumour(&tm, &pts(&args[1]), &pts(&args[2]));
                 assert_tumour_eq(l, &out[0], &format!("{ctx} left"));
                 assert_tumour_eq(r, &out[1], &format!("{ctx} right"));
@@ -327,13 +335,14 @@ fn tumour_vectors() {
                 assert_pts_eq(&g, out, &ctx);
             }
             "tumour_path" => {
-                let tm = T::clean_tumour(&args[1]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let tm =
+                    T::clean_tumour(&args[1]).unwrap_or_else(|| panic!("{ctx}: tm is invalid"));
                 let g = T::tumour_path(&pts(&args[0]), &tm);
                 assert_pts_eq(&g, out, &ctx);
             }
-            other => panic!("未知用例 {other}"),
+            other => panic!("unknown case {other}"),
         }
         checked += 1;
     }
-    assert!(checked > 60, "用例太少：{checked}");
+    assert!(checked > 60, "too few cases: {checked}");
 }
