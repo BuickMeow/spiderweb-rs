@@ -1,14 +1,14 @@
-//! 圆弧：过三点的完美圆弧（起点、经过点、终点），对应 Python notes/arc.py 的逐函数移植。
+//! Arcs: the perfect circular arc through three points (start, through, end), a function-by-function port of Python notes/arc.py.
 //!
-//! 弧记住 `k` = 绘制时屏幕上多少个 beat 对应一个 key（屏幕上 x = beats / k，y 直接用 key）。
-//! k 为 1（两个方向等比例）时弧就是正圆的一段。
+//! An arc remembers `k` = how many beats per key were on screen when it was drawn (on screen x = beats / k, y uses key directly).
+//! With k = 1 (equal scale in both directions) the arc is a segment of a true circle.
 
 use crate::{Pt, dist};
 
-/// 每 1.5° 一个采样点（对应 Python `math.radians(1.5)`）。
+/// One sample point every 1.5° (as in Python `math.radians(1.5)`).
 pub const STEP: f64 = 1.5 * (std::f64::consts::PI / 180.0);
 
-/// Python 的浮点取模（结果的符号与除数一致，且零的符号随除数）。
+/// Python's floating-point modulo (the result takes the divisor's sign, and a zero result takes the divisor's sign).
 fn py_mod(x: f64, y: f64) -> f64 {
     let r = x % y;
     if r != 0.0 {
@@ -18,7 +18,7 @@ fn py_mod(x: f64, y: f64) -> f64 {
     }
 }
 
-/// 过 a、b、c 三点的圆心与半径；三点共线或有两点重合时返回 None。
+/// Centre and radius of the circle through a, b, c; None if the three points are collinear or two coincide.
 pub fn circle(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64)> {
     let a_sq = (b[0] - c[0]).powf(2.0) + (b[1] - c[1]).powf(2.0);
     let b_sq = (a[0] - c[0]).powf(2.0) + (a[1] - c[1]).powf(2.0);
@@ -41,20 +41,20 @@ pub fn circle(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64)> {
     Some((centre, dist(a, centre)))
 }
 
-/// 起始角与（有符号的）扫过角度：从 a 经过 b 到 c。
+/// Start angle and (signed) swept angle: from a through b to c.
 fn angles(a: Pt, b: Pt, c: Pt, centre: Pt) -> (f64, f64) {
     let t0 = (a[1] - centre[1]).atan2(a[0] - centre[0]);
     let t1 = (c[1] - centre[1]).atan2(c[0] - centre[0]);
     let mut span = py_mod(t1 - t0, 2.0 * std::f64::consts::PI);
-    // 走哪一边：经过 b 的那边（b 在 a -> c 连线的左侧还是右侧）
+    // Which side to go: the side through b (whether b is left or right of the a -> c line)
     if (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0]) > 0.0 {
         span -= 2.0 * std::f64::consts::PI;
     }
     (t0, span)
 }
 
-/// 终点回到起点（中间点在别处）：整圆，a -> b 横穿，屏幕上逆时针。
-/// 返回（圆心, 半径, 起始角, 2π）；a != c 或 a == b 时返回 None。
+/// The end returns to the start (the middle point is elsewhere): a full circle, a -> b across, counter-clockwise on screen.
+/// Returns (centre, radius, start angle, 2π); None if a != c or a == b.
 pub fn full_circle(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64, f64, f64)> {
     if a != c || a == b {
         return None;
@@ -68,7 +68,7 @@ pub fn full_circle(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64, f64, f64)> {
     ))
 }
 
-/// 过三点的（圆心, 半径, 起始角, 有符号扫角）；没有圆弧时返回 None。
+/// (Centre, radius, start angle, signed span) through the three points; None if there is no arc.
 fn arc_through(m: [Pt; 3]) -> Option<(Pt, f64, f64, f64)> {
     if let Some(whole) = full_circle(m[0], m[1], m[2]) {
         return Some(whole);
@@ -92,8 +92,9 @@ pub fn arc_circle(pts: &[Pt], k: f64) -> Option<(Pt, f64, f64, f64)> {
     ])
 }
 
-/// 从 pts[0] 经过 pts[1] 到 pts[2] 的弧的点列（共线时为直线；pts[2] 等于 pts[0] 时为整圆）。
-/// 起点与终点精确落在端点上。不足三点时用首尾两点。`k` 见模块说明，`step` 为相邻采样点的角度。
+/// Point list of the arc from pts[0] through pts[1] to pts[2] (a straight line when collinear; a full circle when pts[2] equals pts[0]).
+/// Start and end land exactly on the endpoints. With fewer than three points the first and last are used. `k` is described in the module
+/// docs, `step` is the angle between adjacent samples.
 pub fn arc_points(pts: &[Pt], k: f64, step: f64) -> Vec<Pt> {
     if pts.is_empty() {
         return Vec::new();
@@ -125,8 +126,8 @@ pub fn arc_points(pts: &[Pt], k: f64, step: f64) -> Vec<Pt> {
     out
 }
 
-/// 弧的贝塞尔曲线点列（bezier.py 的 anchor, handle, handle, anchor, ...），
-/// 每段最多四分之一圆；共线时为直线。
+/// Bezier point list of the arc (bezier.py's anchor, handle, handle, anchor, ...),
+/// each segment at most a quarter circle; a straight line when collinear.
 pub fn arc_bezier(pts: &[Pt], k: f64) -> Vec<Pt> {
     if pts.len() < 3 {
         return Vec::new();
@@ -138,7 +139,7 @@ pub fn arc_bezier(pts: &[Pt], k: f64) -> Vec<Pt> {
     };
     let n = ((span.abs() / (std::f64::consts::PI / 2.0) - 1e-9).ceil() as usize).max(1);
     let step = span / n as f64;
-    let h = 4.0 / 3.0 * (step / 4.0).tan() * r; // 一段圆弧的手柄长度
+    let h = 4.0 / 3.0 * (step / 4.0).tan() * r; // handle length for one arc segment
 
     let on = |t: f64| [centre[0] + r * t.cos(), centre[1] + r * t.sin()];
 
@@ -160,7 +161,7 @@ pub fn arc_bezier(pts: &[Pt], k: f64) -> Vec<Pt> {
     out
 }
 
-/// 填满 box (x0, y0, x1, y1) 的椭圆，4 个四分之一圆的闭合贝塞尔曲线，起点在左端。
+/// Ellipse filling box (x0, y0, x1, y1), a closed Bezier curve of 4 quarter circles, starting at the left end.
 pub fn ellipse_bezier(box_: [f64; 4]) -> Vec<Pt> {
     let (x0, y0, x1, y1) = (box_[0], box_[1], box_[2], box_[3]);
     let (cx, cy, rx, ry) = (
@@ -172,7 +173,7 @@ pub fn ellipse_bezier(box_: [f64; 4]) -> Vec<Pt> {
     let h = 4.0 / 3.0 * (std::f64::consts::PI / 8.0).tan();
     let mut out = vec![[cx - rx, cy]];
     for q in 0..4 {
-        // 左 -> 上 -> 右 -> 下 -> 左
+        // left -> top -> right -> bottom -> left
         let a0 = std::f64::consts::PI - q as f64 * std::f64::consts::PI / 2.0;
         let a1 = std::f64::consts::PI / 2.0 - q as f64 * std::f64::consts::PI / 2.0;
         let p0 = (a0.cos(), a0.sin());
@@ -190,7 +191,7 @@ pub fn ellipse_bezier(box_: [f64; 4]) -> Vec<Pt> {
     out
 }
 
-/// 从 a 到 c 的直线贝塞尔（4 个点）。
+/// Straight-line Bezier from a to c (4 points).
 pub fn line_bezier(a: Pt, c: Pt) -> Vec<Pt> {
     vec![
         a,
@@ -203,7 +204,7 @@ pub fn line_bezier(a: Pt, c: Pt) -> Vec<Pt> {
     ]
 }
 
-/// 形状 / 笔画文件里读出的 k 的清洗（缺失或非法时为 1）。
+/// Sanitise k read from a shape / stroke file (1 when missing or invalid).
 pub fn clean_k(k: f64) -> f64 {
     if 1e-9 < k && k < 1e9 && k.is_finite() {
         k

@@ -1,18 +1,18 @@
-//! Spiderweb 核心：形状 → 音符的纯算法层（不含任何 UI / 平台依赖）。
+//! Spiderweb core: the pure algorithm layer turning shapes into notes (no UI / platform dependencies).
 //!
-//! 与 Python 原版逐模块对应：
-//! - [`paths`] 线条 / 折线 / 自由笔 / 曲线 → 音符
-//! - [`bezier`] 贝塞尔曲线采样、编辑与拟合
-//! - [`arc`] 三点圆弧
-//! - [`smooth`] 自由笔的"画整齐"（直线 / 平滑曲线 / 完美图形）
-//! - [`tumour`] 线条上的肿瘤（凸起）
-//! - [`envelope`] 速度包络
-//! - [`custom`] 自定义形状（轮廓 / 填充 / spam）与粘贴音符
+//! One-to-one module mapping with the original Python:
+//! - [`paths`] lines / polylines / freehand / curves -> notes
+//! - [`bezier`] Bezier curve sampling, editing and fitting
+//! - [`arc`] three-point arcs
+//! - [`smooth`] freehand "Straighten" (line / smooth curve / perfect shape)
+//! - [`tumour`] tumours (bumps) on a line
+//! - [`envelope`] velocity envelope
+//! - [`custom`] custom shapes (outline / fill / spam) and pasted notes
 //! - [`joined`] joining lines / curves / arcs into one Curve shape (1.2.0)
 //! - [`convert`] "Turn into live shape": lines / curves / arcs / custom shapes -> one custom shape
-//! - [`funnel`] 漏斗
-//! - [`text`] 文本 → 字形轮廓
-//! - [`engine`] 汇总：形状 → 音符、重叠处理、通道分配
+//! - [`funnel`] funnel
+//! - [`text`] text -> glyph outlines
+//! - [`engine`] assembly: shapes -> notes, overlap handling, channel assignment
 
 pub mod arc;
 pub mod bezier;
@@ -30,21 +30,22 @@ pub mod smooth;
 pub mod text;
 pub mod tumour;
 
-/// 形状点：(beat, pitch)，均为浮点。
+/// A shape point: (beat, pitch), both floating point.
 pub type Pt = [f64; 2];
 
-/// (start, end, key) 音符行，tick 为整数。
+/// (start, end, key) note row; ticks are integers.
 pub type Note3 = [i64; 3];
 
-/// (start, end, key, velocity) 音符行。
+/// (start, end, key, velocity) note row.
 pub type Note4 = [i64; 4];
 
-/// (start, end, key, velocity, slot, owner) 音符行（engine.render 的最终形态）。
+/// (start, end, key, velocity, slot, owner) note row (the final form of engine.render).
 pub type Note6 = [i64; 6];
 
-/// CPython 3.9 `math.hypot` 的复刻：按最大分量缩放后用 Neumaier 补偿求和
-/// （见 CPython Modules/mathmodule.c 的 vector_norm；普通 sqrt(x²+y²) 会有 ulp 偏差，
-/// 而对照向量要求逐位一致）。
+/// Reimplementation of CPython 3.9 `math.hypot`: scale by the largest component,
+/// then use Neumaier compensated summation
+/// (see vector_norm in CPython Modules/mathmodule.c; a plain sqrt(x²+y²) has ulp
+/// differences, while the differential vectors require bit-for-bit equality).
 pub fn hypot2(x0: f64, x1: f64) -> f64 {
     let x0 = x0.abs();
     let x1 = x1.abs();
@@ -75,12 +76,12 @@ pub fn hypot2(x0: f64, x1: f64) -> f64 {
     max * (csum - 1.0 + frac).sqrt()
 }
 
-/// 两点距离（CPython `math.dist` 同款）。
+/// Distance between two points (same as CPython `math.dist`).
 pub fn dist(a: Pt, b: Pt) -> f64 {
     hypot2(a[0] - b[0], a[1] - b[1])
 }
 
-/// Python `round()` / NumPy `round()` 的银行家舍入（.5 取偶）。
+/// Banker's rounding, as in Python `round()` / NumPy `round()` (.5 rounds to even).
 pub fn round_half_even(x: f64) -> f64 {
     let f = x.floor();
     let frac = x - f;
@@ -91,12 +92,12 @@ pub fn round_half_even(x: f64) -> f64 {
     }
 }
 
-/// Python `round()` 到 i64。
+/// Python `round()`, to i64.
 pub fn round_i64(x: f64) -> i64 {
     round_half_even(x) as i64
 }
 
-/// Python `math.floor(x + 0.5)`：tick 取整的通用写法。
+/// Python `math.floor(x + 0.5)`: the usual way to round a tick.
 pub fn floor_half(x: f64) -> i64 {
     (x + 0.5).floor() as i64
 }

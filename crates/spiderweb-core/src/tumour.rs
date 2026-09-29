@@ -1,12 +1,14 @@
-//! 线条上的肿瘤（凸起）：把 Python `notes/tumour.py` 逐函数移植。
+//! Tumours (bumps) on a line: a function-by-function port of Python `notes/tumour.py`.
 //!
-//! 线条、折线、自由笔、曲线或弧都能带肿瘤设置 `sh["tumour"]`：线条的点仍按原样绘制（仍可拖动），
-//! 但它成形的路径每隔 `dist` 长出一个凸起，每个 `length` 长、`size` 个 key 高，朝向由 `side` 决定。
-//! `ease` > 0 时凸起在区间两端 `ease` 内从无到有地长出来，线条平滑地进入凸起，而不是突然竖起。
-//! `fit` 把距离稍微拉伸，让整数个凸起恰好铺满区间；绕闭合环（比如整圆）一周时首尾正好接上。
-//! 一切按屏幕上的样子计算：`k` = 上次修改设置时屏幕上一个 key 对应多少 beat（同 arc），
-//! 所以 size 的单位是 key，length / dist 是沿线条的 beat。length 0 = 尖刺：每个凸起只是
-//! 一个被推向一侧的点，线条从一个尖刺直着折向下一个。
+//! Lines, polylines, freehand strokes, curves and arcs can all carry tumour settings `sh["tumour"]`: the line's points are still drawn
+//! as they are (and can still be dragged), but its rendered path grows a bump every `dist`, each `length` long and `size` keys high,
+//! facing the way `side` says. With `ease` > 0 the bumps grow from nothing over `ease` at each end of the range, so the line
+//! leads smoothly into them instead of starting with a sudden side.
+//! `fit` stretches the distance a little so a whole number of bumps fills the range exactly; going once round a closed loop
+//! (a full circle, say) first and last meet exactly.
+//! Everything is computed as it looks on screen: `k` = how many beats one key spans on screen when the settings were last changed
+//! (same as arc), so size is in keys while length / dist are beats along the line. length 0 = spikes: each bump is just
+//! one point pushed to one side, and the line goes straight from one spike to the next.
 
 use std::collections::BTreeMap;
 
@@ -15,7 +17,7 @@ use crate::shape::{Tumour, TumourShape, TumourSide, TumourWrap};
 use crate::{Pt, dist, hypot2, round_half_even};
 use serde_json::{Map, Value};
 
-/// 最多多少个凸起（tumour.py MAX_TUMOURS）。
+/// Maximum number of bumps (tumour.py MAX_TUMOURS).
 pub const MAX_TUMOURS: usize = 20000;
 
 /// The settings that can follow a graph (1.2.0 tumour.GRAPH_KEYS).
@@ -24,14 +26,14 @@ pub const GRAPH_KEYS: [&str; 5] = ["size", "length", "dist", "rot", "slant"];
 /// Graph values from -1000 % to 1000 % (1.2.0 tumour.GRAPH_LIMIT).
 pub const GRAPH_LIMIT: f64 = 10.0;
 
-/// 圆形模板的采样步长（Python `math.radians(10)`）。
+/// Sampling step of the circle template (Python `math.radians(10)`).
 const CIRCLE_STEP: f64 = 10.0 * (std::f64::consts::PI / 180.0);
 
 // ---------------------------------------------------------------------------
-// 小工具：CPython / NumPy 语义的逐位复刻
+// helpers: bit-for-bit reproductions of CPython / NumPy semantics
 // ---------------------------------------------------------------------------
 
-/// CPython `bisect.bisect_right`（并列时取右侧）。
+/// CPython `bisect.bisect_right` (ties take the right side).
 fn bisect_right(a: &[f64], x: f64) -> usize {
     let mut lo = 0usize;
     let mut hi = a.len();
@@ -46,7 +48,7 @@ fn bisect_right(a: &[f64], x: f64) -> usize {
     lo
 }
 
-/// CPython `bisect.bisect_left`（并列时取左侧）。
+/// CPython `bisect.bisect_left` (ties take the left side).
 fn bisect_left(a: &[f64], x: f64) -> usize {
     let mut lo = 0usize;
     let mut hi = a.len();
@@ -61,7 +63,7 @@ fn bisect_left(a: &[f64], x: f64) -> usize {
     lo
 }
 
-/// NumPy `np.mod`：结果的符号与除数一致（零的符号也随除数）。
+/// NumPy `np.mod`: the result takes the divisor's sign (a zero result too).
 fn py_mod(x: f64, y: f64) -> f64 {
     let r = x % y;
     if r != 0.0 {
@@ -71,17 +73,17 @@ fn py_mod(x: f64, y: f64) -> f64 {
     }
 }
 
-/// CPython `max(a, b)`（并列时保留先出现的 a）。
+/// CPython `max(a, b)` (on a tie keep the first, a).
 fn py_max(a: f64, b: f64) -> f64 {
     if b > a { b } else { a }
 }
 
-/// CPython `min(a, b)`（并列时保留先出现的 a）。
+/// CPython `min(a, b)` (on a tie keep the first, a).
 fn py_min(a: f64, b: f64) -> f64 {
     if b < a { b } else { a }
 }
 
-/// NumPy `np.interp(x, xp, fp)`（xp 单调不减；x 在两端之外时取端点的 fp）。
+/// NumPy `np.interp(x, xp, fp)` (xp is non-decreasing; outside the ends x takes the end fp).
 fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let Some(&first) = xp.first() else {
         return f64::NAN;
@@ -103,7 +105,7 @@ fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     fp[i] + (fp[i + 1] - fp[i]) * (x - xp[i]) / denom
 }
 
-/// NumPy `np.linspace(lo, hi, n)`（端点精确取 lo / hi）。
+/// NumPy `np.linspace(lo, hi, n)` (the ends are exactly lo / hi).
 fn np_linspace(lo: f64, hi: f64, n: usize) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
@@ -151,7 +153,7 @@ fn wrap_from_name(name: &str) -> Option<TumourWrap> {
     })
 }
 
-/// Python `float(s)`：可选的空白、数字之间允许下划线、inf / nan 均可。
+/// Python `float(s)`: optional whitespace, underscores allowed between digits, inf / nan accepted.
 fn py_float_str(s: &str) -> Option<f64> {
     let t = s.trim();
     if !t.contains('_') {
@@ -173,7 +175,7 @@ fn py_float_str(s: &str) -> Option<f64> {
     cleaned.parse::<f64>().ok()
 }
 
-/// Python `float(x)`：数字 / 布尔 / 字符串可转，其余不可（None 表示转不了）。
+/// Python `float(x)`: numbers / booleans / strings convert, anything else does not (None means it can't convert).
 fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
@@ -183,7 +185,7 @@ fn py_float(v: &Value) -> Option<f64> {
     }
 }
 
-/// Python `int(s)`（十进制，允许空白、正负号与数字间的下划线）。
+/// Python `int(s)` (decimal; whitespace, sign and underscores between digits allowed).
 fn py_int_str(s: &str) -> Option<i64> {
     let t = s.trim();
     let (neg, body) = match t.strip_prefix('-') {
@@ -213,8 +215,8 @@ fn py_int_str(s: &str) -> Option<i64> {
     Some(if neg { -n } else { n })
 }
 
-/// Python `int(x)`：数字 / 布尔 / 字符串可转，其余不可（None 表示转不了）。
-/// 超出 i64 的种子这里当转不了（随机数发生器用 i64 下标，Python 的任意精度整数种子在此不可达）。
+/// Python `int(x)`: numbers / booleans / strings convert, anything else does not (None means it can't convert).
+/// Seeds beyond i64 count as unconvertible here (the RNG indexes with i64, so Python's arbitrary-precision integer seeds are unreachable).
 fn py_int(v: &Value) -> Option<i64> {
     match v {
         Value::Number(n) => {
@@ -238,13 +240,13 @@ fn py_int(v: &Value) -> Option<i64> {
     }
 }
 
-/// 一个数值字段：取出来、转成 float、不是有限数就当没有（`None`）。
+/// One numeric field: fetch it, convert to float, and treat anything non-finite as absent (`None`).
 fn num(obj: &Map<String, Value>, key: &str) -> Option<f64> {
     let v = py_float(obj.get(key)?)?;
     if v.is_finite() { Some(v) } else { None }
 }
 
-/// 从文件里读出的肿瘤设置（不是字典时为 None；对应 Python `clean_tumour`）。
+/// Tumour settings read from a file (None when not a dict; corresponds to Python `clean_tumour`).
 pub fn clean_tumour(tm: &Value) -> Option<Tumour> {
     let obj = tm.as_object()?;
     let mut out = Tumour::default();
@@ -299,7 +301,7 @@ pub fn clean_tumour(tm: &Value) -> Option<Tumour> {
     if let Some(v) = obj.get("seed").and_then(py_int) {
         out.seed = v;
     }
-    // on：除了 False 本身都算开（0 也算）；mirror / fit：必须是 True 本身。
+    // on: everything except False itself counts as on (0 too); mirror / fit: must be True itself.
     out.on = obj.get("on").and_then(Value::as_bool) != Some(false);
     out.mirror = obj.get("mirror").and_then(Value::as_bool) == Some(true);
     out.fit = obj.get("fit").and_then(Value::as_bool) == Some(true);
@@ -454,7 +456,7 @@ pub fn graph_starts(
 // template / cut / subdivide
 // ---------------------------------------------------------------------------
 
-/// 凸起模板：从 (0, 0) 到 (length, 0) 的（沿线的 x, 侧向的 y）点列。
+/// Bump template: a point list (x along the line, y sideways) from (0, 0) to (length, 0).
 /// `slant` (-1..1, square only): the square's top is narrowed by that much of its length.
 pub fn template(shape: TumourShape, length: f64, size: f64, slant: f64) -> Vec<Pt> {
     match shape {
@@ -476,7 +478,7 @@ pub fn template(shape: TumourShape, length: f64, size: f64, slant: f64) -> Vec<P
             if size.abs() < 1e-12 {
                 vec![[0.0, 0.0], [length, 0.0]]
             } else {
-                // 圆形：过顶部画一个圆（每个凸起 10° 一个点就足够了）
+                // circle: draw a circle through the top (one point per 10° per bump is enough)
                 arc_points(
                     &[[0.0, 0.0], [length / 2.0, size], [length, 0.0]],
                     1.0,
@@ -487,7 +489,7 @@ pub fn template(shape: TumourShape, length: f64, size: f64, slant: f64) -> Vec<P
     }
 }
 
-/// 模板在 x_end 处截断的点（截到下一个凸起开始 / 区间结束的地方）。
+/// The template's points cut off at x_end (cut to where the next bump starts / the range ends).
 pub fn cut(pts: &[Pt], x_end: f64) -> Vec<Pt> {
     let last_x = pts.last().map_or(0.0, |p| p[0]);
     if x_end >= last_x - 1e-12 && pts.iter().all(|p| p[0] <= x_end + 1e-12) {
@@ -512,9 +514,9 @@ pub fn cut(pts: &[Pt], x_end: f64) -> Vec<Pt> {
     out
 }
 
-/// 凸起的点按顺序，再在每条边经过 xs（已排序）里某个 x 的地方补一个点，
-/// 让随线条弯曲的凸起跟着线条走。按顺序（不是每个 x 一个高度），
-/// 所以折回来的圆形凸起能保住整个轮廓。
+/// The bump's points in order, with an extra point wherever an edge crosses one of the xs (sorted),
+/// so a bump that follows the line's curve follows the line. In order (not one height per x),
+/// so a circle bump that doubles back keeps its whole outline.
 pub fn subdivide(bump: &[Pt], xs: &[f64]) -> Vec<Pt> {
     let mut out = Vec::with_capacity(bump.len() + xs.len());
     if let Some(&p0) = bump.first() {
@@ -548,7 +550,7 @@ pub fn subdivide(bump: &[Pt], xs: &[f64]) -> Vec<Pt> {
 // Walk
 // ---------------------------------------------------------------------------
 
-/// 一条按长度测量的路径（屏幕单位）：任意距离处的点与方向（tumour.py Walk）。
+/// A path measured by length (screen units): the point and direction at any distance (tumour.py Walk).
 #[derive(Clone, Debug)]
 pub struct Walk {
     pub pts: Vec<Pt>,
@@ -579,13 +581,13 @@ impl Walk {
         }
     }
 
-    /// 距离 d 落在第几段（0 起）。
+    /// Which segment distance d falls in (0-based).
     pub fn seg(&self, d: f64) -> usize {
         let i = bisect_right(&self.cum, d).saturating_sub(1);
         i.min(self.pts.len().saturating_sub(2))
     }
 
-    /// 距离 d 处的点。
+    /// The point at distance d.
     pub fn at(&self, d: f64) -> Pt {
         if self.pts.len() < 2 {
             return self.pts.first().copied().unwrap_or([0.0, 0.0]);
@@ -601,7 +603,7 @@ impl Walk {
         [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]
     }
 
-    /// 第 i 段的单位方向（零长段时为 (1, 0)）。
+    /// Unit direction of segment i ((1, 0) for a zero-length segment).
     fn dir_at(&self, i: usize) -> Pt {
         let (Some(a), Some(b)) = (self.pts.get(i), self.pts.get(i + 1)) else {
             return [1.0, 0.0];
@@ -614,7 +616,7 @@ impl Walk {
         }
     }
 
-    /// 距离 d 处的单位方向（在拐角处：两条边的中间方向）。
+    /// Unit direction at distance d (at a corner: the mean direction of the two edges).
     pub fn direction(&self, d: f64) -> Pt {
         let i = self.seg(d);
         let mut v = self.dir_at(i);
@@ -629,7 +631,7 @@ impl Walk {
             };
         }
         if self.closed && d >= self.total - 1e-12 {
-            // 闭合环的起点 / 终点也是个拐角：末边与首边的中间方向
+            // the start / end of a closed loop is a corner too: the mean direction of the last and first edges
             v = self.dir_at(0);
             before = Some(self.pts.len().saturating_sub(2));
         }
@@ -644,7 +646,7 @@ impl Walk {
         v
     }
 
-    /// 一整组距离上的 at（数组版；Rust 用标量循环等价实现）。
+    /// at over a whole array of distances (array version; implemented here as an equivalent scalar loop).
     pub fn at_many(&self, d: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let mut xs = Vec::with_capacity(d.len());
         let mut ys = Vec::with_capacity(d.len());
@@ -656,7 +658,7 @@ impl Walk {
         (xs, ys)
     }
 
-    /// 一整组距离上的 direction（数组版；Rust 用标量循环等价实现）。
+    /// direction over a whole array of distances (array version; implemented here as an equivalent scalar loop).
     pub fn directions(&self, d: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let mut xs = Vec::with_capacity(d.len());
         let mut ys = Vec::with_capacity(d.len());
@@ -673,14 +675,14 @@ impl Walk {
 // Out
 // ---------------------------------------------------------------------------
 
-/// 肿瘤路径的点按顺序：按原样加进来的点，以及其点稍后作为一整块数组交上来的块（fill）。
-/// 对照 NumPy 版的两阶段结构：先记录块的位置，最后统一填充。
+/// The tumour path's points in order: points added as they are, and blocks whose points are handed in
+/// later as one whole array (fill). Mirrors the NumPy version's two-stage structure: record block positions first, fill them all at the end.
 #[derive(Default)]
 pub struct Out {
     lit: Vec<(usize, Pt)>,
     blocks: Vec<(usize, usize)>,
     arrays: Vec<Vec<Pt>>,
-    /// 目前已占用的点数。
+    /// Number of points occupied so far.
     pub n: usize,
 }
 
@@ -689,7 +691,7 @@ impl Out {
         Self::default()
     }
 
-    /// 一组点按原样加入。
+    /// Add a batch of points as they are.
     pub fn add(&mut self, pts: &[Pt]) {
         for p in pts {
             self.lit.push((self.n, *p));
@@ -697,25 +699,25 @@ impl Out {
         }
     }
 
-    /// 登记一个稍后填充的块（只数点数，数组随 fill 来）。
+    /// Register a block to fill later (only counts points; the array comes with fill).
     pub fn block(&mut self, n: usize) {
         self.blocks.push((self.n, n));
         self.n += n;
     }
 
-    /// 登记一个块，点已经到手（尖刺分支的原地点阵）。
+    /// Register a block whose points are already at hand (the spike branch's in-place point array).
     pub fn block_array(&mut self, pts: &[Pt]) {
         self.arrays.push(pts.to_vec());
         self.blocks.push((self.n, pts.len()));
         self.n += pts.len();
     }
 
-    /// 块的点：一个整块数组（Python Out.fill）。
+    /// The block's points: one whole array (Python Out.fill).
     pub fn fill(&mut self, pts: Vec<Pt>) {
         self.arrays.push(pts);
     }
 
-    /// 按登记顺序拼出全部点。
+    /// Assemble all points in registration order.
     pub fn result(&self) -> Vec<Pt> {
         let mut res = vec![[0.0, 0.0]; self.n];
         for &(at, p) in &self.lit {
@@ -740,7 +742,7 @@ impl Out {
 // tumour_path
 // ---------------------------------------------------------------------------
 
-/// 去掉相邻重复点后的最终点列（Python 结尾的 keep 过滤与 x * k）。
+/// Final point list after dropping adjacent duplicates (Python's trailing keep filter and x * k).
 fn finish(res: Vec<Pt>, k: f64) -> Vec<Pt> {
     let mut out = Vec::with_capacity(res.len());
     let mut prev: Option<Pt> = None;
@@ -757,7 +759,7 @@ fn finish(res: Vec<Pt>, k: f64) -> Vec<Pt> {
     out
 }
 
-/// 带肿瘤的路径（beat, pitch 点列）。Python `tumour_path` 的逐行移植。
+/// The path with tumours (a beat, pitch point list). A line-by-line port of Python `tumour_path`.
 pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
     let k = tm.k;
     let mut pts: Vec<Pt> = Vec::new();
@@ -808,10 +810,10 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
     if fit_loop {
         let first = sides[0];
         let last = sides.len() - 1;
-        sides[last] = first; // 最后一个就是第一个
+        sides[last] = first; // the last is the first
     }
 
-    // 路径自身严格落在距离 d0 与 d1 之间的点。
+    // The path's own points strictly between distances d0 and d1.
     let base = |d0: f64, d1: f64| -> Vec<Pt> {
         let a = bisect_right(&w.cum, d0 + 1e-9);
         let b = bisect_left(&w.cum, d1 - 1e-9);
@@ -824,7 +826,7 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
 
     let ease = tm.ease / k;
 
-    // 距离 d 处一个凸起占全尺寸的比例（缓动时区间两端更小）。
+    // Fraction of full size a bump has at distance d (smaller at both ends of the range while easing).
     let grow = |d: f64| -> f64 {
         if ease < 1e-12 {
             return 1.0;
@@ -832,12 +834,12 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
         py_max(0.0, py_min(py_min(1.0, (d - lo) / ease), (hi - d) / ease))
     };
 
-    // 凸起是否落在缓动区（需要额外加点让变化平滑）。
+    // Whether the bump falls in an easing zone (extra points are needed to keep the change smooth).
     let needs_easing = |bump: &[Pt], s: f64| {
         ease >= 1e-12 && (s < lo + ease || s + bump.last().map_or(0.0, |p| p[0]) > hi - ease)
     };
 
-    // 缓动后的凸起点（在缓动的地方补点，让变化平滑）。
+    // The bumped points after easing (extra points where easing happens, to keep the change smooth).
     let eased = |bump: &[Pt], s: f64| -> Vec<Pt> {
         let last_x = bump.last().map_or(0.0, |p| p[0]);
         if ease < 1e-12 || !(s < lo + ease || s + last_x > hi - ease) {
@@ -870,13 +872,13 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
             }
             out.push([xb, yb]);
         }
-        // 折回越过区间端点的圆凸起在端点处是平的：夹在区间内，而不是沿线条越过去
+        // A circle bump that doubles back past the range end is flat at the end: clamp it into the range instead of letting it run on past along the line
         out.iter()
             .map(|p| [py_min(py_max(p[0], lo - s), hi - s), p[1] * grow(s + p[0])])
             .collect()
     };
 
-    // 需要逐个算的点（每个凸起没几个）按原样加入；凸起上大量的点先记成块，最后按整组数组算。
+    // Points that must be computed one by one (few per bump) are added as they are; the many points on a bump are registered as blocks and computed as whole arrays at the end.
     let mut out = Out::new();
     let first_start = starts[0];
     if first_start > 1e-9 {
@@ -885,9 +887,9 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
         out.add(&head);
     }
     if length < 1e-12 {
-        // 尖刺：每个凸起只是一个被推向一侧的点，从一个直接到下一个
+        // spikes: each bump is just one point pushed to one side, straight from one to the next
         if out.n == 0 && !fit_loop {
-            // （绕闭合环时只在尖刺之间走，首 = 尾）
+            // (around a closed loop it only travels between spikes, first = last)
             let p0 = w.pts[0];
             out.add(&[p0]);
         }
@@ -955,15 +957,15 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 w.total
             };
             if e - s < 1e-9 {
-                // 没地方了（它正好从区间终点开始），或者长度为 0
+                // no room left (it starts exactly at the range end), or the length is 0
                 let at = w.at(s);
                 out.add(&[at]);
                 let tail = base(e, nxt);
                 out.add(&tail);
                 continue;
             }
-            // 只在下个凸起或区间终点挡路的地方截断：比自身一半长度还高的圆凸起会鼓过自己的
-            // 端点，有地方时那部分要留着
+            // Only cut where the next bump or the range end is in the way: a circle bump taller than half its own
+            // length bulges past its own end, and that part is kept when there is room
             let bump = match &shape {
                 Some(tpl) => cut(tpl, room - s),
                 None => {
@@ -990,7 +992,7 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 bump
             };
             if tm.wrap == TumourWrap::Simple {
-                // 从起点到终点的直线段上
+                // on the straight segment from start to end
                 let a = w.at(s);
                 let b = w.at(e);
                 let (mut ux, mut uy) = (b[0] - a[0], b[1] - a[1]);
@@ -1012,8 +1014,8 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 any_bump = true;
                 out.block(bump.len());
             } else {
-                // 随线条弯曲：每个点从它在线上所在的位置向侧面偏移，线条拐弯和长边处补点，
-                // 让凸起跟着线条的形状走
+                // follows the line's curve: each point offsets sideways from where it sits on the line, with extra points at bends and along long edges,
+                // so the bump follows the line's shape
                 let x0 = s + bump.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
                 let x1 = s + bump.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
                 let mut xs: Vec<f64> = Vec::new();
@@ -1025,14 +1027,14 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                     }
                 }
                 if tm.shape != TumourShape::Circle {
-                    // （圆的轮廓本来就已经每 10° 一个点）
+                    // (the circle outline already has a point every 10°)
                     for j in 0..=16 {
                         xs.push((e - s) * j as f64 / 16.0);
                     }
                 }
                 let eb = eased(&bump, s);
                 if needs_easing(&bump, s) {
-                    // （缓动加出来的点，让凸起平滑地长大）
+                    // (the points easing added, so the bump grows smoothly)
                     for p in &eb {
                         xs.push(p[0]);
                     }
@@ -1092,7 +1094,7 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                     }
                     let mut d = s + x;
                     if w.closed {
-                        // 圆凸起鼓过闭合环的起点 / 终点：绕着环走
+                        // a circle bump bulging past the start / end of a closed loop: travel round the loop
                         d = py_mod(d, w.total);
                     }
                     ys.push(y);
@@ -1105,7 +1107,7 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 for (i, q) in par_wrap.iter().enumerate() {
                     let side = q[1];
                     let y = ys[i];
-                    let over = ds[i] - dcs[i]; // 越出线条起点 / 终点：顺着那里的方向直着走
+                    let over = ds[i] - dcs[i]; // past the line's start / end: go straight on in the direction there
                     let nx = -uys[i];
                     let ny = uxs[i];
                     let px = pxs[i] + ny * over;

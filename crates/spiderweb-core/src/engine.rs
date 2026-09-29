@@ -1,9 +1,9 @@
-//! engine：形状汇总成音符、重叠处理与通道分配（Python notes/engine.py 的逐函数移植）。
+//! engine: assembling shapes into notes, overlap handling and channel assignment (a function-by-function port of Python notes/engine.py).
 //!
-//! 形状字典在 Rust 里就是 [`Shape`]；`shape_notes` 把任意形状变成音符行，
-//! `assign_slots` / `resolve_overlaps` / `render` 负责多形状时的通道与重叠。
-//! Python 版里的路径缓存（_cached / cached_strokes / cached_arrays / cached_path）
-//! 只是加速用的缓存，这里不实现（结果不变）。
+//! The shape dictionary in Rust is [`Shape`]; `shape_notes` turns any shape into note rows,
+//! `assign_slots` / `resolve_overlaps` / `render` handle channels and overlaps for multiple shapes.
+//! The path caches in the Python version (_cached / cached_strokes / cached_arrays / cached_path)
+//! are only there for speed and are not implemented here (the result is unchanged).
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +19,7 @@ use crate::smooth::smooth_path;
 use crate::tumour::tumour_path;
 use crate::{Note4, Note6, Pt, round_half_even, round_i64};
 
-/// kind → 显示名（engine.KINDS）。
+/// kind -> display name (engine.KINDS).
 pub const KINDS: [(Kind, &str); 7] = [
     (Kind::Line, "Line"),
     (Kind::Poly, "Polyline"),
@@ -30,7 +30,7 @@ pub const KINDS: [(Kind, &str); 7] = [
     (Kind::Funnel, "Funnel"),
 ];
 
-/// line / arc / funnel 的固定点名字（engine.POINT_NAMES）。
+/// Fixed point names for line / arc / funnel (engine.POINT_NAMES).
 pub const POINT_NAMES: [(Kind, &[&str]); 3] = [
     (Kind::Line, &["A", "B"]),
     (Kind::Arc, &["Start", "Through", "End"]),
@@ -40,7 +40,7 @@ pub const POINT_NAMES: [(Kind, &[&str]); 3] = [
     ),
 ];
 
-/// 新形状的默认速度与尾点（engine.SHAPE_DEFAULTS 的值）。
+/// Default velocity and tail dot for new shapes (the values of engine.SHAPE_DEFAULTS).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeDefaults {
     pub vel0: f64,
@@ -55,10 +55,10 @@ pub const SHAPE_DEFAULTS: ShapeDefaults = ShapeDefaults {
     end_dot: false,
 };
 
-/// 除 10（鼓）以外的所有 MIDI 通道；每个 slot 一条轨道（engine.CHANNELS）。
+/// All MIDI channels except 10 (drums); one track per slot (engine.CHANNELS).
 pub const CHANNELS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
 
-/// 面板点框的名字；没有点框的形状（折线 / 自由笔 / 自定义）为 None（engine.point_names）。
+/// Names for the panel's point boxes; None for shapes without point boxes (polyline / freehand / custom) (engine.point_names).
 pub fn point_names(sh: &Shape) -> Option<Vec<String>> {
     if sh.kind == Kind::Curve {
         let pts = &sh.pts;
@@ -103,10 +103,10 @@ pub fn point_names(sh: &Shape) -> Option<Vec<String>> {
         .map(|(_, names)| names.iter().map(|s| s.to_string()).collect())
 }
 
-// ---------------------------------------------------------------- 形状
+// ---------------------------------------------------------------- shapes
 
-/// 用 defaults 的设置造一个 kind 形状（engine.make_shape）。line / funnel 只留首尾点；
-/// curve 生成一条温和的 S 曲线；funnel 的 starts 从空开始（先画线、再画墙、再加曲线）。
+/// Build a kind shape with defaults' settings (engine.make_shape). line / funnel keep only the first
+/// and last points; curve generates a gentle S curve; funnel's starts begin empty (draw the line first, then the walls, then add curves).
 pub fn make_shape(kind: Kind, pts: &[Pt], defaults: &Shape) -> Shape {
     let mut sh = defaults.clone();
     sh.kind = kind;
@@ -136,7 +136,7 @@ pub fn make_shape(kind: Kind, pts: &[Pt], defaults: &Shape) -> Shape {
     sh
 }
 
-/// 形状为一条折线点列（自定义形状：所有笔画首尾接起来）（engine.shape_path）。
+/// The shape as one polyline point list (custom shapes: all strokes joined end to end) (engine.shape_path).
 pub fn shape_path(sh: &Shape) -> Vec<Pt> {
     if matches!(sh.kind, Kind::Custom | Kind::Funnel) {
         return shape_strokes(sh).into_iter().flatten().collect();
@@ -145,7 +145,7 @@ pub fn shape_path(sh: &Shape) -> Vec<Pt> {
     match sh.kind {
         Kind::Curve => pts = bezier::sample(&pts, 240),
         Kind::Arc => pts = arc::arc_points(&pts, sh.k, arc::STEP),
-        // 画整齐的 / 完美的形状（画下的点还留着）
+        // Straightened / perfect shapes (the drawn points are still kept)
         Kind::Free if sh.smooth != 0 => pts = smooth_path(&pts, sh.smooth as f64, sh.k),
         _ => {}
     }
@@ -168,12 +168,12 @@ pub fn shape_strokes(sh: &Shape) -> Vec<Vec<Pt>> {
     }
 }
 
-// ---------------------------------------------------------------- 音符
+// ---------------------------------------------------------------- notes
 
-/// a 里重复出现的行只留第一次（顺序保持）（engine.unique_rows）。
+/// Of repeated rows in a keep only the first (order preserved) (engine.unique_rows).
 ///
-/// NumPy 的 lexsort 是稳定排序，所以首次出现的行就是每组里的第一行；
-/// `new.all()` 时原样返回，否则按首次出现的原下标排序返回。
+/// NumPy's lexsort is a stable sort, so the first occurrence is the first row in each group;
+/// when `new.all()` return as is, otherwise return sorted by the original index of first occurrence.
 pub fn unique_rows<T: Ord + Clone>(rows: &[T]) -> Vec<T> {
     if rows.len() < 2 {
         return rows.to_vec();
@@ -195,29 +195,29 @@ pub fn unique_rows<T: Ord + Clone>(rows: &[T]) -> Vec<T> {
     firsts.into_iter().map(|i| rows[i].clone()).collect()
 }
 
-/// 一个形状的音符 (start, end, pitch, velocity)，tick；keys 是工程的按键范围
-/// （音符在 0..keys）（engine.shape_notes）。
+/// One shape's notes (start, end, pitch, velocity), ticks; keys is the project's key range
+/// (notes are in 0..keys) (engine.shape_notes).
 pub fn shape_notes(sh: &Shape, ppq: f64, keys: i64) -> Vec<Note4> {
     shape_notes_tracks(sh, ppq, keys).0
 }
 
-/// [`shape_notes`] 的默认 128 键便捷包装（原版 keys=128）。
+/// Convenience wrapper for [`shape_notes`] with the default 128 keys (the original keys=128).
 pub fn shape_notes_default(sh: &Shape, ppq: f64) -> Vec<Note4> {
     shape_notes(sh, ppq, crate::paths::KEYS[0])
 }
 
-/// shape_notes；粘贴的音符额外返回每条音符来自哪条轨道（每行一个数，其它形状 None）
-/// （engine.shape_notes_tracks）。
+/// shape_notes; for pasted notes it additionally returns which track each note came from (one number
+/// per row, None for other shapes) (engine.shape_notes_tracks).
 pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Option<Vec<i64>>) {
     let end_dot = sh.end_dot;
-    // 画线用的是同一批点；dedupe 也跨笔画边界去掉重复点
+    // Drawing uses the same batch of points; dedupe also drops duplicates across stroke boundaries
     let strokes = shape_strokes(sh);
     let mut path: Vec<Pt> = dedupe(&strokes.iter().flatten().copied().collect::<Vec<Pt>>());
     if path.is_empty() {
         return (Vec::new(), None);
     }
     if path[path.len() - 1][0] < path[0][0] {
-        // 从右往左画的：把"最后一点"当成时间上更晚的那端，与从左往右一致
+        // Drawn right to left: treat the "last point" as the later end in time, consistent with left to right
         path.reverse();
     }
     for p in &mut path {
@@ -281,7 +281,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
             .map(|(r, _)| r)
             .collect();
         if sh.own_vel {
-            // （同一条音符在两条轨道里就留两条：它们可以分到不同通道）
+            // (the same note in two tracks stays twice: they can be assigned different channels)
             let rows: Vec<[i64; 5]> = raw
                 .iter()
                 .zip(own.iter())
@@ -321,7 +321,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
         raw = unique_rows(&raw);
     }
     let vel: Vec<i64> = if env.iter().all(|p| p[1] == env[0][1]) {
-        // 哪都一样的速度
+        // the same velocity everywhere
         vec![round_i64(env[0][1]).clamp(1, 127); raw.len()]
     } else {
         let frac: Vec<f64> = if t_hi > t_lo {
@@ -331,7 +331,7 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
         } else {
             vec![0.0; raw.len()]
         };
-        // （rounds halves to even，和 round 一样）
+        // (rounds halves to even, same as round)
         env_values(&env, &frac)
             .iter()
             .map(|&v| round_half_even(v).clamp(1.0, 127.0) as i64)
@@ -345,24 +345,24 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
     (notes, tracks)
 }
 
-/// [`shape_notes_tracks`] 的默认 128 键便捷包装（原版 keys=128）。
+/// Convenience wrapper for [`shape_notes_tracks`] with the default 128 keys (the original keys=128).
 pub fn shape_notes_tracks_default(sh: &Shape, ppq: f64) -> (Vec<Note4>, Option<Vec<i64>>) {
     shape_notes_tracks(sh, ppq, crate::paths::KEYS[0])
 }
 
-// ---------------------------------------------------------------- 重叠与通道
+// ---------------------------------------------------------------- overlaps and channels
 
-/// 通道拆分方式（engine.assign_slots 的 split）。
+/// Channel split mode (the split of engine.assign_slots).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Split {
-    /// 只有同一时间同一 key 的音符算冲突。
+    /// Only notes with the same time and key count as a clash.
     Key,
-    /// 同一时间响的音符都算冲突，不管 key。
+    /// Any notes sounding at the same time count as a clash, regardless of key.
     Time,
 }
 
-/// 每个位置到目前（含）为止本组最大的值，换组重新开始；groups 已排好序、同组连在一起
-/// （engine.running_max）。
+/// The group's maximum so far (inclusive) at each position, restarting on a new group; groups are
+/// already sorted with equal groups adjacent (engine.running_max).
 pub fn running_max(values: &[i64], groups: &[i64]) -> Vec<i64> {
     let mut out = vec![0i64; values.len()];
     for i in 0..values.len() {
@@ -375,9 +375,10 @@ pub fn running_max(values: &[i64], groups: &[i64]) -> Vec<i64> {
     out
 }
 
-/// 自动通道：音符重叠的形状分到不同的 slot，不冲突的复用最小的空 slot；越早的形状 slot 越小
-/// （engine.assign_slots）。每个形状同 key 背靠背的音符先并成一段（spam 连成一片 = 一段），
-/// 任何与这段长度重叠的都和它其中一条音符重叠；没有长度的音符各自算。
+/// Auto channels: shapes with overlapping notes get different slots, non-clashing ones reuse the
+/// smallest free slot; earlier shapes get smaller slots (engine.assign_slots). Back-to-back notes of
+/// a shape with the same key are first merged into one span (spam joined into a run = one span);
+/// anything overlapping that span overlaps one of its notes; zero-length notes count individually.
 ///
 /// `apart`: groups of note list numbers that always get different slots (a custom shape's outline
 /// and inside, or convert.py's per-source groups).
@@ -476,15 +477,16 @@ pub fn assign_slots(note_lists: &[Vec<Note4>], split: Split, apart: &[Vec<usize>
     slots
 }
 
-/// 同一 pitch、同一 slot 里重叠的音符：早的一条在后一条开始的地方被切掉，后一条拉伸到早的
-/// 本来会结束的地方（如果更远的话）。同一 tick 开始的音符并成一条：力度最大的赢、留最长的
-/// 长度。notes：(start, end, pitch, velocity, slot, owner) 行；返回修好的行，按 slot + key
-/// 分组（组按第一次出现的顺序），组内排好序（engine.resolve_overlaps）。
+/// Overlapping notes at the same pitch and slot: the earlier one is cut where the later one starts,
+/// and the later one is stretched to where the earlier would have ended (if farther). Notes starting
+/// at the same tick merge into one: the highest velocity wins and keeps the longest length.
+/// notes: (start, end, pitch, velocity, slot, owner) rows; returns the fixed rows grouped by
+/// slot + key (groups in order of first appearance), sorted within a group (engine.resolve_overlaps).
 pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     if notes.is_empty() {
         return Vec::new();
     }
-    // 键 = slot * 256 + pitch（256 键：slot 之间不会撞）；组号按在输入里第一次出现的顺序编
+    // key = slot * 256 + pitch (256 keys, so slots never collide); group numbers follow first appearance in the input
     let mut group_of_key: HashMap<i64, usize> = HashMap::new();
     let mut group: Vec<usize> = Vec::with_capacity(notes.len());
     for r in notes {
@@ -492,7 +494,7 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
         let next = group_of_key.len();
         group.push(*group_of_key.entry(key).or_insert(next));
     }
-    // 同一 start：力度大的排在后面，留的就是它
+    // Same start: the higher velocity sorts last, so that is the one kept
     let mut order: Vec<usize> = (0..notes.len()).collect();
     order.sort_by(|&i, &j| {
         group[i]
@@ -506,7 +508,7 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     let s: Vec<i64> = a.iter().map(|r| r[0]).collect();
     let e: Vec<i64> = a.iter().map(|r| r[1]).collect();
     let groups: Vec<i64> = group.iter().map(|&g| g as i64).collect();
-    // 本组里前面所有音符响到哪
+    // Where all earlier notes in the group ring until
     let run = running_max(&e, &groups);
     let mut same = vec![false; a.len()];
     for i in 1..a.len() {
@@ -521,12 +523,12 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     for i in 0..a.len() {
         if over[i] {
             let before = if i > 0 { run[i - 1] } else { 0 };
-            end[i] = end[i].max(before); // 拉伸到本来会结束的地方
+            end[i] = end[i].max(before); // stretched to where it would have ended
         }
     }
     for i in 0..a.len().saturating_sub(1) {
         if over[i + 1] {
-            end[i] = s[i + 1]; // 前一条在这里被切掉
+            end[i] = s[i + 1]; // the earlier one is cut here
         }
     }
     let mut last = vec![true; a.len()];
@@ -544,24 +546,24 @@ pub fn resolve_overlaps(notes: &[Note6]) -> Vec<Note6> {
     out
 }
 
-/// 通道模式（engine.CHANNEL_MODES）。
+/// Channel mode (engine.CHANNEL_MODES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// 一条通道，音符保持原样（允许重叠）。
+    /// One channel, notes stay as they are (overlaps allowed).
     Raw,
-    /// 一条通道，修好重叠。
+    /// One channel, overlaps fixed.
     Single,
-    /// 重叠的形状各得一条通道。
+    /// Overlapping shapes each get a channel.
     Auto,
 }
 
-/// 每个形状的 slot 分配结果：整条形状一个 slot，或每条音符一个 slot。
+/// Slot assignment per shape: one slot for the whole shape, or one slot per note.
 enum SlotMap {
     One(usize),
     Each(Vec<usize>),
 }
 
-/// 一组形状的音符 ->（最终音符, 用掉的 slot 数）（engine.render）。
+/// Notes of a group of shapes -> (final notes, number of slots used) (engine.render).
 ///
 /// note_lists: every shape's shape_notes result. mode: see [`Mode`]. tracks: per shape None, or the
 /// track of each of its notes (pasted notes and convert.py's groups, shape_notes_tracks): with
@@ -579,7 +581,7 @@ pub fn render(
     let no_apart: Vec<bool> = Vec::new();
     let apart = apart.unwrap_or(&no_apart);
     let (slot_of, count) = if mode == Mode::Auto {
-        // 形状、按轨道拆开的粘贴音符；unit_of = 每条音符的 unit
+        // shapes, and pasted notes split by track; unit_of = each note's unit
         let mut units: Vec<Vec<Note4>> = Vec::new();
         let mut unit_of: Vec<SlotMap> = Vec::new();
         let mut forced: Vec<Vec<usize>> = Vec::new();
@@ -587,7 +589,7 @@ pub fn render(
             let tr = tracks.get(o).and_then(|t| t.as_ref());
             match tr {
                 Some(tr) if !lst.is_empty() => {
-                    // np.unique：ids 升序，which = 每条音符的轨道在 ids 里的下标
+                    // np.unique: ids ascending, which = index of each note's track in ids
                     let mut ids: Vec<i64> = tr.clone();
                     ids.sort_unstable();
                     ids.dedup();
@@ -651,7 +653,7 @@ pub fn render(
     (notes, count)
 }
 
-/// slot 号 ->（轨道号, MIDI 通道 0-15），每条轨道一个通道，跳过鼓通道（engine.slot_track_channel）。
+/// Slot number -> (track number, MIDI channel 0-15), one channel per track, skipping the drum channel (engine.slot_track_channel).
 pub fn slot_track_channel(slot: usize) -> (usize, u8) {
     (slot, CHANNELS[slot % CHANNELS.len()])
 }

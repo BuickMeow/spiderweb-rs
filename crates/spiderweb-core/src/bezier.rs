@@ -1,9 +1,9 @@
-//! 贝塞尔曲线：带锚点与手柄的曲线（钢笔工具），对应 Python notes/bezier.py 的逐函数移植：
-//! 采样、增删锚点、钢笔编辑、对称曲线，以及在容差内用尽量少的锚点拟合点列。
+//! Bezier curves: curves with anchors and handles (the pen tool), a function-by-function port of Python notes/bezier.py:
+//! sampling, adding / removing anchors, pen editing, symmetric curves, and fitting a point list with as few anchors as possible within a tolerance.
 //!
-//! 曲线是一个扁平点列 `[anchor, handle, handle, anchor, handle, handle, anchor, ...]`：
-//! 每第三个点（0, 3, 6, ...）是曲线经过的锚点，两个锚点之间是两个手柄：
-//! 前一个锚点的出手柄与后一个锚点的入手柄。
+//! A curve is a flat point list `[anchor, handle, handle, anchor, handle, handle, anchor, ...]`:
+//! every third point (0, 3, 6, ...) is an anchor the curve passes through, and between two anchors are two handles:
+//! the outgoing handle of the previous anchor and the incoming handle of the next anchor.
 
 use std::collections::BTreeSet;
 
@@ -31,13 +31,13 @@ impl Curve {
         }
     }
 
-    /// 锚点数。
+    /// Number of anchors.
     pub fn anchor_count(&self) -> usize {
         anchor_count(&self.pts)
     }
 }
 
-/// 锚点数：点列长度决定（对应 Python `anchor_count`）。
+/// Number of anchors: decided by the point list length (corresponds to Python `anchor_count`).
 pub fn anchor_count(pts: &[Pt]) -> usize {
     if pts.is_empty() {
         0
@@ -46,7 +46,7 @@ pub fn anchor_count(pts: &[Pt]) -> usize {
     }
 }
 
-/// 一段三次贝塞尔上的点。
+/// A point on one cubic Bezier segment.
 pub fn seg_point(p0: Pt, p1: Pt, p2: Pt, p3: Pt, t: f64) -> Pt {
     let mt = 1.0 - t;
     let (a, b, c, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
@@ -56,7 +56,7 @@ pub fn seg_point(p0: Pt, p1: Pt, p2: Pt, p3: Pt, t: f64) -> Pt {
     ]
 }
 
-/// 每段的 4 个点（对应 Python `segments`）。
+/// The 4 points of each segment (corresponds to Python `segments`).
 pub fn segments(pts: &[Pt]) -> Vec<[Pt; 4]> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -67,7 +67,7 @@ pub fn segments(pts: &[Pt]) -> Vec<[Pt; 4]> {
     out
 }
 
-/// 曲线上的采样点，每段 `n` 个（对应 Python `sample`，默认 n=48）。
+/// Sample points on the curve, `n` per segment (corresponds to Python `sample`, default n=48).
 pub fn sample(pts: &[Pt], n: usize) -> Vec<Pt> {
     let mut out = Vec::new();
     if pts.is_empty() {
@@ -92,7 +92,7 @@ fn lerp(a: Pt, b: Pt, t: f64) -> Pt {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
 }
 
-/// 在第 s 段的 t（0..1）处加一个锚点；曲线形状完全不变（对应 Python `split`）。
+/// Add an anchor at t (0..1) on segment s; the curve shape stays exactly the same (corresponds to Python `split`).
 pub fn split(pts: &[Pt], s: usize, t: f64) -> Vec<Pt> {
     let i = 3 * s;
     let Some(seg) = pts.get(i..i + 4) else {
@@ -111,11 +111,11 @@ pub fn split(pts: &[Pt], s: usize, t: f64) -> Vec<Pt> {
     out
 }
 
-/// 去掉锚点 a（不是首尾）及其两个手柄（对应 Python `remove_anchor`）。
+/// Remove anchor a (not the first or last) and its two handles (corresponds to Python `remove_anchor`).
 pub fn remove_anchor(pts: &[Pt], a: usize) -> Vec<Pt> {
     let i = 3 * a;
     if i == 0 {
-        // Python 对 a=0 的切片行为（调用方不会这样用）
+        // Python's slicing behaviour for a=0 (callers do not use it this way)
         if pts.len() < 2 {
             return pts.to_vec();
         }
@@ -128,17 +128,17 @@ pub fn remove_anchor(pts: &[Pt], a: usize) -> Vec<Pt> {
     out
 }
 
-/// 手柄点所属的锚点（1 -> 0, 2 -> 3, 4 -> 3, ...）。
+/// The anchor a handle point belongs to (1 -> 0, 2 -> 3, 4 -> 3, ...).
 pub fn handle_anchor(i: usize) -> usize {
     if i % 3 == 1 { i - 1 } else { i + 1 }
 }
 
-// ---------------------------------------------------------------- 对称曲线
-// 对称曲线有奇数个锚点：中间那个位于对称线（或点）上，一半的第 i 点与另一半的 len-1-i 点配对。
-// "turn"：另一半是这一半绕两端中点转半圈（S 形）；"mirror"：隔着过中点的线镜像（拱形）。
-// 镜线沿 `axis`：0 = 时间方向，1 = 音高方向；None = 垂直于两端连线，精确镜像。
+// ---------------------------------------------------------------- symmetric curves
+// A symmetric curve has an odd number of anchors: the middle one lies on the mirror line (or point), and point i of one half pairs with point len-1-i of the other half.
+// "turn": the other half is this half rotated half a turn about the midpoint of the ends (S shape); "mirror": mirrored across the line through the midpoint (arch shape).
+// The mirror line runs along `axis`: 0 = time direction, 1 = pitch direction; None = perpendicular to the line between the ends, exact mirror.
 
-/// 对称变换（对应 Python `Symmetry`）。
+/// Symmetry transform (corresponds to Python `Symmetry`).
 #[derive(Clone, Debug)]
 pub struct Symmetry {
     pub mode: Sym,
@@ -150,7 +150,7 @@ pub struct Symmetry {
 }
 
 impl Symmetry {
-    /// 由曲线的首尾点构造；`axis` = Some(0) / Some(1) / None。点数不足 2 时返回 None。
+    /// Built from the curve's first and last points; `axis` = Some(0) / Some(1) / None. None when there are fewer than 2 points.
     pub fn new(pts: &[Pt], mode: Sym, axis: Option<u8>) -> Option<Self> {
         if pts.len() < 2 {
             return None;
@@ -179,7 +179,7 @@ impl Symmetry {
         })
     }
 
-    /// v = alpha * d + beta * w（w 沿镜线）。
+    /// v = alpha * d + beta * w (w runs along the mirror line).
     pub fn split(&self, v: Pt) -> (f64, f64) {
         let (d, w) = (self.d, self.w);
         (
@@ -196,7 +196,7 @@ impl Symmetry {
         ]
     }
 
-    /// p 的对称点。
+    /// The mirror point of p.
     pub fn reflect(&self, p: Pt) -> Pt {
         let m = self.m;
         if self.mode == Sym::Turn {
@@ -207,7 +207,7 @@ impl Symmetry {
         [m[0] + v[0], m[1] + v[1]]
     }
 
-    /// 中间锚点的最近落点：中点（turn）或镜线上。
+    /// Nearest landing spot for the middle anchor: the midpoint (turn) or the mirror line.
     pub fn onto_line(&self, p: Pt) -> Pt {
         if self.mode == Sym::Turn {
             return self.m;
@@ -217,7 +217,7 @@ impl Symmetry {
         [self.m[0] + v[0], self.m[1] + v[1]]
     }
 
-    /// 镜像曲线平滑中间锚点的手柄：沿两端方向（拱顶是圆的），保留往那个方向伸出的长度。
+    /// Handle of the middle anchor on a smoothed mirror curve: along the end direction (the arch top is round), keeping the length it reached in that direction.
     pub fn flat(&self, anchor: Pt, h: Pt) -> Pt {
         let (alpha, _) = self.split([h[0] - anchor[0], h[1] - anchor[1]]);
         let v = self.join(alpha, 0.0);
@@ -225,8 +225,8 @@ impl Symmetry {
     }
 }
 
-/// 把一半（source 0 = 从前半，1 = 从后半）复制到另一半，返回 (pts, sharp)。
-/// 需要奇数个锚点（见 `make_symmetric`）；两端保持不动。
+/// Copy one half (source 0 = from the first half, 1 = from the second half) to the other half,
+/// returning (pts, sharp). Requires an odd number of anchors (see `make_symmetric`); the two ends stay put.
 pub fn symmetric(
     pts: &[Pt],
     sharp: &[usize],
@@ -257,7 +257,7 @@ pub fn symmetric(
             pts[n - 1 - i] = sym.reflect(pts[i]);
         }
     }
-    // 中间锚点落到对称线 / 点上，手柄跟着走
+    // The middle anchor lands on the mirror line / point and its handle follows
     let new = sym.onto_line(pts[c]);
     let h = if source == 0 { c - 1 } else { c + 1 };
     let mut hp = [
@@ -286,7 +286,7 @@ pub fn symmetric(
     (pts, out)
 }
 
-/// 同 `symmetric`，先给曲线补一个中间锚点（把中间一段一分为二）。
+/// Same as `symmetric`, but first adds a middle anchor to the curve (splitting the middle segment in two).
 pub fn make_symmetric(
     pts: &[Pt],
     sharp: &[usize],
@@ -309,7 +309,7 @@ pub fn make_symmetric(
     symmetric(&pts, &sharp, mode, axis, source)
 }
 
-// ---------------------------------------------------------------- 钢笔编辑
+// ---------------------------------------------------------------- pen editing
 
 /// Anchor numbers that end a piece: the curve's two ends and the anchors on either side of each gap
 /// (Python `piece_ends`).
@@ -352,7 +352,7 @@ pub fn shift_marks(c: &mut Curve, after: usize, d: i64) {
 }
 
 impl Curve {
-    /// 设置尖角锚点（空则清除）。
+    /// Set the sharp anchors (empty clears them).
     pub fn set_sharp(&mut self, sharp: &[usize]) {
         if sharp.is_empty() {
             self.sharp.clear();
@@ -365,7 +365,7 @@ impl Curve {
     }
 }
 
-/// 镜像曲线的镜线方向：屏幕上看垂直于两端连线（1 = 上下，0 = 左右），exact 时为 None（精确镜像）。
+/// Mirror line direction for a mirrored curve: on screen, perpendicular to the line between the ends (1 = vertical, 0 = horizontal); None when exact (exact mirror).
 pub fn sym_axis(pts: &[Pt], to_screen: &dyn Fn(Pt) -> [f64; 2], exact: bool) -> Option<u8> {
     if exact || pts.is_empty() {
         return None;
@@ -381,7 +381,7 @@ pub fn sym_axis(pts: &[Pt], to_screen: &dyn Fn(Pt) -> [f64; 2], exact: bool) -> 
     })
 }
 
-/// 对称曲线的另一半跟着点 i 所在的一半；是对称曲线时返回 true。
+/// The other half of a symmetric curve follows the half point i is on; returns true when it is a symmetric curve.
 pub fn keep_symmetric(
     c: &mut Curve,
     i: usize,
@@ -405,10 +405,10 @@ pub fn keep_symmetric(
     true
 }
 
-/// 把点 i 拖到 new：
-/// 锚点带着手柄走（alt：从它拉出新的两侧手柄，这一侧对称）；
-/// 手柄点移动，平滑锚点上另一个手柄跟着转以保持平滑，屏幕上保持长度（alt：只动这一个，锚点变尖角）。
-/// 对称曲线的另一半跟着走。
+/// Drag point i to new:
+/// an anchor takes its handles along (alt: pulls out new handles on both sides of it, symmetric on this side);
+/// a handle point moves, and on a smooth anchor the other handle turns to stay smooth, keeping its length on screen (alt: only this one moves, the anchor becomes sharp).
+/// The other half of a symmetric curve follows.
 pub fn drag_point(
     c: &mut Curve,
     i: usize,
@@ -488,7 +488,7 @@ pub fn add_anchor(
     }
     let mut splits = vec![(seg, t)];
     if c.sym.is_some() {
-        // 另一半的同一位置
+        // the same position on the other half
         splits.push((segments(&c.pts).len() - 1 - seg, 1.0 - t));
     }
     let mut at = 3 * (seg + 1);
@@ -497,7 +497,7 @@ pub fn add_anchor(
     }
     let mut pts = c.pts.clone();
     let mut sharp = c.sharp.clone();
-    // 后切的先做，先切的位置才不会被挪动
+    // Cut the later ones first so the earlier cut positions are not shifted
     splits.sort_by(|x, y| y.0.cmp(&x.0).then(y.1.total_cmp(&x.1)));
     for (s, tt) in splits {
         pts = split(&pts, s, tt);
@@ -527,18 +527,18 @@ pub fn add_anchor(
     true
 }
 
-/// 右键点 i 会发生什么。
+/// What happens when point i is right-clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CanDelete {
-    /// 锚点被删掉
+    /// the anchor is removed
     Anchor,
-    /// 手柄被收回锚点
+    /// the handle is retracted into its anchor
     Handle,
-    /// 对称曲线的中间锚点：保留
+    /// the middle anchor of a symmetric curve: kept
     Middle,
 }
 
-/// `None` = 端点及其手柄保留（删了就抓不回来了）。
+/// `None` = the end point and its handle are kept (removing them would make them impossible to grab again).
 pub fn can_delete(c: &Curve, i: usize) -> Option<CanDelete> {
     let n = c.pts.len();
     if i >= n {
@@ -568,7 +568,7 @@ pub fn can_delete(c: &Curve, i: usize) -> Option<CanDelete> {
     }
 }
 
-/// 右键点 i（见 `can_delete`）：中间的锚点被删掉（对称曲线的搭档也删），手柄收回锚点（那里成尖角）。
+/// Right-click point i (see `can_delete`): a middle anchor is removed (its symmetric partner too), a handle is retracted into its anchor (that spot becomes sharp).
 pub fn delete_point(c: &mut Curve, i: usize, to_screen: &dyn Fn(Pt) -> [f64; 2], exact: bool) {
     let Some(what) = can_delete(c, i) else {
         return;
@@ -608,7 +608,7 @@ pub fn delete_point(c: &mut Curve, i: usize, to_screen: &dyn Fn(Pt) -> [f64; 2],
     keep_symmetric(c, i, to_screen, exact);
 }
 
-/// 打开（mode = Mirror / Turn）或关闭（None）对称；`source` 那一半保留形状（0 = 前半，1 = 后半）。
+/// Turn symmetry on (mode = Mirror / Turn) or off (None); the half in `source` keeps its shape (0 = first half, 1 = second half).
 pub fn set_symmetry(
     c: &mut Curve,
     mode: Option<Sym>,
@@ -632,7 +632,7 @@ pub fn set_symmetry(
     c.set_sharp(&sharp);
 }
 
-/// 屏幕上的 (x, y) 离哪一半最近（0 = 前半，1 = 后半）。
+/// Which half is nearest to screen point (x, y) (0 = first half, 1 = second half).
 pub fn half_at(pts: &[Pt], to_screen: &dyn Fn(Pt) -> [f64; 2], x: f64, y: f64) -> usize {
     let segs = segments(pts).len();
     match nearest(pts, to_screen, x, y, 64, &[]) {
@@ -641,14 +641,14 @@ pub fn half_at(pts: &[Pt], to_screen: &dyn Fn(Pt) -> [f64; 2], x: f64, y: f64) -
     }
 }
 
-/// 要显示的点（对应 Python `pen_handles`）。
+/// The points to show (corresponds to Python `pen_handles`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HandleKind {
-    /// 手柄点
+    /// a handle point
     Ctrl,
-    /// 锚点
+    /// an anchor
     Anchor,
-    /// 端点
+    /// an end point
     End,
 }
 
@@ -741,7 +741,7 @@ pub fn nearest(
     best
 }
 
-/// 折线按长度均匀取 n+1 个点（对应 Python `resample`，默认 n=300）。
+/// n+1 points spaced evenly by length along the polyline (corresponds to Python `resample`, default n=300).
 pub fn resample(points: &[Pt], n: usize) -> Vec<Pt> {
     if points.is_empty() {
         return Vec::new();
@@ -769,7 +769,7 @@ pub fn resample(points: &[Pt], n: usize) -> Vec<Pt> {
     out
 }
 
-/// 两条曲线差多少：均匀比较两者后，最大点距（对应 Python `difference`）。
+/// How far apart two curves are: resample both evenly, then take the maximum point distance (corresponds to Python `difference`).
 pub fn difference(pts_a: &[Pt], pts_b: &[Pt]) -> f64 {
     let a = resample(&sample(pts_a, 48), 100);
     let b = resample(&sample(pts_b, 48), 100);
@@ -778,7 +778,7 @@ pub fn difference(pts_a: &[Pt], pts_b: &[Pt]) -> f64 {
         .fold(0.0, |m, (p, q)| m.max(dist(*p, *q)))
 }
 
-// ---------------------------------------------------------------- 拟合（Philip Schneider 算法）
+// ---------------------------------------------------------------- fitting (Philip Schneider's algorithm)
 
 fn unit(v: Pt) -> Pt {
     let d = hypot2(v[0], v[1]);
@@ -793,7 +793,7 @@ fn sub(a: Pt, b: Pt) -> Pt {
     [a[0] - b[0], a[1] - b[1]]
 }
 
-/// 用尽量少的锚点拟合 points，曲线经过首尾且与所有点的距离不超过 tol。
+/// Fit points with as few anchors as possible; the curve passes through the ends and stays within tol of all points.
 pub fn fit(points: &[Pt], tol: f64) -> Vec<Pt> {
     if points.is_empty() {
         return Vec::new();
@@ -877,7 +877,7 @@ fn chord_params(pts: &[Pt]) -> Vec<f64> {
     u.iter().map(|&x| x / total).collect()
 }
 
-/// 沿给定两端方向的最佳手柄（最小二乘）。
+/// The best handles along the given end directions (least squares).
 fn generate(pts: &[Pt], u: &[f64], t_left: Pt, t_right: Pt) -> [Pt; 4] {
     let p0 = pts[0];
     let p3 = pts[pts.len() - 1];
@@ -932,7 +932,7 @@ fn max_error(pts: &[Pt], bez: &[Pt; 4], u: &[f64]) -> (f64, usize) {
     (worst, at)
 }
 
-/// t 移到曲线上离 p 最近的位置附近。
+/// Move t to near the point on the curve nearest to p.
 fn newton(bez: &[Pt; 4], p: Pt, t: f64) -> f64 {
     let q = seg_point(bez[0], bez[1], bez[2], bez[3], t);
     let mt = 1.0 - t;
@@ -955,7 +955,7 @@ fn newton(bez: &[Pt; 4], p: Pt, t: f64) -> f64 {
     if den == 0.0 {
         return t;
     }
-    // Python 的 min(1.0, max(0.0, x))：NaN 时取 0，与 clamp 不同
+    // Python's min(1.0, max(0.0, x)): with NaN it takes 0, unlike clamp
     let x = t - num / den;
     if x > 1.0 {
         1.0

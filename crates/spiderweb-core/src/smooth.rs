@@ -1,33 +1,35 @@
-//! smooth：自由笔的“画整齐”，对应 Python `notes/smooth.py` 的逐函数移植。
+//! smooth: freehand "Straighten", a function-by-function port of Python `notes/smooth.py`.
 //!
-//! 一段抖动的笔迹在灵敏度（0-100）下变得笔直、平滑；首尾相接的笔画还会
-//! 变成完美图形：圆 / 椭圆、正方形 / 矩形、或直边多边形（三角形、五边形、
-//! 六边形）。灵敏度决定结果最多能偏离原画多远（其大小的五分之一以内），
-//! 容差内越简单的形状越优先，所以调高会越来越简单：略椭的环先变成椭圆、
-//! 再变成圆；矩形变成正方形。环保持自己的类别（方不会变成圆），倾斜也
-//! 保留（不会摆正）。只保存设置，笔画随时可以回到原样（0 = 原样）。
+//! At a given sensitivity (0-100) a shaky stroke becomes straight and smooth; a stroke whose
+//! ends meet also becomes a perfect shape: circle / ellipse, square / rectangle, or a
+//! straight-edged polygon (triangle, pentagon, hexagon). The sensitivity decides how far the
+//! result may stray from the original drawing (within one fifth of its size); within the
+//! tolerance simpler shapes win, so raising it makes the result simpler and simpler: a slightly
+//! oval loop becomes an ellipse, then a circle; a rectangle becomes a square. A loop keeps its
+//! category (a box does not become a circle), and tilt is kept too (it is not straightened up).
+//! Only the setting is stored, so the stroke can return to the original at any time (0 = as drawn).
 
 use crate::bezier::{fit, seg_point, segments};
 use crate::{Pt, dist, hypot2, round_half_even, round_i64};
 
-/// 默认灵敏度。
+/// Default sensitivity.
 pub const SMOOTH_DEFAULT: i64 = 0;
-/// 一短段内转角超过它就算拐角（对应 Python `math.radians(40)`）。
+/// A turn greater than this within a short span counts as a corner (as in Python `math.radians(40)`).
 pub const CORNER: f64 = 40.0 * (std::f64::consts::PI / 180.0);
-/// 拐角多于它的环不再是图形，只剩直线和曲线。
+/// A loop with more corners than this is no longer a shape; only lines and curves remain.
 pub const MAX_POLYGON: usize = 6;
-/// 终点离起点这么近（笔画大小的比例）就是闭环。
+/// The end this close to the start (as a fraction of the stroke size) means a closed loop.
 pub const LOOP: f64 = 0.1;
-/// 拟合图形时环上的采样点数。
+/// Number of sample points on the loop when fitting a shape.
 pub const SHAPE_SAMPLES: usize = 120;
-/// 找拐角、拟合直线 / 曲线时笔画上的采样点数。
+/// Number of sample points on the stroke when finding corners and fitting lines / curves.
 pub const PIECE_SAMPLES: usize = 600;
-/// 每多一个拐角 / 设置允许差多少（相对环的大小）。
+/// How much extra deviation each additional corner / setting allows (relative to the loop size).
 pub const CORNER_COST: f64 = 0.012;
 
-/// 结果最多能偏离原画多远：大小为笔画包围盒的对角线，灵敏度 0-100。
+/// How far the result may stray from the original drawing: size is the diagonal of the stroke's bounding box, sensitivity is 0-100.
 pub fn tolerance(level: f64, size: f64) -> f64 {
-    // Python 的 max(0.0, min(100.0, level))：NaN 时 min 取 100
+    // Python's max(0.0, min(100.0, level)): with NaN, min picks 100
     let capped = if level.is_nan() {
         100.0
     } else {
@@ -36,7 +38,7 @@ pub fn tolerance(level: f64, size: f64) -> f64 {
     0.2 * size * (capped / 100.0).powf(2.5)
 }
 
-/// 灵敏度设置清洗：四舍五入后夹到 0-100；NaN（Python 里非数值输入的回退）用默认值。
+/// Sanitise a sensitivity setting: round then clamp to 0-100; NaN (the fallback for non-numeric input in Python) uses the default.
 pub fn clean_level(value: f64) -> i64 {
     if value.is_nan() {
         return SMOOTH_DEFAULT;
@@ -44,7 +46,7 @@ pub fn clean_level(value: f64) -> i64 {
     (round_half_even(value) as i64).clamp(0, 100)
 }
 
-/// 把笔画（x, y 点列）按灵敏度画整齐（见模块说明）；0 = 原样。
+/// Straighten a stroke (a list of x, y points) at the given sensitivity (see the module docs); 0 = as drawn.
 pub fn smooth_path(pts: &[Pt], level: f64, k: f64) -> Vec<Pt> {
     if level <= 0.0 || pts.len() < 3 || k <= 0.0 {
         return pts.to_vec();
@@ -78,9 +80,9 @@ pub fn smooth_path(pts: &[Pt], level: f64, k: f64) -> Vec<Pt> {
     out.iter().map(|p| [p[0] * k, p[1]]).collect()
 }
 
-// ---------------------------------------------------------------- 完美图形（闭环）
+// ---------------------------------------------------------------- perfect shapes (closed loops)
 
-/// 环的类别：圆的（圆 / 椭圆）、四角的（方 / 矩形）、或别的多边形。
+/// Category of a loop: round (circle / ellipse), boxy (square / rectangle), or another polygon.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShapeKind {
     Round,
@@ -88,8 +90,8 @@ enum ShapeKind {
     Polygon(usize),
 }
 
-/// 环的形状阶梯 `[(图形, 偏离多少)]`：最简的在前，都是环的那一类。类别由
-/// 拟合最好的决定，每多一个拐角或设置差一点。与灵敏度无关。
+/// Shape ladder of a loop `[(shape, deviation)]`: simplest first, all of the loop's category. The
+/// category is decided by the best fit, and each extra corner or setting costs a little. Independent of sensitivity.
 fn shape_ladder(q: &[Pt]) -> Vec<(Vec<Pt>, f64)> {
     let mut closed = q.to_vec();
     closed.push(q[0]);
@@ -157,14 +159,14 @@ fn shape_ladder(q: &[Pt]) -> Vec<(Vec<Pt>, f64)> {
         .collect()
 }
 
-/// 圆：中心取环的平均，半径取各点到中心距离的平均。
+/// Circle: centre is the loop's mean, radius is the mean distance from the points to the centre.
 fn circle(r: &[Pt]) -> Vec<Pt> {
     let c = mean(r);
     let rad = r.iter().map(|p| dist(*p, c)).sum::<f64>() / r.len() as f64;
     ellipse_points(c[0], c[1], rad, rad, 0.0)
 }
 
-/// 倾斜的椭圆：轴是环的主方向，缩放得让环平均落在上面。点不够展时返回 None。
+/// Tilted ellipse: its axes follow the loop's principal directions, scaled so the loop fits on average. None when the points are not spread enough.
 fn ellipse(r: &[Pt]) -> Option<Vec<Pt>> {
     let c = mean(r);
     let n = r.len() as f64;
@@ -194,7 +196,7 @@ fn ellipse(r: &[Pt]) -> Option<Vec<Pt>> {
     Some(ellipse_points(c[0], c[1], a * rho, b * rho, angle))
 }
 
-/// 椭圆上的 n 个点，闭合，从最左点开始（和其他闭合图形一样）。
+/// n points on the ellipse, closed, starting at the leftmost point (like the other closed shapes).
 fn ellipse_points(cx: f64, cy: f64, a: f64, b: f64, angle: f64) -> Vec<Pt> {
     let ca = angle.cos();
     let sa = angle.sin();
@@ -211,8 +213,8 @@ fn ellipse_points(cx: f64, cy: f64, a: f64, b: f64, angle: f64) -> Vec<Pt> {
     closed_from_left(&pts)
 }
 
-/// 环的矩形：转成最小包围盒的方向，每边取附近点的平均。
-/// `(中心, 方向, 半宽, 半高)`，退化时 None。
+/// Rectangle around a loop: rotate into the minimum bounding box direction, each side averaged over nearby points.
+/// `(centre, direction, half width, half height)`, None when degenerate.
 fn box_shape(r: &[Pt]) -> Option<(Pt, Pt, f64, f64)> {
     let hull = hull(r);
     let mut best: Option<(f64, Pt, [f64; 4])> = None;
@@ -249,7 +251,7 @@ fn box_shape(r: &[Pt]) -> Option<(Pt, Pt, f64, f64)> {
     }
     let (_, d, edges) = best?;
     let (ux, uy) = (d[0], d[1]);
-    // 左、右、下、上：各边最近的点
+    // left, right, bottom, top: the points nearest each side
     let mut sides: [Vec<f64>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for p in r {
         let u = p[0] * ux + p[1] * uy;
@@ -285,7 +287,7 @@ fn box_shape(r: &[Pt]) -> Option<(Pt, Pt, f64, f64)> {
     ))
 }
 
-/// 矩形的四个角（闭合，从最左点开始）。
+/// The rectangle's four corners (closed, starting at the leftmost point).
 fn box_points(c: Pt, d: Pt, hw: f64, hh: f64) -> Vec<Pt> {
     let (cx, cy) = (c[0], c[1]);
     let (ux, uy) = (d[0], d[1]);
@@ -302,8 +304,8 @@ fn box_points(c: Pt, d: Pt, hw: f64, hh: f64) -> Vec<Pt> {
     closed_from_left(&pts)
 }
 
-/// 最多 n 个角、最贴合环的多边形：对二分出的容差做 Ramer-Douglas-Peucker，
-/// 保留点数不超过 n 的最紧容差。
+/// The polygon with at most n corners that fits the loop best: Ramer-Douglas-Peucker over a bisected
+/// tolerance, keeping the tightest tolerance whose point count is at most n.
 fn best_polygon(r: &[Pt], n: usize) -> Option<Vec<Pt>> {
     let loop0 = &r[..r.len() - 1];
     let c = mean(loop0);
@@ -313,7 +315,7 @@ fn best_polygon(r: &[Pt], n: usize) -> Option<Vec<Pt>> {
             i = j;
         }
     }
-    // 总从最远的点开始，那里一定是角
+    // Always start from the farthest point; that is certainly a corner
     let mut lp = Vec::with_capacity(loop0.len() + 1);
     lp.extend_from_slice(&loop0[i..]);
     lp.extend_from_slice(&loop0[..i]);
@@ -340,7 +342,7 @@ fn best_polygon(r: &[Pt], n: usize) -> Option<Vec<Pt>> {
     best.map(|b| closed_from_left(&b))
 }
 
-/// 图形离环多远：两个方向（环上最远的点到图形、图形上最远的点到环）。
+/// How far the shape is from the loop, in both directions (the farthest loop point to the shape, and the farthest shape point to the loop).
 fn dev(r: &[Pt], shape: &[Pt]) -> f64 {
     let a = r
         .iter()
@@ -353,7 +355,7 @@ fn dev(r: &[Pt], shape: &[Pt]) -> f64 {
     a.max(b)
 }
 
-/// 闭合图形，从最左（再最下）的点开始，首尾相接。
+/// A closed shape starting at the leftmost (then lowest) point, first and last joined.
 fn closed_from_left(pts: &[Pt]) -> Vec<Pt> {
     let mut left = 0;
     for (i, p) in pts.iter().enumerate().skip(1) {
@@ -368,10 +370,10 @@ fn closed_from_left(pts: &[Pt]) -> Vec<Pt> {
     out
 }
 
-// ---------------------------------------------------------------- 直线和曲线
+// ---------------------------------------------------------------- lines and curves
 
-/// 直线和平滑曲线：在拐角（急转）处切开，每段若贴着一条直线（离它不超过
-/// tol）就是直线，否则在 tol 内拟合成曲线。closed：首尾相接。
+/// Lines and smooth curves: cut at corners (sharp turns); each piece is a straight line if it hugs one
+/// (within tol of it), otherwise it is fitted to a curve within tol. closed: the ends meet.
 fn pieces(q: &[Pt], tol: f64, closed: bool) -> Vec<Pt> {
     let mut qq = q.to_vec();
     if closed && dist(qq[0], qq[qq.len() - 1]) > 1e-12 {
@@ -380,7 +382,7 @@ fn pieces(q: &[Pt], tol: f64, closed: bool) -> Vec<Pt> {
     let mut r = resample(&qq, PIECE_SAMPLES);
     let mut corners = corners(&r, tol, closed);
     if closed && !corners.is_empty() {
-        // 从拐角开始，接回自己时就没有折
+        // Start at a corner so there is no kink where it joins back to itself
         let c = corners[0];
         let mut rotated = Vec::with_capacity(r.len());
         rotated.extend_from_slice(&r[c..]);
@@ -411,7 +413,7 @@ fn pieces(q: &[Pt], tol: f64, closed: bool) -> Vec<Pt> {
             continue;
         }
         for seg in segments(&fit(part, tol)) {
-            // 每个曲线段的点数大致和原笔迹在那里的点数一样
+            // Each curve segment gets roughly as many points as the original stroke had there
             let count = round_i64(path_len(&seg) / (step * 4.0).max(tol));
             let n = count.clamp(2, 24) as usize;
             for i in 1..=n {
@@ -432,8 +434,9 @@ fn pieces(q: &[Pt], tol: f64, closed: bool) -> Vec<Pt> {
     out
 }
 
-/// 路径（等距点列）在哪儿急转：点的编号。判断的跨度随容差变大，比它小的
-/// 抖动不算。拐角在点上完成大半的转弯；平滑的弯（波的顶）是慢慢转的，不算。
+/// Where an (evenly resampled) path turns sharply: the point indices. The span used for the
+/// decision grows with the tolerance; jitter smaller than it does not count. A corner does most of
+/// its turn at one point; a smooth bend (the crest of a wave) turns gradually and does not count.
 fn corners(r: &[Pt], tol: f64, closed: bool) -> Vec<usize> {
     let n = r.len() - 1;
     let d = dist(r[0], r[1]);
@@ -498,9 +501,9 @@ fn corners(r: &[Pt], tol: f64, closed: bool) -> Vec<usize> {
     out
 }
 
-// ---------------------------------------------------------------- 小工具
+// ---------------------------------------------------------------- helpers
 
-/// 去掉和上一个点几乎重合的点（1e-9 以内）。
+/// Drop points that almost coincide with the previous one (within 1e-9).
 fn dedupe(pts: &[Pt]) -> Vec<Pt> {
     let mut out = vec![pts[0]];
     for &p in &pts[1..] {
@@ -511,7 +514,7 @@ fn dedupe(pts: &[Pt]) -> Vec<Pt> {
     out
 }
 
-/// 点列的平均位置。
+/// Mean position of the points.
 fn mean(pts: &[Pt]) -> Pt {
     let n = pts.len() as f64;
     let sx: f64 = pts.iter().map(|p| p[0]).sum();
@@ -519,12 +522,12 @@ fn mean(pts: &[Pt]) -> Pt {
     [sx / n, sy / n]
 }
 
-/// 折线的总长。
+/// Total length of the polyline.
 fn path_len(pts: &[Pt]) -> f64 {
     pts.windows(2).map(|w| dist(w[0], w[1])).sum()
 }
 
-/// 路径上 n + 1 个等距点（含首尾）。
+/// n + 1 evenly spaced points along the path (including both ends).
 fn resample(pts: &[Pt], n: usize) -> Vec<Pt> {
     if pts.is_empty() {
         return Vec::new();
@@ -561,7 +564,7 @@ fn resample(pts: &[Pt], n: usize) -> Vec<Pt> {
     out
 }
 
-/// 点到线段 ab 的距离。
+/// Distance from a point to segment ab.
 fn seg_dist(p: Pt, a: Pt, b: Pt) -> f64 {
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
@@ -574,14 +577,14 @@ fn seg_dist(p: Pt, a: Pt, b: Pt) -> f64 {
     hypot2(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
 }
 
-/// 点到折线（路径）的距离。
+/// Distance from a point to a polyline (path).
 fn dist_to_path(p: Pt, path: &[Pt]) -> f64 {
     path.windows(2)
         .map(|w| seg_dist(p, w[0], w[1]))
         .fold(f64::INFINITY, f64::min)
 }
 
-/// 路径在 b 处转得多急（0 = 直着走，pi = 原路折回）。
+/// How sharply the path turns at b (0 = straight ahead, pi = doubling back).
 fn turn(a: Pt, b: Pt, c: Pt) -> f64 {
     let d1 = [b[0] - a[0], b[1] - a[1]];
     let d2 = [c[0] - b[0], c[1] - b[1]];
@@ -593,12 +596,12 @@ fn turn(a: Pt, b: Pt, c: Pt) -> f64 {
     min_max((d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2), -1.0, 1.0).acos()
 }
 
-/// Python 的 `max(lo, min(hi, x))`：NaN 时按 Python 的比较取 hi。
+/// Python's `max(lo, min(hi, x))`: with NaN, Python's comparison picks hi.
 fn min_max(x: f64, lo: f64, hi: f64) -> f64 {
     if x.is_nan() { hi } else { x.clamp(lo, hi) }
 }
 
-/// Ramer-Douglas-Peucker：让路径保持在 tol 以内的点的编号（首尾总保留）。
+/// Ramer-Douglas-Peucker: indices of the points that keep the path within tol (first and last are always kept).
 fn rdp(pts: &[Pt], tol: f64) -> Vec<usize> {
     let mut keep = vec![false; pts.len()];
     keep[0] = true;
@@ -629,7 +632,7 @@ fn rdp(pts: &[Pt], tol: f64) -> Vec<usize> {
         .collect()
 }
 
-/// 凸包（Andrew 单调链），逆时针。
+/// Convex hull (Andrew's monotone chain), counter-clockwise.
 fn hull(pts: &[Pt]) -> Vec<Pt> {
     let mut sorted = pts.to_vec();
     sorted.sort_by(|a, b| {

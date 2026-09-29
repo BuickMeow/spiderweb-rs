@@ -1,17 +1,17 @@
-//! text：在已安装字体里排版的文字，变成自定义形状的字母轮廓（Python notes/text.py 的逐函数移植）。
+//! text: laying out text in installed fonts and turning it into a custom shape's letter outlines (a function-by-function port of Python notes/text.py).
 //!
-//! 文本形状是一个自定义形状，`sh.text` 存设置（TEXT_DEFAULTS 加 text / bbox / cap / k / holes）。
-//! 字母在 em 单位里排版（fonts：1.0 = 字号，y 从第一行基线向上）；bbox = 轮廓在 em 单位里的范围，
-//! `sh.pts`（自定义形状的框）说明这个 bbox 在卷轴上的位置。于是 em 单位 → 拍 / 音高由形状自己决定
-//! （text_axes），重新输入或改设置时，文本留在原处，不管它被怎么移动、缩放、旋转或斜切。
+//! A text shape is a custom shape; `sh.text` stores the settings (TEXT_DEFAULTS plus text / bbox / cap / k / holes).
+//! Letters are laid out in em units (fonts: 1.0 = font size, y goes up from the first line's baseline); bbox = the outline's extent in em units,
+//! and `sh.pts` (the custom shape's frame) says where that bbox sits on the roll. So em units -> beats / pitch is decided by the shape itself
+//! (text_axes), and re-entering or changing settings keeps the text in place no matter how it was moved, scaled, rotated or sheared.
 //!
-//! 字母如何变成音符：Fill / Spam 用非零环绕规则（重叠的笔画保持填充，O / A / B 的洞保持空），
-//! 加阈值（一个 key 的高度有多少在字母里，那个 key 才在那里演奏）。grow 让笔画变粗（keys，可为负），
-//! 它按输入时屏幕上的样子算（k = 当时的每 key 拍数）。
+//! How letters become notes: Fill / Spam use the non-zero winding rule (overlapping strokes stay filled, O / A / B holes stay empty),
+//! plus a threshold (how much of a key's height is inside the letters for that key to play there). grow makes strokes thicker (keys, can be negative);
+//! it is computed as it looked on screen when entered (k = beats per key at that time).
 //!
-//! 与原版的差异：字体查询不在这里做，调用方负责 [`text_font`] / [`crate::fonts::get_font`]；
-//! 只用到字体 cap 的函数（[`em_keys`]、[`new_axes`]、[`shown_size`]、[`restyle`]）直接收
-//! 解析好的 `font_cap`，这样纯逻辑不依赖机器上装了什么字体。
+//! Differences from the original: font lookup is not done here, the caller handles [`text_font`] / [`crate::fonts::get_font`];
+//! functions that only need the font cap ([`em_keys`], [`new_axes`], [`shown_size`], [`restyle`]) take the parsed `font_cap` directly,
+//! so the pure logic does not depend on which fonts are installed.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -24,45 +24,45 @@ use crate::fonts::{Font, get_font};
 use crate::shape::{Shape, Stroke, TextAlign, TextSettings, TextUnit};
 use crate::{dist, hypot2, round_half_even};
 
-/// 字号单位（text.UNITS）：font = size 是字号（em）占多少 keys，rows = 大写字母正好那么高。
+/// Size unit (text.UNITS): font = size is how many keys one font size (em) spans, rows = capital letters are exactly that tall.
 pub const UNITS: [TextUnit; 2] = [TextUnit::Font, TextUnit::Rows];
 
-/// 对齐方式（text.TEXT_ALIGNS）。
+/// Alignment (text.TEXT_ALIGNS).
 pub const TEXT_ALIGNS: [TextAlign; 3] = [TextAlign::Left, TextAlign::Center, TextAlign::Right];
 
-/// 阈值把每个 key 分成这么多行来看（text.SUB_ROWS，5% 一步）。
+/// The threshold splits each key into this many rows (text.SUB_ROWS, 5% per step).
 pub const SUB_ROWS: usize = 20;
 
-/// 展平容差：字形轮廓用这个容差展平（text.flatten 的默认值）。
+/// Flattening tolerance: glyph outlines are flattened with this tolerance (the default of text.flatten).
 pub const FLATTEN_TOL: f64 = 0.004;
 
-/// 文本形状的框／轴：(O, X, Y)，em 点 (x, y) 在卷轴上是 O + x·X + y·Y（拍，音高）。
+/// Text shape frame / axes: (O, X, Y); the em point (x, y) is O + x·X + y·Y on the roll (beats, pitch).
 pub type Axes = (Pt, Pt, Pt);
 
-/// 排版后的一条轮廓：属于第几个字符（glyph 序号按字符递增）与字母轮廓（三次贝塞尔点列）。
+/// One laid-out outline: which character it belongs to (glyph numbers increase per character) and the letter outline (a cubic Bezier point list).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Contour {
-    /// 字符序号（每个字符一个号，含空格；对应 Python layout 的 glyph number）。
+    /// Character number (one per character, spaces included; corresponds to the glyph number in Python layout).
     pub glyph: usize,
-    /// 轮廓点列（anchor, handle, handle, anchor, ...，首尾闭合）。
+    /// Outline point list (anchor, handle, handle, anchor, ..., first and last the same).
     pub pts: Vec<Pt>,
 }
 
-/// TEXT_DEFAULTS 的等价物（含 bbox / cap / k / holes 的合理初值）。
+/// The equivalent of TEXT_DEFAULTS (with sensible initial bbox / cap / k / holes).
 pub fn text_defaults() -> TextSettings {
     TextSettings::default()
 }
 
-// ---------------------------------------------------------------- 设置清理
+// ---------------------------------------------------------------- settings sanitising
 
-/// 从文件里的值取文本设置（坏了就 None，对应 text.clean_text）。
+/// Take text settings from a value in a file (None if broken, corresponds to text.clean_text).
 ///
-/// 逐条对应 Python：缺的键用默认；`float` / `int` 只认数字、布尔与数字字符串；
-/// `unit` / `align` 不在白名单就回到默认；weight 夹到 1..1000，threshold 夹到 0..100；
-/// cap / k 为 0 时回到 0.7 / 1.0；bbox 必须有且正好 4 个浮点；holes 排序去重。
+/// Matches Python point by point: missing keys use defaults; `float` / `int` accept only numbers, booleans and numeric strings;
+/// `unit` / `align` fall back to defaults when not in the whitelist; weight is clamped to 1..1000, threshold to 0..100;
+/// cap / k of 0 fall back to 0.7 / 1.0; bbox is required and must be exactly 4 floats; holes are sorted and deduplicated.
 ///
-/// 与原版的差异：Python `str()` / 非数字字符串的边界（下划线数字、容器 repr）不复刻，
-/// 这种情况返回 None；holes 的负数下标无法放进 `Vec<usize>`，也返回 None。
+/// Differences from the original: edge cases of Python `str()` / non-numeric strings (underscore digits, container reprs) are not reproduced,
+/// and return None here; negative indices in holes cannot go into `Vec<usize>` and also return None.
 pub fn clean_text(value: &Value) -> Option<TextSettings> {
     let d = value.as_object()?;
     let defaults = TextSettings::default();
@@ -95,8 +95,8 @@ pub fn clean_text(value: &Value) -> Option<TextSettings> {
     };
     out.weight = out.weight.clamp(1, 1000);
     out.italic = d.get("italic").map_or(defaults.italic, py_bool);
-    // Python min(100.0, max(0.0, x))：NaN 与 ≤ 0 都取 0（连 -0.0 也归成 +0.0），
-    // +inf 取 100；不能直接用 clamp：它会把 NaN 原样留下，也不改 -0.0。
+    // Python min(100.0, max(0.0, x)): NaN and <= 0 give 0 (even -0.0 becomes +0.0),
+    // +inf gives 100; clamp cannot be used directly: it leaves NaN as is and does not change -0.0.
     out.threshold = if out.threshold.is_nan() || out.threshold <= 0.0 {
         0.0
     } else if out.threshold > 100.0 {
@@ -147,17 +147,17 @@ pub fn clean_text(value: &Value) -> Option<TextSettings> {
     Some(out)
 }
 
-/// 文本的字体（text.text_font）。
+/// The text's font (text.text_font).
 pub fn text_font(tx: &TextSettings) -> Arc<Font> {
     get_font(&tx.font, tx.weight, tx.italic)
 }
 
-/// `tx.get("cap") or font.cap` 的等价物：cap 为 0（没设过）时用字体的 cap。
+/// The equivalent of `tx.get("cap") or font.cap`: cap of 0 (never set) uses the font's cap.
 fn cap_or(cap: f64, font_cap: f64) -> f64 {
     if cap != 0.0 { cap } else { font_cap }
 }
 
-/// 一个 em 在字号 size 下是多少 keys（size 框里的数，对应 text.em_keys）。
+/// How many keys one em is at font size size (the number in the size box; corresponds to text.em_keys).
 pub fn em_keys(tx: &TextSettings, size: Option<f64>, font_cap: f64) -> f64 {
     let size = size.unwrap_or(tx.size);
     if tx.unit == TextUnit::Font {
@@ -167,10 +167,10 @@ pub fn em_keys(tx: &TextSettings, size: Option<f64>, font_cap: f64) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------- 排版
+// ---------------------------------------------------------------- layout
 
-/// 在字号下排版 `tx.text`（对应 text.layout）：(轮廓, 光标)。
-/// 轮廓 = 每个字符的字形轮廓在 em 单位里平移好；光标 = 每个能放光标的位置（每个字符前，及行尾）。
+/// Lay out `tx.text` at the font size (corresponds to text.layout): (outlines, carets).
+/// Outlines = each character's glyph outlines shifted in em units; carets = every position a caret can go (before each character and at the line end).
 pub fn layout(tx: &TextSettings, font: &Font) -> (Vec<Contour>, Vec<Pt>) {
     let step = font.line_height * tx.leading / 100.0;
     let track = tx.tracking / 1000.0;
@@ -210,7 +210,7 @@ pub fn layout(tx: &TextSettings, font: &Font) -> (Vec<Contour>, Vec<Pt>) {
     (contours, carets)
 }
 
-/// 一条贝塞尔曲线展平成点列：直的一段就一步，弯的取够多步（对应 text.flatten）。
+/// Flatten one Bezier curve into a point list: a straight piece takes one step, a curved one enough steps (corresponds to text.flatten).
 pub fn flatten(pts: &[Pt], tol: f64) -> Vec<Pt> {
     let Some(&first) = pts.first() else {
         return Vec::new();
@@ -219,7 +219,7 @@ pub fn flatten(pts: &[Pt], tol: f64) -> Vec<Pt> {
     for seg in segments(pts) {
         let (p0, p1, p2, p3) = (seg[0], seg[1], seg[2], seg[3]);
         let bend = line_dist(p1, p0, p3).max(line_dist(p2, p0, p3));
-        // Python：bend < 1e-9 一步，否则 max(2, min(24, ceil(sqrt(bend/tol) * 2)))
+        // Python: bend < 1e-9 takes one step, otherwise max(2, min(24, ceil(sqrt(bend/tol) * 2)))
         let n = if bend < 1e-9 {
             1
         } else {
@@ -245,7 +245,7 @@ pub fn flatten(pts: &[Pt], tol: f64) -> Vec<Pt> {
     out
 }
 
-/// 点 p 到线段 a-b 的距离（对应 text._line_dist）。
+/// Distance from point p to segment a-b (corresponds to text._line_dist).
 fn line_dist(p: Pt, a: Pt, b: Pt) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let ll = hypot2(dx, dy);
@@ -256,7 +256,7 @@ fn line_dist(p: Pt, a: Pt, b: Pt) -> f64 {
     }
 }
 
-/// 闭合多边形的有向面积（对应 text.area）。
+/// Signed area of a closed polygon (corresponds to text.area).
 pub fn area(poly: &[Pt]) -> f64 {
     let mut sum = 0.0;
     for w in poly.windows(2) {
@@ -265,7 +265,7 @@ pub fn area(poly: &[Pt]) -> f64 {
     sum / 2.0
 }
 
-/// 点 (x, y) 绕多边形一圈的环绕数（对应 text.winding）。
+/// Winding number of point (x, y) around the polygon (corresponds to text.winding).
 pub fn winding(poly: &[Pt], x: f64, y: f64) -> i64 {
     let mut w = 0i64;
     for e in poly.windows(2) {
@@ -278,7 +278,7 @@ pub fn winding(poly: &[Pt], x: f64, y: f64) -> i64 {
     w
 }
 
-/// 哪些轮廓是洞（在同字母其余轮廓的奇数层里；O 的中间，对应 text.find_holes）。
+/// Which outlines are holes (inside an odd number of the same letter's other outlines; the middle of O; corresponds to text.find_holes).
 pub fn find_holes(contours: &[Contour]) -> Vec<usize> {
     let flat: Vec<Vec<Pt>> = contours
         .iter()
@@ -302,10 +302,10 @@ pub fn find_holes(contours: &[Contour]) -> Vec<usize> {
     holes
 }
 
-// ---------------------------------------------------------------- em 单位 <-> 卷轴
+// ---------------------------------------------------------------- em units <-> roll
 
-/// (O, X, Y)：em 点 (x, y) 在卷轴上的位置（对应 text.text_axes）。
-/// 不是文本形状（没有 text，或框不够 3 个点）时返回 None。
+/// (O, X, Y): where the em point (x, y) sits on the roll (corresponds to text.text_axes).
+/// None when this is not a text shape (no text, or fewer than 3 frame points).
 pub fn text_axes(sh: &Shape) -> Option<Axes> {
     let tx = sh.text.as_ref()?;
     if sh.pts.len() < 3 {
@@ -323,32 +323,32 @@ pub fn text_axes(sh: &Shape) -> Option<Axes> {
     Some((o, u, v))
 }
 
-/// 新文本的轴：第一行从 (b, p) 开始，基线在 p 下半个 key，大写字母坐在点到的 key 上、向上长
-/// （对应 text.new_axes）。
+/// Axes for new text: the first line starts at (b, p), the baseline is half a key below p, and capital letters sit on the key clicked and grow upwards
+/// (corresponds to text.new_axes).
 pub fn new_axes(tx: &TextSettings, b: f64, p: f64, k: f64, font_cap: f64) -> Axes {
     let e = em_keys(tx, None, font_cap);
     ([b, p - 0.5], [e * k, 0.0], [0.0, e])
 }
 
-/// 一个 em 沿轴是多少 keys（输入时字母的高度，对应 text.axes_em）。
+/// How many keys one em is along the axes (the letter height when entered; corresponds to text.axes_em).
 pub fn axes_em(axes: Axes, k: f64) -> f64 {
     let (_, _, y) = axes;
     hypot2(y[0] / k, y[1])
 }
 
-/// 轴整体缩放 f（对应 text.scale_axes）。
+/// Scale the axes by f (corresponds to text.scale_axes).
 pub fn scale_axes(axes: Axes, f: f64) -> Axes {
     let (o, x, y) = axes;
     (o, [x[0] * f, x[1] * f], [y[0] * f, y[1] * f])
 }
 
-/// em 点 (x, y) → 卷轴（对应 text.to_roll）。
+/// em point (x, y) -> roll (corresponds to text.to_roll).
 pub fn to_roll(axes: Axes, x: f64, y: f64) -> Pt {
     let (o, u, v) = axes;
     [o[0] + x * u[0] + y * v[0], o[1] + x * u[1] + y * v[1]]
 }
 
-/// (拍, 音高) → em 点；轴退化（平的）时返回 None（对应 text.from_roll）。
+/// (beats, pitch) -> em point; None when the axes are degenerate (flat) (corresponds to text.from_roll).
 pub fn from_roll(axes: Axes, b: f64, p: f64) -> Option<Pt> {
     let (o, x, y) = axes;
     let det = x[0] * y[1] - x[1] * y[0];
@@ -360,8 +360,8 @@ pub fn from_roll(axes: Axes, b: f64, p: f64) -> Option<Pt> {
     Some([(db * y[1] - dp * y[0]) / det, (x[0] * dp - x[1] * db) / det])
 }
 
-/// 把 tx 按 axes 排进形状 sh（笔画、框与 sh.text）；没东西可看（没字或只有空格）返回 false
-/// 且不改动 sh（对应 text.build）。
+/// Lay tx into shape sh according to axes (strokes, frame and sh.text); nothing to show (no text or only spaces)
+/// returns false and leaves sh unchanged (corresponds to text.build).
 pub fn build(sh: &mut Shape, tx: &TextSettings, font: &Font, axes: Axes) -> bool {
     let (contours, _) = layout(tx, font);
     if contours.is_empty() {
@@ -419,13 +419,13 @@ pub fn build(sh: &mut Shape, tx: &TextSettings, font: &Font, axes: Axes) -> bool
     true
 }
 
-/// Python `round(x, 7)`（银行家舍入）的等价物。
+/// The equivalent of Python `round(x, 7)` (banker's rounding).
 fn round_dp(x: f64, dp: i32) -> f64 {
     let m = 10f64.powi(dp);
     round_half_even(x * m) / m
 }
 
-/// 这些轴下 size 框里的数（跟着在卷轴上缩放框走，对应 text.shown_size）。
+/// The number in the size box for these axes (it follows scaling the frame on the roll; corresponds to text.shown_size).
 pub fn shown_size(tx: &TextSettings, axes: Axes, font_cap: f64) -> f64 {
     let e = axes_em(axes, tx.k);
     if tx.unit == TextUnit::Font {
@@ -435,7 +435,7 @@ pub fn shown_size(tx: &TextSettings, axes: Axes, font_cap: f64) -> f64 {
     }
 }
 
-/// 一次设置变更：`None` = 这一项不改（对应 Python changes 字典里没有的键）。
+/// One settings change: `None` = leave this item alone (corresponds to a key absent from the Python changes dict).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextChange {
     pub text: Option<String>,
@@ -452,7 +452,7 @@ pub struct TextChange {
 }
 
 impl TextChange {
-    /// 把变更合并进设置（对应 Python `dict(tx, **changes)`）。
+    /// Merge the changes into the settings (corresponds to Python `dict(tx, **changes)`).
     pub fn apply(&self, tx: &TextSettings) -> TextSettings {
         let mut new = tx.clone();
         if let Some(v) = &self.text {
@@ -492,11 +492,11 @@ impl TextChange {
     }
 }
 
-/// 设置变了（字体、字号、单位……）：新的设置与轴（对应 text.restyle）。
-/// size 框里的数不动，除非这次是手输的，所以换字体 / 单位能让字母变大变小；第一行的起点留在原处。
+/// Settings changed (font, size, unit, ...): the new settings and axes (corresponds to text.restyle).
+/// The number in the size box stays put unless it was typed in this time, so changing font / unit can make the letters bigger or smaller; the first line's start stays where it was.
 ///
-/// `font_cap` = 旧字体的 cap（仅当 `tx.cap` 为 0 时用于 shown_size）；
-/// `new_cap` = 新字体的 cap（对应 Python `text_font(new).cap`）。
+/// `font_cap` = the old font's cap (used by shown_size only when `tx.cap` is 0);
+/// `new_cap` = the new font's cap (corresponds to Python `text_font(new).cap`).
 pub fn restyle(
     tx: &TextSettings,
     axes: Axes,
@@ -519,7 +519,7 @@ pub fn restyle(
     }
 }
 
-/// 形状名："“第一行前 24 个字符…”"（对应 text.text_name）。
+/// Shape name: "the first 24 characters of the first line…" (corresponds to text.text_name).
 pub fn text_name(text: &str) -> String {
     let one = text.split_whitespace().collect::<Vec<&str>>().join(" ");
     if one.chars().count() > 25 {
@@ -530,9 +530,9 @@ pub fn text_name(text: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------- 轮廓 -> 音符
+// ---------------------------------------------------------------- outlines -> notes
 
-/// 字母轮廓在拍 / 音高里的闭合多边形，按 grow 变粗 / 变细（对应 text.text_polys）。
+/// The letter outlines as closed polygons in beats / pitch, thickened / thinned by grow (corresponds to text.text_polys).
 pub fn text_polys(sh: &Shape) -> Vec<Vec<Pt>> {
     let Some(tx) = sh.text.as_ref() else {
         return Vec::new();
@@ -580,8 +580,8 @@ pub fn text_polys(sh: &Shape) -> Vec<Vec<Pt>> {
     polys
 }
 
-/// 闭合多边形（首点 = 末点）的"内部"向外长 d（负 = 缩），尖角切平（bevel）免得飞出去
-/// （对应 text.offset）。
+/// Grow the "inside" of a closed polygon (first point = last point) outwards by d (negative = shrink); sharp corners are bevelled so they do not fly off
+/// (corresponds to text.offset).
 pub fn offset(poly: &[Pt], d: f64) -> Vec<Pt> {
     let mut pts: Vec<Pt> = Vec::new();
     for w in poly.windows(2) {
@@ -595,7 +595,7 @@ pub fn offset(poly: &[Pt], d: f64) -> Vec<Pt> {
     }
     let mut closed = pts.clone();
     closed.push(pts[0]);
-    // 逆时针：内部在左，所以向外是右
+    // Counter-clockwise: the inside is on the left, so outwards is to the right
     let s = if area(&closed) > 0.0 { 1.0 } else { -1.0 };
     let mut normals: Vec<Pt> = Vec::with_capacity(n);
     for (i, &a) in pts.iter().enumerate() {
@@ -613,7 +613,7 @@ pub fn offset(poly: &[Pt], d: f64) -> Vec<Pt> {
         let b = normals[i];
         let dot = a[0] * b[0] + a[1] * b[1];
         if dot > -0.5 {
-            // 最多约 120 度：移动后的两条边交于一点
+            // At most about 120 degrees: the two moved edges meet at one point
             let m = d / (1.0 + dot);
             out.push([p[0] + (a[0] + b[0]) * m, p[1] + (a[1] + b[1]) * m]);
         } else {
@@ -627,7 +627,7 @@ pub fn offset(poly: &[Pt], d: f64) -> Vec<Pt> {
     out
 }
 
-/// 与 [lo, hi) 有交的横平竖直的边（对应 text.row_edges）。
+/// Edges that intersect the row [lo, hi) (corresponds to text.row_edges).
 pub fn row_edges(polys: &[Vec<Pt>], lo: f64, hi: f64) -> Vec<[Pt; 2]> {
     let mut out = Vec::new();
     for poly in polys {
@@ -641,7 +641,7 @@ pub fn row_edges(polys: &[Vec<Pt>], lo: f64, hi: f64) -> Vec<[Pt; 2]> {
     out
 }
 
-/// 高度 y 的线上哪里在多边形里（非零规则）：[(x0, x1)]（对应 text.line_spans）。
+/// Where the line at height y is inside the polygons (non-zero rule): [(x0, x1)] (corresponds to text.line_spans).
 pub fn line_spans(edges: &[[Pt; 2]], y: f64) -> Vec<[f64; 2]> {
     let mut cross: Vec<(f64, i32)> = Vec::new();
     for e in edges {
@@ -654,7 +654,7 @@ pub fn line_spans(edges: &[[Pt; 2]], y: f64) -> Vec<[f64; 2]> {
             ));
         }
     }
-    // Python 的 tuple 排序：先 x 后方向（-1 在 1 前）；-0.0 与 0.0 视为相等
+    // Python tuple sorting: by x first, then direction (-1 before 1); -0.0 and 0.0 compare equal
     cross.sort_by(|a, b| {
         a.0.partial_cmp(&b.0)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -675,7 +675,7 @@ pub fn line_spans(edges: &[[Pt; 2]], y: f64) -> Vec<[f64; 2]> {
     out
 }
 
-/// 至少 `threshold`% 的 key q 高度在字母里的拍范围（对应 text.threshold_spans）。
+/// Beat ranges where at least `threshold`% of key q's height is inside the letters (corresponds to text.threshold_spans).
 pub fn threshold_spans(polys: &[Vec<Pt>], q: f64, threshold: f64) -> Vec<[f64; 2]> {
     let lo = q - 0.5;
     let edges = row_edges(polys, lo, lo + 1.0);
@@ -725,7 +725,7 @@ pub fn threshold_spans(polys: &[Vec<Pt>], q: f64, threshold: f64) -> Vec<[f64; 2
 
 // ---------------------------------------------------------------- Python float() / int() / str() / truthiness
 
-/// Python `float(x)`：数字、布尔与数字字符串；别的（含 null）失败。
+/// Python `float(x)`: numbers, booleans and numeric strings; anything else (including null) fails.
 fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
@@ -735,7 +735,7 @@ fn py_float(v: &Value) -> Option<f64> {
     }
 }
 
-/// Python `int(x)`：数字截断、布尔与整数字符串；别的失败。
+/// Python `int(x)`: numbers truncated, booleans and integer strings; anything else fails.
 fn py_int(v: &Value) -> Option<i64> {
     match v {
         Value::Number(n) => {
@@ -753,7 +753,7 @@ fn py_int(v: &Value) -> Option<i64> {
     }
 }
 
-/// Python `str(x)`：字符串、数字、布尔、None；容器 repr 不复刻。
+/// Python `str(x)`: strings, numbers, booleans, None; container reprs are not reproduced.
 fn py_str(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
@@ -764,7 +764,7 @@ fn py_str(v: &Value) -> Option<String> {
     }
 }
 
-/// Python 真值判断：0 / 空串 / 空表 / null 为假。
+/// Python truthiness: 0 / empty string / empty list / null are false.
 fn py_bool(v: &Value) -> bool {
     match v {
         Value::Null => false,
@@ -776,7 +776,7 @@ fn py_bool(v: &Value) -> bool {
     }
 }
 
-/// `tx.get(key, default)` 后 `float()`。
+/// `tx.get(key, default)` followed by `float()`.
 fn opt_float(d: &Map<String, Value>, key: &str, default: f64) -> Option<f64> {
     match d.get(key) {
         None => Some(default),

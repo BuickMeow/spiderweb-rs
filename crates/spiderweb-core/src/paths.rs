@@ -1,25 +1,25 @@
-//! 路径（(beat, pitch) 点列）→ 音符（Python notes/paths.py 的逐函数移植）。
+//! Paths ((beat, pitch) point lists) -> notes (a function-by-function port of Python notes/paths.py).
 //!
-//! 线条每经过一个 key 产生一个音符：音符在该线到达该 pitch 的 tick 开始，持续到下一个音符开始。
-//! `end_dot` 打开时最后一个音符正好从形状最后一点开始，而不是在那里结束。
+//! A line produces one note per key it passes through: the note starts at the tick where the line reaches that pitch and lasts until the next note starts.
+//! With `end_dot` on, the last note starts exactly at the shape's last point instead of ending there.
 
 use crate::{Pt, floor_half};
 
-/// 半个 key 行，稍微靠里一点。
+/// Half a key row, nudged slightly inwards.
 pub const EDGE: f64 = 0.5 - 1e-6;
 
-/// 工程的按键范围：MIDI 标准的 0-127，或 0-255（256 键 MIDI）（paths.KEYS）。
+/// Key range of the project: MIDI standard 0-127, or 0-255 (256-key MIDI) (paths.KEYS).
 pub const KEYS: [i64; 2] = [128, 256];
 
-/// 形状能生成的最高键（paths.TOP_KEY）；工程的范围再把其余滤掉。
+/// Highest key a shape can generate (paths.TOP_KEY); the project's range filters out the rest.
 pub const TOP_KEY: i64 = KEYS[1] - 1;
 
-/// (tick, pitch) 的 pitch 取整：`floor(y + 0.5)`。
+/// Rounding the pitch of a (tick, pitch) point: `floor(y + 0.5)`.
 pub fn pitch_of(y: f64) -> i64 {
     (y + 0.5).floor() as i64
 }
 
-/// 去掉与前一个点重复的点。
+/// Drop points that repeat the previous one.
 pub fn dedupe(path: &[Pt]) -> Vec<Pt> {
     let mut out: Vec<Pt> = Vec::with_capacity(path.len());
     for &p in path {
@@ -30,7 +30,7 @@ pub fn dedupe(path: &[Pt]) -> Vec<Pt> {
     out
 }
 
-/// 方向发生改变（相对上一次真的动过的方向）的段号（段 i 从点 i 到 i+1）。
+/// Segment indices where the direction changes (relative to the last direction actually moved in); segment i goes from point i to i+1.
 pub fn direction_changes(v: &[f64]) -> Vec<usize> {
     let mut nz: Vec<usize> = Vec::new();
     let mut dn: Vec<i8> = Vec::new();
@@ -57,7 +57,7 @@ pub fn direction_changes(v: &[f64]) -> Vec<usize> {
     out
 }
 
-/// 每段 lo..hi 的下标依次排列（`rev`：该段反向 hi..lo）。对应 paths.spans。
+/// Concatenate the indices of each lo..hi span (`rev`: that span runs backwards hi..lo). Corresponds to paths.spans.
 pub fn spans(lo: &[usize], hi: &[usize], rev: Option<&[bool]>) -> Vec<usize> {
     let mut out = Vec::new();
     for i in 0..lo.len() {
@@ -76,7 +76,7 @@ pub fn spans(lo: &[usize], hi: &[usize], rev: Option<&[bool]>) -> Vec<usize> {
     out
 }
 
-/// 把 pts[i..=j] 的 pitch 拉伸，使首/尾 pitch 行被完整覆盖而不是只占半个（paths._remap）。
+/// Stretch the pitches of pts[i..=j] so the first/last pitch row is fully covered instead of only half (paths._remap).
 fn remap(pts: &mut [Pt], i: usize, j: usize, move_start: bool, move_end: bool, end_dot: bool) {
     let ys = pts[i][1];
     let ye = pts[j][1];
@@ -102,7 +102,7 @@ fn remap(pts: &mut [Pt], i: usize, j: usize, move_start: bool, move_end: bool, e
     }
 }
 
-/// 只拉伸路径的起点与终点，让每个经过的 pitch 所占时间相等（paths.stretch_ends）。
+/// Stretch only the start and end of the path so every pitch it passes gets an equal share of time (paths.stretch_ends).
 pub fn stretch_ends(path: &[Pt], end_dot: bool) -> Vec<Pt> {
     let mut pts = path.to_vec();
     let n = pts.len();
@@ -129,7 +129,7 @@ pub fn stretch_ends(path: &[Pt], end_dot: bool) -> Vec<Pt> {
     pts
 }
 
-/// 同 tick 同 key 的重复音符保留最长的（按其首次出现的顺序）；结束于 0 之前的音符丢弃（paths.keep_longest）。
+/// Of duplicate notes with the same tick and key keep the longest (in order of first appearance); drop notes ending before 0 (paths.keep_longest).
 pub fn keep_longest(raw: &[[i64; 3]]) -> Vec<[i64; 3]> {
     let mut rows: Vec<([i64; 3], usize)> = raw
         .iter()
@@ -159,7 +159,7 @@ pub fn keep_longest(raw: &[[i64; 3]]) -> Vec<[i64; 3]> {
     groups.into_iter().map(|(r, _)| r).collect()
 }
 
-/// 闭合环（首点=末点）从其最左点重新开始，使各片段都从左到右（paths.loop_from_left）。
+/// Restart a closed loop (first point = last point) from its leftmost point so every piece runs left to right (paths.loop_from_left).
 pub fn loop_from_left(path: &[Pt]) -> Vec<Pt> {
     let path = &path[..path.len() - 1];
     let mut i = 0usize;
@@ -173,7 +173,7 @@ pub fn loop_from_left(path: &[Pt]) -> Vec<Pt> {
     out
 }
 
-/// 路径是否在时间上前进（最后一段有效位移是向后的则为 false；paths.ends_forward）。
+/// Whether the path moves forward in time (false when the last non-zero displacement is backwards; paths.ends_forward).
 pub fn ends_forward(path: &[Pt]) -> bool {
     let mut last: Option<f64> = None;
     for w in path.windows(2) {
@@ -185,7 +185,7 @@ pub fn ends_forward(path: &[Pt]) -> bool {
     last.is_none_or(|dt| dt > 0.0)
 }
 
-/// 一条线 / 曲线 / 弧的路径（tick）→ (start, end, pitch)（paths.path_notes）。
+/// The path (ticks) of a line / curve / arc -> (start, end, pitch) (paths.path_notes).
 pub fn path_notes(path: &[Pt], end_dot: bool) -> Vec<[i64; 3]> {
     if path.len() > 3 && path[0] == path[path.len() - 1] {
         let p = loop_from_left(path);
@@ -196,7 +196,7 @@ pub fn path_notes(path: &[Pt], end_dot: bool) -> Vec<[i64; 3]> {
     keep_longest(&line_notes(&p, end_dot))
 }
 
-/// (tick, pitch) 点列 → 音符，先不合并重复（paths.line_notes）。
+/// (tick, pitch) point list -> notes, without merging duplicates yet (paths.line_notes).
 pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
     let n = pts.len();
     let xs: Vec<f64> = pts.iter().map(|p| p[0]).collect();
@@ -264,7 +264,7 @@ pub fn line_notes(pts: &[Pt], tail: bool) -> Vec<[i64; 3]> {
     parts_notes(&r, &starts2, &tails, false).0
 }
 
-/// 从左到右的片段 → 每跨一个 pitch 一个音符（paths.parts_notes）。返回 (音符, 每段音符数)。
+/// Left-to-right pieces -> one note per pitch crossed (paths.parts_notes). Returns (notes, note count per piece).
 pub fn parts_notes(
     r: &[Pt],
     first: &[usize],
@@ -379,7 +379,7 @@ pub fn parts_notes(
     (notes, per)
 }
 
-/// 折线 "从每个点开始"：每段像它自己的线一样工作（paths.dot_segment_notes）。
+/// Polyline "start at each point": every segment behaves like its own line (paths.dot_segment_notes).
 pub fn dot_segment_notes(path: &[Pt]) -> Vec<[i64; 3]> {
     let n = path.len() - 1;
     let mut pts: Vec<Pt> = Vec::with_capacity(2 * n);
@@ -430,7 +430,7 @@ pub fn dot_segment_notes(path: &[Pt]) -> Vec<[i64; 3]> {
         .collect()
 }
 
-/// 每行在排序去重后的排名（np.unique(axis=0, return_inverse)）。
+/// Rank of each row after sorting and deduplication (np.unique(axis=0, return_inverse)).
 pub fn unique_ranks3(rows: &[[i64; 3]]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     order.sort_by_key(|&i| rows[i]);
@@ -445,7 +445,7 @@ pub fn unique_ranks3(rows: &[[i64; 3]]) -> Vec<usize> {
     ranks
 }
 
-/// (start, key) 对的排名。
+/// Rank of (start, key) pairs.
 pub fn unique_ranks2(rows: &[(i64, i64)]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     order.sort_by_key(|&i| rows[i]);

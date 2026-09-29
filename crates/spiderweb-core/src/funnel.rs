@@ -1,26 +1,26 @@
-//! 漏斗：通向一堵墙的线，沿曲线张开，用 spam 或 long 音符填充（Python notes/funnel.py 的逐函数移植）。
+//! Funnel: a line leading to a wall, opening out along curves and filled with spam or long notes (a function-by-function port of Python notes/funnel.py).
 //!
-//! `sh.pts = [线起点, 线终点, 墙端1, 墙端2, (线2起点, 线2终点, ...)]`：直线，怎么画都行
-//! （画的时候只有线）。额外的线通向同一堵墙。音符网格从第一条线的起点朝墙走；墙在时间上
-//! 靠前时是反向漏斗。
+//! `sh.pts = [line start, line end, wall end 1, wall end 2, (line 2 start, line 2 end, ...)]`: straight lines, drawn however you like
+//! (only the line is drawn then). Extra lines lead to the same wall. The note grid runs from the first line's start towards the wall; a wall that is
+//! earlier in time makes a reversed funnel.
 //!
-//! `sh.starts = [{line, at, ends: [通向墙端1的曲线或 None, ...墙端2]}]`：每个起点向每个墙端
-//! 张开一条曲线（半漏斗只有一个墙端；墙端落在线上的没有曲线）。
+//! `sh.starts = [{line, at, ends: [curve to wall end 1 or None, ...wall end 2]}]`: each start opens
+//! one curve towards each wall end (a half funnel has only one wall end; a wall end lying on the line has no curve).
 //!
-//! 曲线在自己的斜方盒里：从起点 S 出发，U 沿线、V 沿墙，S + U + V = 墙端，S + U 是线与墙的
-//! 交点。盒里的点 `[u, f]` 就是 `S + u*U + f*V`（u = 0 在起点、1 在墙，f = 张开多少），所以
-//! 移动、拉伸、翻转、转动两条线时曲线跟着走。曲线是从 `[0, 0]`（起点）到 `[1, 1]`（墙端）的
-//! Bézier（见 [`crate::bezier`]：锚点 + 手柄），`sharp` 是手柄分开的尖角锚点，`link` 是组号，
-//! `flip` 表示相对同组其他曲线首尾对调。
+//! A curve lives in its own oblique box: from the start S, U along the line and V along the wall, S + U + V = the wall end, and S + U is where the line meets
+//! the wall. The box point `[u, f]` is `S + u*U + f*V` (u = 0 at the start, 1 at the wall; f = how far it opens), so
+//! the curve follows when the two lines are moved, stretched, flipped or rotated. A curve is the Bezier from `[0, 0]` (the start) to `[1, 1]` (the wall end)
+//! (see [`crate::bezier`]: anchors + handles); `sharp` are the corner anchors where handles split, `link` is the group number,
+//! and `flip` means turned end to end relative to the other curves in the group.
 //!
-//! 与原版的差异（都用 Option / Result 代替 Python 异常）：
-//! - 清洗函数遇到坏数据返回 None（Python 抛异常）；`clean_curve` 的 None 同样表示"没有可用曲线"；
-//! - `start_point` / `curve_box` 在线号超出 `pts` 时返回 None（Python IndexError）；
-//! - `formula_curve` / `preset_curve` 用 `Err(String)` 报公式算不出来的错误；
-//! - Python 返回闭包的地方用结构体：[`Openness`]（w(d)）与 [`SmoothCurve`]（eval(u)）。
+//! Differences from the original (all Python exceptions are replaced by Option / Result):
+//! - cleaning functions return None on bad data (Python raises); `clean_curve`'s None likewise means "no usable curve";
+//! - `start_point` / `curve_box` return None when the line number is beyond `pts` (Python IndexError);
+//! - `formula_curve` / `preset_curve` report formula failures with `Err(String)`;
+//! - places where Python returns a closure use structs: [`Openness`] (w(d)) and [`SmoothCurve`] (eval(u)).
 //!
-//! [`Spans`] 是 key → 区间列表的有序表，保持 Python dict 的插入顺序（`funnel_cells` 的输出
-//! 顺序跟着它走）。
+//! [`Spans`] is an ordered map from key -> span lists, keeping Python dict insertion order (`funnel_cells`'s output
+//! order follows it).
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -34,18 +34,18 @@ use crate::paths::{EDGE, pitch_of};
 use crate::shape::{FunnelCurve, FunnelFill, FunnelStart, GateChange, GateFollow, Shape, WallMode};
 use crate::{Pt, floor_half, hypot2, round_half_even};
 
-// ---------------------------------------------------------------- 设置与常量
+// ---------------------------------------------------------------- settings and constants
 
-/// 填充方式（funnel.FUNNEL_FILLS）。
+/// Fill mode (funnel.FUNNEL_FILLS).
 pub const FUNNEL_FILLS: [FunnelFill; 2] = [FunnelFill::Spam, FunnelFill::Long];
-/// 门限变化方式（funnel.GATE_CHANGES）。
+/// Gate change mode (funnel.GATE_CHANGES).
 pub const GATE_CHANGES: [GateChange; 2] = [GateChange::Steps, GateChange::Smooth];
-/// 门限跟随对象（funnel.GATE_FOLLOWS）。
+/// What the gate follows (funnel.GATE_FOLLOWS).
 pub const GATE_FOLLOWS: [GateFollow; 2] = [GateFollow::Time, GateFollow::Curve];
-/// 墙模式（funnel.WALL_MODES）。
+/// Wall mode (funnel.WALL_MODES).
 pub const WALL_MODES: [WallMode; 2] = [WallMode::In, WallMode::Past];
 
-/// 漏斗设置（clean_funnel 的产物，对应 Python 返回的 dict）。
+/// Funnel settings (the product of clean_funnel, matching the dict Python returns).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FunnelSettings {
     pub fill: FunnelFill,
@@ -57,7 +57,7 @@ pub struct FunnelSettings {
     pub wall: WallMode,
 }
 
-/// 漏斗默认设置（funnel.FUNNEL_DEFAULTS）。
+/// Funnel defaults (funnel.FUNNEL_DEFAULTS).
 pub const FUNNEL_DEFAULTS: FunnelSettings = FunnelSettings {
     fill: FunnelFill::Spam,
     gate0: 0.0625,
@@ -68,15 +68,15 @@ pub const FUNNEL_DEFAULTS: FunnelSettings = FunnelSettings {
     wall: WallMode::In,
 };
 
-/// 第一版的默认曲线（funnel.FUNNEL_BEND）。
+/// The first version's default curve (funnel.FUNNEL_BEND).
 pub const FUNNEL_BEND: Pt = [0.75, 0.2];
-/// 旧版 bends 的最多条数（funnel.MAX_BENDS）。
+/// Maximum number of old-style bends (funnel.MAX_BENDS).
 pub const MAX_BENDS: usize = 32;
 
-/// 默认曲线：接近第一版的默认（慢起、靠近墙快速张开），只有首尾两个锚点与手柄。
+/// Default curve: close to the first version's default (slow start, opening fast near the wall), with only two anchors and handles at the ends.
 pub const DEFAULT_CURVE: [Pt; 4] = [[0.0, 0.0], [0.7, 0.06], [0.94, 0.3], [1.0, 1.0]];
 
-/// 预设曲线名字与公式字符串（funnel.CURVE_PRESETS；公式字符串给界面用，None = 默认曲线）。
+/// Preset curve names and formula strings (funnel.CURVE_PRESETS; the formula string is for the UI, None = default curve).
 pub const CURVE_PRESETS: &[(&str, Option<&str>)] = &[
     ("Default", None),
     ("Straight", Some("x")),
@@ -97,11 +97,11 @@ pub const CURVE_PRESETS: &[(&str, Option<&str>)] = &[
     ("Logarithmic", Some("ln(1+20*x)")),
 ];
 
-/// 锚点 + 手柄离公式多近（曲线尺寸的一部分，funnel.FIT_TOLERANCE）。
+/// How close anchors + handles must stay to the formula (a fraction of the curve's size; funnel.FIT_TOLERANCE).
 pub const FIT_TOLERANCE: f64 = 0.003;
 
 impl FunnelFill {
-    /// 设置名的字符串形式（JSON / 界面用）。
+    /// The setting name as a string (for JSON / the UI).
     pub fn name(self) -> &'static str {
         match self {
             Self::Spam => "spam",
@@ -109,7 +109,7 @@ impl FunnelFill {
         }
     }
 
-    /// 从设置名解析；未知名字返回 None。
+    /// Parse from a setting name; None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "spam" => Some(Self::Spam),
@@ -120,7 +120,7 @@ impl FunnelFill {
 }
 
 impl GateChange {
-    /// 设置名的字符串形式（JSON / 界面用）。
+    /// The setting name as a string (for JSON / the UI).
     pub fn name(self) -> &'static str {
         match self {
             Self::Steps => "steps",
@@ -128,7 +128,7 @@ impl GateChange {
         }
     }
 
-    /// 从设置名解析；未知名字返回 None。
+    /// Parse from a setting name; None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "steps" => Some(Self::Steps),
@@ -139,7 +139,7 @@ impl GateChange {
 }
 
 impl GateFollow {
-    /// 设置名的字符串形式（JSON / 界面用）。
+    /// The setting name as a string (for JSON / the UI).
     pub fn name(self) -> &'static str {
         match self {
             Self::Time => "time",
@@ -147,7 +147,7 @@ impl GateFollow {
         }
     }
 
-    /// 从设置名解析；未知名字返回 None。
+    /// Parse from a setting name; None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "time" => Some(Self::Time),
@@ -158,7 +158,7 @@ impl GateFollow {
 }
 
 impl WallMode {
-    /// 设置名的字符串形式（JSON / 界面用）。
+    /// The setting name as a string (for JSON / the UI).
     pub fn name(self) -> &'static str {
         match self {
             Self::In => "in",
@@ -166,7 +166,7 @@ impl WallMode {
         }
     }
 
-    /// 从设置名解析；未知名字返回 None。
+    /// Parse from a setting name; None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "in" => Some(Self::In),
@@ -176,9 +176,9 @@ impl WallMode {
     }
 }
 
-// ---------------------------------------------------------------- JSON 小工具（同 custom.rs）
+// ---------------------------------------------------------------- JSON helpers (same as custom.rs)
 
-/// Python `float(x)`：数字、布尔与数字字符串；别的（含 null）失败。
+/// Python `float(x)`: numbers, booleans and numeric strings; anything else (including null) fails.
 fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
@@ -188,7 +188,7 @@ fn py_float(v: &Value) -> Option<f64> {
     }
 }
 
-/// Python `int(x)`：数字截断、布尔与整数字符串；别的失败。
+/// Python `int(x)`: numbers truncated, booleans and integer strings; anything else fails.
 fn py_int(v: &Value) -> Option<i64> {
     match v {
         Value::Number(n) => {
@@ -206,7 +206,7 @@ fn py_int(v: &Value) -> Option<i64> {
     }
 }
 
-/// Python 真值判断：0 / 空串 / 空表 / null 为假。
+/// Python truthiness: 0 / empty string / empty list / null are false.
 fn py_bool(v: &Value) -> bool {
     match v {
         Value::Null => false,
@@ -218,7 +218,7 @@ fn py_bool(v: &Value) -> bool {
     }
 }
 
-/// 一个点对子：长度为 2 的数组或字符串（Python 的可解包序列）。
+/// A point pair: a length-2 array or string (Python's unpackable sequence).
 fn pair_of(v: &Value) -> Option<Pt> {
     match v {
         Value::Array(a) if a.len() == 2 => Some([py_float(&a[0])?, py_float(&a[1])?]),
@@ -232,9 +232,9 @@ fn pair_of(v: &Value) -> Option<Pt> {
     }
 }
 
-// ---------------------------------------------------------------- 设置清理
+// ---------------------------------------------------------------- settings sanitising
 
-/// 漏斗设置从文件里读出的清洗（funnel.clean_funnel）：坏值返回 None（Python 抛异常）。
+/// Sanitising of funnel settings read from a file (funnel.clean_funnel): bad values return None (Python raises).
 pub fn clean_funnel(sh: &Value) -> Option<FunnelSettings> {
     let obj = sh.as_object()?;
     let mut out = FUNNEL_DEFAULTS;
@@ -258,7 +258,7 @@ pub fn clean_funnel(sh: &Value) -> Option<FunnelSettings> {
         Some("past") => WallMode::Past,
         _ => FUNNEL_DEFAULTS.wall,
     };
-    // sh.get(key, 默认值)：键在但值是 null 也要报错（float(None)）
+    // sh.get(key, default): a key present with value null still errors (float(None))
     let gate = |key: &str, default: f64| -> Option<f64> {
         match obj.get(key) {
             None => Some(default),
@@ -267,7 +267,7 @@ pub fn clean_funnel(sh: &Value) -> Option<FunnelSettings> {
     };
     out.gate0 = 1e-6_f64.max(gate("gate0", FUNNEL_DEFAULTS.gate0)?);
     out.gate1 = 1e-6_f64.max(gate("gate1", FUNNEL_DEFAULTS.gate1)?);
-    // 旧文件没有 "vary"：两个不同的 gate 当时就是想变化
+    // Old files have no "vary": two different gates meant change at the time
     out.vary = match obj.get("vary") {
         Some(v) => py_bool(v),
         None => (out.gate0 - out.gate1).abs() > 1e-9,
@@ -278,7 +278,7 @@ pub fn clean_funnel(sh: &Value) -> Option<FunnelSettings> {
     Some(out)
 }
 
-/// 起点列表从文件里读出的清洗（funnel.clean_starts）：坏数据返回 None（Python 抛异常）。
+/// Sanitising of the start list read from a file (funnel.clean_starts): bad data returns None (Python raises).
 pub fn clean_starts(starts: &Value, lines: usize) -> Option<Vec<FunnelStart>> {
     if !py_bool(starts) {
         return Some(Vec::new()); // starts or []
@@ -293,7 +293,7 @@ pub fn clean_starts(starts: &Value, lines: usize) -> Option<Vec<FunnelStart>> {
         let mut raw: [Option<&Value>; 2] = [None, None];
         match obj.get("ends") {
             None => {}
-            Some(v) if !py_bool(v) => {} // 空表 / 空串 / {}：list(...) 是空的
+            Some(v) if !py_bool(v) => {} // empty list / empty string / {}: list(...) is empty
             Some(Value::Array(a)) => {
                 for (i, v) in a.iter().take(2).enumerate() {
                     raw[i] = Some(v);
@@ -327,7 +327,7 @@ pub fn clean_starts(starts: &Value, lines: usize) -> Option<Vec<FunnelStart>> {
                 ends,
             });
             if both && had_list {
-                old_twins.push(out.len() - 1); // 旧版一个起点的两条曲线总是保持一样
+                old_twins.push(out.len() - 1); // in the old version a start's two curves always stayed the same
             }
         }
     }
@@ -346,18 +346,18 @@ pub fn clean_starts(starts: &Value, lines: usize) -> Option<Vec<FunnelStart>> {
     Some(out)
 }
 
-/// 一条曲线从文件里读出的清洗（funnel.clean_curve；None 表示没有可用曲线）。
+/// Sanitising of one curve read from a file (funnel.clean_curve; None means no usable curve).
 pub fn clean_curve(c: &Value) -> Option<FunnelCurve> {
     clean_curve_strict(c).ok().flatten()
 }
 
-/// [`clean_curve`] 的严格版：Err = Python 会抛异常，Ok(None) = 没有曲线。
+/// Strict version of [`clean_curve`]: Err = Python would raise, Ok(None) = no curve.
 fn clean_curve_strict(c: &Value) -> Result<Option<FunnelCurve>, ()> {
     if !py_bool(c) {
         return Ok(None);
     }
     if let Value::Array(a) = c {
-        // 旧版的 bends：一根 = 过它的 1/x 曲线，多根 = 单调三次
+        // old-style bends: one = the 1/x curve through it, several = monotone cubic
         if a.is_empty() {
             return Ok(None);
         }
@@ -376,7 +376,7 @@ fn clean_curve_strict(c: &Value) -> Result<Option<FunnelCurve>, ()> {
             }
             out
         }
-        // 空的 {} / "" 迭代起来是空的（同 Python 的 for 循环）
+        // an empty {} / "" iterates empty (like Python's for loop)
         Some(v) if !py_bool(v) && matches!(v, Value::Object(_) | Value::String(_)) => Vec::new(),
         Some(_) => return Err(()),
     };
@@ -420,7 +420,7 @@ fn clean_curve_strict(c: &Value) -> Result<Option<FunnelCurve>, ()> {
     }))
 }
 
-/// 一条新曲线（funnel.new_curve）：pts 缺省时用 [`DEFAULT_CURVE`]。
+/// A new curve (funnel.new_curve): when pts is missing use [`DEFAULT_CURVE`].
 pub fn new_curve(pts: Option<&[Pt]>) -> FunnelCurve {
     FunnelCurve {
         pts: match pts {
@@ -433,7 +433,7 @@ pub fn new_curve(pts: Option<&[Pt]>) -> FunnelCurve {
     }
 }
 
-/// 每条曲线的 `(起点号, 墙端, 曲线)`（funnel.all_curves）。
+/// Each curve as `(start number, wall end, curve)` (funnel.all_curves).
 pub fn all_curves(sh: &Shape) -> Vec<(usize, usize, &FunnelCurve)> {
     let mut out = Vec::new();
     for (k, st) in sh.starts.iter().enumerate() {
@@ -446,12 +446,12 @@ pub fn all_curves(sh: &Shape) -> Vec<(usize, usize, &FunnelCurve)> {
     out
 }
 
-/// 下一个组号（funnel.next_link）。
+/// The next group number (funnel.next_link).
 pub fn next_link(sh: &Shape) -> i64 {
     next_link_of(&sh.starts)
 }
 
-/// 起点列表的下一个组号（[`next_link`] 的内部形态）。
+/// The next group number for a start list (the internal form of [`next_link`]).
 fn next_link_of(starts: &[FunnelStart]) -> i64 {
     let mut best = 0;
     for st in starts {
@@ -464,7 +464,7 @@ fn next_link_of(starts: &[FunnelStart]) -> i64 {
     1 + best
 }
 
-/// 与这条曲线连在一起的其他曲线（funnel.partners）：`(起点, 墙端, 是否首尾对调)`。
+/// The other curves linked with this one (funnel.partners): `(start, wall end, turned end to end)`.
 pub fn partners(sh: &Shape, k: usize, end: usize) -> Vec<(usize, usize, bool)> {
     let c = sh
         .starts
@@ -482,12 +482,12 @@ pub fn partners(sh: &Shape, k: usize, end: usize) -> Vec<(usize, usize, bool)> {
         .collect()
 }
 
-/// 曲线的点首尾对调（陡的部分换到另一头，funnel.turned）。
+/// Turn the curve's points end to end (the steep part moves to the other side; funnel.turned).
 pub fn turned(pts: &[Pt]) -> Vec<Pt> {
     pts.iter().rev().map(|p| [1.0 - p[0], 1.0 - p[1]]).collect()
 }
 
-/// 曲线按伙伴拿到的样子（funnel.turned_curve）：flip 时首尾对调，否则一样；不带组号。
+/// The curve as a partner sees it (funnel.turned_curve): turned end to end when flip, otherwise the same; without the group number.
 pub fn turned_curve(c: &FunnelCurve, flip: bool) -> FunnelCurve {
     if !flip {
         return FunnelCurve {
@@ -512,7 +512,7 @@ pub fn turned_curve(c: &FunnelCurve, flip: bool) -> FunnelCurve {
     }
 }
 
-/// 里外翻过来的曲线（funnel.inside_out）：向另一边鼓（慢起 <-> 快起，S <-> 反 S）；不带组号。
+/// The curve turned inside out (funnel.inside_out): bulges the other way (slow start <-> fast start, S <-> reverse S); without the group number.
 pub fn inside_out(c: &FunnelCurve) -> FunnelCurve {
     FunnelCurve {
         pts: c.pts.iter().map(|p| [p[1], p[0]]).collect(),
@@ -522,20 +522,20 @@ pub fn inside_out(c: &FunnelCurve) -> FunnelCurve {
     }
 }
 
-/// 把 shape（一条曲线）的点与尖角给曲线 c，组号不变（funnel.set_shape）。
+/// Give curve c the points and sharp anchors of shape (a curve), keeping the group number (funnel.set_shape).
 pub fn set_shape(c: &mut FunnelCurve, shape: &FunnelCurve) {
     c.pts = shape.pts.clone();
     c.sharp = shape.sharp.clone();
 }
 
-// ---------------------------------------------------------------- 第一版的 bends（旧工程）
+// ---------------------------------------------------------------- first-version bends (old projects)
 
-/// 旧版 bends 的清洗（funnel.clean_bends）：坏数据返回 None（Python 抛异常）。
+/// Sanitising of old-style bends (funnel.clean_bends): bad data returns None (Python raises).
 pub fn clean_bends(bends: &Value) -> Option<Vec<Pt>> {
     clean_bends_strict(bends).ok()
 }
 
-/// [`clean_bends`] 的严格版。
+/// Strict version of [`clean_bends`].
 fn clean_bends_strict(bends: &Value) -> Result<Vec<Pt>, ()> {
     let arr = bends.as_array().ok_or(())?;
     let mut sorted: Vec<Pt> = Vec::with_capacity(arr.len());
@@ -554,8 +554,8 @@ fn clean_bends_strict(bends: &Value) -> Result<Vec<Pt>, ()> {
     Ok(out)
 }
 
-/// 沿旧 bends 的曲线上的点（funnel.old_curve_points）：一根 bend = 过它的 1/x 曲线，
-/// 多根 = 单调三次。没有 bend 时 None（Python 抛异常）。
+/// Points on the curve through old-style bends (funnel.old_curve_points): one bend = the 1/x curve
+/// through it, several = monotone cubic. None with no bends (Python raises).
 pub fn old_curve_points(bends: &[Pt]) -> Option<Vec<Pt>> {
     let steps = 400;
     let mut us: Vec<f64> = (0..=steps).map(|i| i as f64 / steps as f64).collect();
@@ -583,13 +583,13 @@ pub fn old_curve_points(bends: &[Pt]) -> Option<Vec<Pt>> {
     Some(us.into_iter().map(|u| [u, curve.eval(u)]).collect())
 }
 
-/// 第一版的漏斗（funnel.old_funnel）：`[起点, 墙顶] + sides` → 它的线 + 墙，以及起点。
-/// 返回的 starts 与 [`clean_starts`] 的输入同形（ends 里是 bends 的 list 或 null）。
+/// The first version's funnel (funnel.old_funnel): `[start, wall top] + sides` -> its lines + wall, plus the start.
+/// The returned starts have the same shape as [`clean_starts`]'s input (ends holds a list of bends or null).
 pub fn old_funnel(sh: &Value) -> Option<(Vec<Pt>, Value)> {
     let obj = sh.as_object()?;
     let raw = obj.get("pts")?.as_array()?;
     if raw.len() != 2 {
-        return None; // Python 解包恰好两个
+        return None; // Python unpacking is exactly two
     }
     let p0 = pair_of(&raw[0])?;
     let p1 = pair_of(&raw[1])?;
@@ -616,7 +616,7 @@ pub fn old_funnel(sh: &Value) -> Option<(Vec<Pt>, Value)> {
     }
 }
 
-/// 把一个 bend 夹到有效范围（funnel.clamp_bend）。
+/// Clamp one bend to its valid range (funnel.clamp_bend).
 pub fn clamp_bend(u: f64, f: f64) -> Pt {
     [
         0.99_f64.min(0.01_f64.max(u)),
@@ -624,7 +624,7 @@ pub fn clamp_bend(u: f64, f: f64) -> Pt {
     ]
 }
 
-/// 1/x 曲线过 bend 点的 `(a, 是否镜像)`；直线时 None（funnel._bend_curve）。
+/// The 1/x curve through the bend point as `(a, mirrored)`; None for a straight line (funnel._bend_curve).
 fn bend_curve(bend: Pt) -> Option<(f64, bool)> {
     let [u, f] = clamp_bend(bend[0], bend[1]);
     if (u - f).abs() < 1e-4 {
@@ -636,7 +636,7 @@ fn bend_curve(bend: Pt) -> Option<(f64, bool)> {
     Some(((1.0 - f) * u / (f - u), true))
 }
 
-/// 一根 bend 的曲线在 u 处张开多少（0..1；0 = 起点，1 = 墙，funnel.funnel_f）。
+/// How far one bend's curve is open at u (0..1; 0 = start, 1 = wall; funnel.funnel_f).
 pub fn funnel_f(bend: Pt, u: f64) -> f64 {
     let Some((a, mirrored)) = bend_curve(bend) else {
         return u;
@@ -646,7 +646,7 @@ pub fn funnel_f(bend: Pt, u: f64) -> f64 {
     if mirrored { 1.0 - y } else { y }
 }
 
-/// 一根 bend 的曲线在 y 张开处的位置（0..1，与 [`funnel_f`] 相反，funnel.funnel_u）。
+/// Position at which one bend's curve is open to y (0..1, the inverse of [`funnel_f`]; funnel.funnel_u).
 pub fn funnel_u(bend: Pt, y: f64) -> f64 {
     let Some((a, mirrored)) = bend_curve(bend) else {
         return y;
@@ -660,7 +660,7 @@ pub fn funnel_u(bend: Pt, y: f64) -> f64 {
     if mirrored { 1.0 - u } else { u }
 }
 
-/// 过这些点的单调三次（Fritsch-Carlson，funnel._smooth_curve）：平滑且不会冲过这些点。
+/// Monotone cubic through these points (Fritsch-Carlson, funnel._smooth_curve): smooth and never overshooting.
 #[derive(Clone, Debug)]
 pub struct SmoothCurve {
     xs: Vec<f64>,
@@ -669,7 +669,7 @@ pub struct SmoothCurve {
     m: Vec<f64>,
 }
 
-/// 建一条过 `(xs, ys)` 的单调三次；点数不足或长度不一致返回 None（Python 抛异常）。
+/// Build a monotone cubic through `(xs, ys)`; None when there are too few points or the lengths differ (Python raises).
 pub fn smooth_curve(xs: &[f64], ys: &[f64]) -> Option<SmoothCurve> {
     let n = xs.len();
     if n < 3 || ys.len() != n {
@@ -696,7 +696,7 @@ pub fn smooth_curve(xs: &[f64], ys: &[f64]) -> Option<SmoothCurve> {
         s
     };
     m[0] = end_slope(h[0], h[1], d[0], d[1]);
-    // Python 的 h[-1] / h[-2]：最后一根与倒数第二根
+    // Python's h[-1] / h[-2]: the last and second-to-last
     m[n - 1] = end_slope(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
     Some(SmoothCurve {
         xs: xs.to_vec(),
@@ -707,7 +707,7 @@ pub fn smooth_curve(xs: &[f64], ys: &[f64]) -> Option<SmoothCurve> {
 }
 
 impl SmoothCurve {
-    /// 曲线在 u 处的值（同 Python 返回的 fn(u)）。
+    /// The curve's value at u (same as the fn(u) Python returns).
     pub fn eval(&self, u: f64) -> f64 {
         let n = self.xs.len();
         let i = self
@@ -725,10 +725,10 @@ impl SmoothCurve {
     }
 }
 
-// ---------------------------------------------------------------- 曲线形状（预设、公式）
+// ---------------------------------------------------------------- curve shapes (presets, formulas)
 
-/// 公式在 n+1 个等距 x 上的点（funnel.formula_curve）：y 拉伸到 0 -> 1。
-/// 公式算不出来（Err / 非有限）或首尾一样高时返回 Err。
+/// The formula's points at n+1 evenly spaced x (funnel.formula_curve): y stretched to 0 -> 1.
+/// Err when the formula cannot be worked out (Err / non-finite) or the ends are equally high.
 pub fn formula_curve(f: &dyn Fn(f64) -> Result<f64, String>, n: usize) -> Result<Vec<Pt>, String> {
     if n == 0 {
         return Err("x = i / n 需要 n > 0".to_string());
@@ -758,7 +758,7 @@ pub fn formula_curve(f: &dyn Fn(f64) -> Result<f64, String>, n: usize) -> Result
         .collect())
 }
 
-/// 公式对应的曲线（funnel.preset_curve；None = 默认曲线）。
+/// The curve for a formula (funnel.preset_curve; None = default curve).
 pub fn preset_curve(
     formula: Option<&dyn Fn(f64) -> Result<f64, String>>,
 ) -> Result<FunnelCurve, String> {
@@ -775,10 +775,10 @@ pub fn preset_curve(
     Ok(new_curve(Some(&pts)))
 }
 
-// ---------------------------------------------------------------- 线 / 起点 / 方盒
+// ---------------------------------------------------------------- lines / starts / boxes
 
-/// 把线（编号）与曲线 `((起点, 墙端))` 从漏斗里拿掉（funnel.remove_funnel_parts）：
-/// 起点在被拿掉的线上的曲线跟着走，下一条线接任第一条。没有线剩下时返回 false（删漏斗）。
+/// Remove lines (by number) and curves `((start, wall end))` from the funnel (funnel.remove_funnel_parts):
+/// curves of starts on a removed line go too, and the next line takes over as the first. Returns false when no line is left (delete the funnel).
 pub fn remove_funnel_parts(sh: &mut Shape, lines: &[usize], curves: &[(usize, usize)]) -> bool {
     let old = funnel_lines(sh);
     let keep: Vec<usize> = (0..old.len()).filter(|n| !lines.contains(n)).collect();
@@ -818,7 +818,7 @@ pub fn remove_funnel_parts(sh: &mut Shape, lines: &[usize], curves: &[(usize, us
     true
 }
 
-/// 漏斗每条线的 `(起点, 终点)`（不含墙，funnel.funnel_lines）。
+/// `(start, end)` of each funnel line (excluding the wall; funnel.funnel_lines).
 pub fn funnel_lines(sh: &Shape) -> Vec<[Pt; 2]> {
     let pts = &sh.pts;
     let mut out = Vec::new();
@@ -833,12 +833,12 @@ pub fn funnel_lines(sh: &Shape) -> Vec<[Pt; 2]> {
     out
 }
 
-/// 线号 `line` 在 `sh.pts` 里的起点（funnel.line_index）。
+/// Index in `sh.pts` where line number `line` starts (funnel.line_index).
 pub fn line_index(line: usize) -> usize {
     if line == 0 { 0 } else { 2 + 2 * line }
 }
 
-/// 线 `line` 上 `at`（0..1）处的点（funnel.start_point）；线号超出 `pts` 时 None。
+/// The point at `at` (0..1) on line `line` (funnel.start_point); None when the line number is beyond `pts`.
 pub fn start_point(sh: &Shape, at: f64, line: usize) -> Option<Pt> {
     let i = line_index(line);
     let b = sh.pts.get(i)?;
@@ -846,8 +846,8 @@ pub fn start_point(sh: &Shape, at: f64, line: usize) -> Option<Pt> {
     Some([b[0] + (c[0] - b[0]) * at, b[1] + (c[1] - b[1]) * at])
 }
 
-/// 线 `line` 上 `at` 处的起点到墙端 `end`（0 / 1）的曲线方盒 `(S, U, V)`；
-/// 那个墙端落在线上的没有可张开的，返回 None（funnel.curve_box）。
+/// The curve box `(S, U, V)` from the start at `at` on line `line` to wall end `end` (0 / 1);
+/// when that wall end lies on the line there is nothing to open, so None (funnel.curve_box).
 pub fn curve_box(sh: &Shape, at: f64, end: usize, line: usize) -> Option<(Pt, Pt, Pt)> {
     if sh.pts.len() < 4 {
         return None;
@@ -870,7 +870,7 @@ pub fn curve_box(sh: &Shape, at: f64, end: usize, line: usize) -> Option<(Pt, Pt
         let y = (d1[0] * ey - d1[1] * ex) / det;
         ([x * d1[0], x * d1[1]], [y * d2[0], y * d2[1]])
     } else {
-        // 线与墙平行（或是一个点）：普通的时间 / 音高方盒
+        // the line is parallel to the wall (or is a point): a plain time / pitch box
         ([ex, 0.0], [0.0, ey])
     };
     if (u[0] * v[1] - u[1] * v[0]).abs() < 1e-9 {
@@ -879,13 +879,13 @@ pub fn curve_box(sh: &Shape, at: f64, end: usize, line: usize) -> Option<(Pt, Pt
     Some((s, u, v))
 }
 
-/// 方盒里 `(u, f)` 处的点（funnel.box_point）。
+/// The point at `(u, f)` in the box (funnel.box_point).
 pub fn box_point(box_: &(Pt, Pt, Pt), u: f64, f: f64) -> Pt {
     let (s, ub, vb) = box_;
     [s[0] + u * ub[0] + f * vb[0], s[1] + u * ub[1] + f * vb[1]]
 }
 
-/// 点 `(beat, pitch)` 在曲线方盒里的 `(u, f)`（funnel.box_uf）。
+/// The `(u, f)` of point `(beat, pitch)` in the curve box (funnel.box_uf).
 pub fn box_uf(box_: &(Pt, Pt, Pt), b: f64, p: f64) -> Pt {
     let (s, ub, vb) = box_;
     let det = ub[0] * vb[1] - ub[1] * vb[0];
@@ -894,8 +894,8 @@ pub fn box_uf(box_: &(Pt, Pt, Pt), b: f64, p: f64) -> Pt {
     [(x * vb[1] - y * vb[0]) / det, (ub[0] * y - ub[1] * x) / det]
 }
 
-/// 每条曲线 `(起点号, 墙端, 从起点到墙端的点列, 线与墙的交点)`（funnel.funnel_curves）。
-/// short：每条曲线停在最后一个 key 里一点点，那个 key 只在墙上碰到（给正好从墙开始的音符用）。
+/// Each curve as `(start number, wall end, point list from start to wall end, where the line meets the wall)` (funnel.funnel_curves).
+/// short: each curve stops a little inside the last key, which is only touched on the wall (for notes that start exactly at the wall).
 pub fn funnel_curves(sh: &Shape, short: bool) -> Vec<(usize, usize, Vec<Pt>, Pt)> {
     let mut out = Vec::new();
     for (k, st) in sh.starts.iter().enumerate() {
@@ -919,8 +919,8 @@ pub fn funnel_curves(sh: &Shape, short: bool) -> Vec<(usize, usize, Vec<Pt>, Pt)
     out
 }
 
-/// 线 `line` 上 `at` 处的新起点，向两个墙端张开（funnel.new_start）；两条曲线连成一组
-/// （隔在线的两侧，看起来是镜像）。都张不开时 None。
+/// A new start at `at` on line `line`, opening towards both wall ends (funnel.new_start); the two curves
+/// are linked into one group (on opposite sides of the line, so they look mirrored). None when neither can open.
 pub fn new_start(sh: &Shape, at: f64, line: usize) -> Option<FunnelStart> {
     let mut ends: [Option<FunnelCurve>; 2] = [None, None];
     for (end, slot) in ends.iter_mut().enumerate() {
@@ -942,19 +942,19 @@ pub fn new_start(sh: &Shape, at: f64, line: usize) -> Option<FunnelStart> {
     }
 }
 
-/// 手柄点的身份（funnel.funnel_handles 的 id）。
+/// The identity of a handle point (the id in funnel.funnel_handles).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HandleId {
-    /// 每个起点：`(起点号)`。
+    /// One per start: `(start number)`.
     Start(usize),
-    /// 拉出锚点的手柄点：`(起点号, 墙端, 点号)`。
+    /// A handle point pulled out of an anchor: `(start number, wall end, point number)`.
     Ctrl(usize, usize, usize),
-    /// 两端之间的锚点：`(起点号, 墙端, 点号)`。
+    /// An anchor between the ends: `(start number, wall end, point number)`.
     Anchor(usize, usize, usize),
 }
 
-/// `[(beat, pitch, id)]`（funnel.funnel_handles）：每个起点一个 "start"，
-/// 每个拉出锚点的手柄一个 "ctrl"，两端之间的锚点一个 "anchor"。
+/// `[(beat, pitch, id)]` (funnel.funnel_handles): one "start" per start,
+/// one "ctrl" per handle pulled out of an anchor, one "anchor" per anchor between the ends.
 pub fn funnel_handles(sh: &Shape) -> Vec<(Pt, HandleId)> {
     let mut out = Vec::new();
     let mut ctrls = Vec::new();
@@ -983,7 +983,7 @@ pub fn funnel_handles(sh: &Shape) -> Vec<(Pt, HandleId)> {
     out
 }
 
-/// 手柄线 `(锚点, 手柄点, (起点号, 墙端))`，点是 `(beat, pitch)`（funnel.funnel_handle_lines）。
+/// Handle lines `(anchor, handle point, (start number, wall end))`, points are `(beat, pitch)` (funnel.funnel_handle_lines).
 pub fn funnel_handle_lines(sh: &Shape) -> Vec<(Pt, Pt, (usize, usize))> {
     let mut out = Vec::new();
     for (k, end, c) in all_curves(sh) {
@@ -1003,9 +1003,9 @@ pub fn funnel_handle_lines(sh: &Shape) -> Vec<(Pt, Pt, (usize, usize))> {
     out
 }
 
-// ---------------------------------------------------------------- 直线部分与区域
+// ---------------------------------------------------------------- straight parts and areas
 
-/// 直线部分：每条线，然后墙，都是 `(beat, pitch)` 折线（funnel.funnel_strokes）。
+/// The straight parts: each line, then the wall, as `(beat, pitch)` polylines (funnel.funnel_strokes).
 pub fn funnel_strokes(sh: &Shape) -> Vec<Vec<Pt>> {
     let mut out: Vec<Vec<Pt>> = funnel_segments(sh)
         .into_iter()
@@ -1015,7 +1015,7 @@ pub fn funnel_strokes(sh: &Shape) -> Vec<Vec<Pt>> {
     out
 }
 
-/// 直的段：每条线，然后墙（funnel.funnel_segments）。
+/// Straight segments: each line, then the wall (funnel.funnel_segments).
 pub fn funnel_segments(sh: &Shape) -> Vec<[Pt; 2]> {
     let lines = funnel_lines(sh);
     let mut out: Vec<[Pt; 2]> = Vec::new();
@@ -1029,7 +1029,7 @@ pub fn funnel_segments(sh: &Shape) -> Vec<[Pt; 2]> {
     out
 }
 
-/// 每条曲线的区域：先曲线，再沿墙与线回来（funnel.funnel_polys）。
+/// Each curve's area: the curve first, then back along the wall and the line (funnel.funnel_polys).
 pub fn funnel_polys(sh: &Shape, short: bool) -> Vec<Vec<Pt>> {
     funnel_curves(sh, short)
         .into_iter()
@@ -1043,7 +1043,7 @@ pub fn funnel_polys(sh: &Shape, short: bool) -> Vec<Vec<Pt>> {
         .collect()
 }
 
-/// `(beat, pitch)` 在漏斗某条曲线的区域里吗（funnel.funnel_contains）？
+/// Is `(beat, pitch)` inside one of the funnel's curve areas (funnel.funnel_contains)?
 pub fn funnel_contains(sh: &Shape, b: f64, p: f64) -> bool {
     for poly in funnel_polys(sh, false) {
         let mut inside = false;
@@ -1060,7 +1060,7 @@ pub fn funnel_contains(sh: &Shape, b: f64, p: f64) -> bool {
     false
 }
 
-/// 直线 a -> b 落在 key q 上的 `(第一个 beat, 最后一个 beat)`，没有时 None（funnel.line_band）。
+/// The `(first beat, last beat)` where straight line a -> b is on key q, None if never (funnel.line_band).
 pub fn line_band(a: Pt, b: Pt, q: i64) -> Option<(f64, f64)> {
     let (ta, ya) = (a[0], a[1]);
     let (tb, yb) = (b[0], b[1]);
@@ -1087,7 +1087,7 @@ pub fn line_band(a: Pt, b: Pt, q: i64) -> Option<(f64, f64)> {
     Some((x0.min(x1), x0.max(x1)))
 }
 
-/// 一段 / 一列点覆盖的 key 范围（funnel._keys）。
+/// The key range covered by a segment / list of points (funnel._keys).
 fn keys(ps: &[f64]) -> RangeInclusive<i64> {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
@@ -1098,19 +1098,19 @@ fn keys(ps: &[f64]) -> RangeInclusive<i64> {
     0.max(pitch_of(lo))..=crate::paths::TOP_KEY.min(pitch_of(hi))
 }
 
-/// key → 区间列表（保持插入顺序，Python dict；`funnel_cells` 的输出顺序跟着它走）。
+/// key -> span list (keeping insertion order, a Python dict; `funnel_cells`'s output order follows it).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Spans {
     entries: Vec<(i64, Vec<[f64; 2]>)>,
 }
 
 impl Spans {
-    /// 空表。
+    /// An empty map.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 有没有这个 key。
+    /// Whether this key is present.
     pub fn get(&self, k: i64) -> Option<&[[f64; 2]]> {
         self.entries
             .iter()
@@ -1118,7 +1118,7 @@ impl Spans {
             .map(|e| e.1.as_slice())
     }
 
-    /// key 对应的区间列表，没有就（按插入顺序）新建一个。
+    /// The span list for key, creating one (in insertion order) when absent.
     pub fn entry(&mut self, k: i64) -> &mut Vec<[f64; 2]> {
         match self.entries.iter().position(|e| e.0 == k) {
             Some(i) => &mut self.entries[i].1,
@@ -1130,7 +1130,7 @@ impl Spans {
         }
     }
 
-    /// 放入一个 key 的区间列表（已有就替换）。
+    /// Put in a key's span list (replacing an existing one).
     pub fn insert(&mut self, k: i64, v: Vec<[f64; 2]>) {
         match self.entries.iter().position(|e| e.0 == k) {
             Some(i) => self.entries[i].1 = v,
@@ -1138,24 +1138,24 @@ impl Spans {
         }
     }
 
-    /// 按插入顺序遍历 `(key, 区间列表)`。
+    /// Iterate `(key, span list)` in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (i64, &[[f64; 2]])> {
         self.entries.iter().map(|(k, v)| (*k, v.as_slice()))
     }
 
-    /// 条目数。
+    /// Number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// 是不是空的。
+    /// Whether it is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
 
-/// `{key: [[第一个 beat, 最后一个 beat], ...]}`（funnel.funnel_key_spans）：
-/// 每个 key 演奏的范围（排好序、重叠的合并）。
+/// `{key: [[first beat, last beat], ...]}` (funnel.funnel_key_spans):
+/// the range each key plays (sorted, overlaps merged).
 pub fn funnel_key_spans(sh: &Shape) -> Spans {
     let mut pieces = Spans::new();
     for [a, b] in funnel_segments(sh) {
@@ -1197,10 +1197,10 @@ pub fn funnel_key_spans(sh: &Shape) -> Spans {
     out
 }
 
-// ---------------------------------------------------------------- 布局与音符
+// ---------------------------------------------------------------- layout and notes
 
-/// 音符网格的轴 `(t0, sign, length)`（funnel.funnel_axis）：网格从线的起点朝墙走
-/// （sign -1 = 时间上倒退：反向漏斗），length = 起点到墙的 tick 距离。
+/// The note grid's axis `(t0, sign, length)` (funnel.funnel_axis): the grid runs from the line's start
+/// towards the wall (sign -1 = backwards in time: reversed funnel); length = tick distance from start to wall.
 pub fn funnel_axis(sh: &Shape, spans: &Spans) -> Option<(f64, i64, f64)> {
     let pts = &sh.pts;
     let p0 = pts.first()?[0];
@@ -1226,35 +1226,35 @@ pub fn funnel_axis(sh: &Shape, spans: &Spans) -> Option<(f64, i64, f64)> {
         return None;
     }
     if hi - lo < 1e-9 {
-        // 只是一条竖线（墙，先画的）：一列墙 gate 结束在它上面
+        // just a vertical line (the wall, drawn first): a column of wall gates ends on it
         return Some((lo, -1, sh.gate1));
     }
-    Some((lo, 1, hi - lo)) // 线与墙同一时间开始（转过来的漏斗）：从左到右
+    Some((lo, 1, hi - lo)) // the line and wall start at the same time (a turned funnel): left to right
 }
 
-/// 墙在时间上比线的起点早吗（funnel.funnel_reversed）？
+/// Is the wall earlier in time than the line's start (funnel.funnel_reversed)?
 pub fn funnel_reversed(sh: &Shape) -> bool {
     let pts = &sh.pts;
     pts.len() >= 4 && (pts[2][0] + pts[3][0]) / 2.0 < pts[0][0] - 1e-9
 }
 
-/// 音符来源的一切（funnel.funnel_layout）：`(网格距离里的 spans, 墙的范围, 网格长度, t0 tick, sign)`。
-/// 网格距离是从线的起点朝墙的 tick 数。漏斗不出音符时 None。
+/// Everything the notes come from (funnel.funnel_layout): `(spans in grid distance, wall ranges, grid length, t0 tick, sign)`.
+/// Grid distance is ticks from the line's start towards the wall. None when the funnel makes no notes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunnelLayout {
-    /// 每个 key 的范围（网格距离）。
+    /// Each key's range (grid distance).
     pub dspans: Spans,
-    /// 墙在每个 key 上的范围（网格距离）。
+    /// The wall's range on each key (grid distance).
     pub walls: BTreeMap<i64, [f64; 2]>,
-    /// 起点到墙的 tick 距离（至少 1）。
+    /// Tick distance from start to wall (at least 1).
     pub length: f64,
-    /// 线起点在时间轴上的 tick。
+    /// The line start's tick on the time axis.
     pub t0: f64,
-    /// 网格朝墙的方向（-1 = 倒退）。
+    /// The grid's direction towards the wall (-1 = backwards).
     pub sign: i64,
 }
 
-/// 漏斗的布局（funnel.funnel_layout）；不出音符时 None。
+/// The funnel's layout (funnel.funnel_layout); None when it makes no notes.
 pub fn funnel_layout(sh: &Shape, ppq: f64) -> Option<FunnelLayout> {
     let spans = funnel_key_spans(sh);
     if spans.is_empty() {
@@ -1291,7 +1291,7 @@ pub fn funnel_layout(sh: &Shape, ppq: f64) -> Option<FunnelLayout> {
     })
 }
 
-/// w(d)：0..1，网格距离 d 处有多少 key 在演奏（1 个 key = 0，最多 = 1；funnel.funnel_openness）。
+/// w(d): 0..1, how open the grid is at distance d, from how many keys play there (1 key = 0, the most = 1; funnel.funnel_openness).
 #[derive(Clone, Debug)]
 pub struct Openness {
     xs: Vec<f64>,
@@ -1299,7 +1299,7 @@ pub struct Openness {
     top: i64,
 }
 
-/// 从 spans 建 [`Openness`]（funnel.funnel_openness）。
+/// Build [`Openness`] from spans (funnel.funnel_openness).
 pub fn funnel_openness(dspans: &Spans) -> Openness {
     let mut events: Vec<(f64, i8)> = Vec::new();
     for (_, spans) in dspans.iter() {
@@ -1331,7 +1331,7 @@ pub fn funnel_openness(dspans: &Spans) -> Openness {
 }
 
 impl Openness {
-    /// 网格距离 d 处的张开程度。
+    /// How open the grid is at distance d.
     pub fn w(&self, d: f64) -> f64 {
         let i = self.xs.partition_point(|&x| x <= d) as i64 - 1;
         let n = if i >= 0 { self.counts[i as usize] } else { 0 };
@@ -1343,7 +1343,7 @@ impl Openness {
     }
 }
 
-/// w 那么深的音符的 gate（tick，funnel.funnel_gate）：0 = 起点 gate，1 = 墙 gate。
+/// The gate of a note w deep (ticks, funnel.funnel_gate): 0 = start gate, 1 = wall gate.
 pub fn funnel_gate(sh: &Shape, g0: f64, g1: f64, w: f64) -> f64 {
     let mut g = g0 * (g1 / g0).powf(w);
     if sh.change == GateChange::Steps && g0 != g1 {
@@ -1353,8 +1353,8 @@ pub fn funnel_gate(sh: &Shape, g0: f64, g1: f64, w: f64) -> f64 {
     g.max(1.0)
 }
 
-/// spam 漏斗每个 key 共用的音符网格（funnel.funnel_grid），以网格距离表示：从线的起点到墙
-/// （剩下不到半个 gate 的并入最后一个音符），然后越过一切再多一个音符。
+/// The note grid shared by every key of a spam funnel (funnel.funnel_grid), in grid distance: from the
+/// line's start to the wall (a leftover under half a gate joins the last note), then one more note past everything.
 pub fn funnel_grid(sh: &Shape, ppq: f64, dspans: &Spans, length: f64) -> Vec<f64> {
     let g0 = sh.gate0 * ppq;
     let g1 = sh.gate1 * ppq;
@@ -1384,7 +1384,7 @@ pub fn funnel_grid(sh: &Shape, ppq: f64, dspans: &Spans, length: f64) -> Vec<f64
         }
     }
     if !any {
-        return Vec::new(); // Python 对空 dspans 会 ValueError（调用方保证非空）
+        return Vec::new(); // Python raises ValueError for empty dspans (the caller guarantees non-empty)
     }
     let mut marks = vec![0.0_f64];
     let mut d = 0.0;
@@ -1398,7 +1398,7 @@ pub fn funnel_grid(sh: &Shape, ppq: f64, dspans: &Spans, length: f64) -> Vec<f64
         marks.push(last + gate(last));
     }
     let last = marks[marks.len() - 1];
-    marks.push(last + gate(last)); // 给墙后面那列留位置
+    marks.push(last + gate(last)); // make room for the column beyond the wall
     while marks[0] > lo {
         let first = marks[0];
         marks.insert(0, first - g0);
@@ -1406,7 +1406,7 @@ pub fn funnel_grid(sh: &Shape, ppq: f64, dspans: &Spans, length: f64) -> Vec<f64
     marks
 }
 
-/// 离 x 最近的 `xs` 序号（funnel._nearest）。
+/// Index in `xs` nearest to x (funnel._nearest).
 fn nearest(xs: &[f64], x: f64) -> i64 {
     let mut i = xs.partition_point(|&v| v < x);
     if i > 0 && (i == xs.len() || x - xs[i - 1] <= xs[i] - x) {
@@ -1415,8 +1415,8 @@ fn nearest(xs: &[f64], x: f64) -> i64 {
     i as i64
 }
 
-/// spam：`(网格 tick, [(key, 第一条网格线, 最后一条网格线)])`，每个 key 的音符从网格线
-/// 走到网格线。long：`(None, [(key, 起始 tick, 结束 tick)])`（funnel.funnel_cells）。
+/// spam: `(grid ticks, [(key, first grid line, last grid line)])`, each key's notes run from grid
+/// line to grid line. long: `(None, [(key, start tick, end tick)])` (funnel.funnel_cells).
 pub fn funnel_cells(sh: &Shape, ppq: f64) -> (Option<Vec<i64>>, Vec<[i64; 3]>) {
     let Some(lay) = funnel_layout(sh, ppq) else {
         return (None, Vec::new());
@@ -1442,7 +1442,7 @@ pub fn funnel_cells(sh: &Shape, ppq: f64) -> (Option<Vec<i64>>, Vec<[i64; 3]>) {
         for (q, spans) in dspans.iter() {
             for s in spans {
                 let (a, b) = (s[0], s[1]);
-                // 墙外的一整个 gate
+                // one whole gate beyond the wall
                 let far = tick(b) + if past && at_wall(q, b) { sign * g1 } else { 0 };
                 let (ta, tb) = (tick(a), far);
                 let (s0, e0) = if ta <= tb { (ta, tb) } else { (tb, ta) };
@@ -1469,9 +1469,9 @@ pub fn funnel_cells(sh: &Shape, ppq: f64) -> (Option<Vec<i64>>, Vec<[i64; 3]>) {
             let mut i = nearest(&ds, a);
             let mut j = nearest(&ds, b);
             if past && at_wall(q, b) {
-                j = (j + 1).min(ds.len() as i64 - 1); // 到墙后一个音符（墙上的 key：就那一个）
+                j = (j + 1).min(ds.len() as i64 - 1); // one note past the wall (for a key on the wall: just that one)
             } else if j <= i {
-                // 比一个音符短：它所在的音符（在网格线上时就是结束在那里的那个）
+                // shorter than one note: the note it sits in (on a grid line, the one ending there)
                 let mid = (a + b) / 2.0 - 1e-9;
                 let at = ds.partition_point(|&v| v < mid) as i64;
                 j = at.max(1).min(ds.len() as i64 - 1);
@@ -1489,7 +1489,7 @@ pub fn funnel_cells(sh: &Shape, ppq: f64) -> (Option<Vec<i64>>, Vec<[i64; 3]>) {
     (Some(ticks), out)
 }
 
-/// 漏斗的音符数（funnel.funnel_note_count）。
+/// The funnel's note count (funnel.funnel_note_count).
 pub fn funnel_note_count(sh: &Shape, ppq: f64) -> i64 {
     let (ticks, cells) = funnel_cells(sh, ppq);
     match ticks {
@@ -1498,13 +1498,13 @@ pub fn funnel_note_count(sh: &Shape, ppq: f64) -> i64 {
     }
 }
 
-/// 漏斗的音符行 `[start, end, key]`（funnel.funnel_notes）。
+/// The funnel's note rows `[start, end, key]` (funnel.funnel_notes).
 pub fn funnel_notes(sh: &Shape, ppq: f64) -> Vec<[i64; 3]> {
     let (ticks, cells) = funnel_cells(sh, ppq);
     match ticks {
         None => cells.iter().map(|c| [c[1], c[2], c[0]]).collect(),
         Some(ticks) => {
-            // 每个 key：从每条网格线到下一线，从它的第一条线到 last
+            // each key: from each grid line to the next, from its first line to last
             let mut out = Vec::new();
             for c in cells {
                 let (q, i, j) = (c[0], c[1], c[2]);

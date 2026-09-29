@@ -1,10 +1,10 @@
-//! 系统字体冒烟测试：依赖运行环境装没装字体，断言保持宽松。
+//! System font smoke test: depends on which fonts are installed, so the assertions stay loose.
 
 use std::sync::Arc;
 
 use spiderweb_core::fonts::{Font, font_families, get_font};
 
-/// 常见家族优先，保证各平台都能找到带 'A' 轮廓的字体。
+/// Common families first, so every platform has a font with an 'A' outline.
 const PREFERRED: &[&str] = &[
     "Helvetica",
     "Arial",
@@ -18,7 +18,7 @@ const PREFERRED: &[&str] = &[
     "Times New Roman",
 ];
 
-/// 找一个装了、能读出 'A' 轮廓的字体；一个都没有返回 None。
+/// Find an installed font whose 'A' outline can be read; None when there is none.
 fn usable_font() -> Option<Arc<Font>> {
     let families = font_families();
     let mut candidates: Vec<&String> = Vec::new();
@@ -107,15 +107,15 @@ fn loads_a_system_font() {
         }
     }
 
-    // 同一个键命中缓存：拿到的是同一个共享字体。
+    // The same key hits the cache: the same shared font comes back.
     let again = get_font(&font.family, 400, false);
     assert!(Arc::ptr_eq(&font, &again));
 
-    // 不认识的家族退回别的字体，found 为 false。
+    // An unknown family falls back to another font, with found false.
     let missing = get_font("__spiderweb_no_such_font__", 400, false);
     assert!(!missing.found());
 
-    // 任意字符都可读，不会 panic。
+    // Any character can be read without panicking.
     let _ = font.glyph('中');
     let _ = font.glyph(' ');
     let _ = font.glyph('🕷');

@@ -1,10 +1,10 @@
-//! 数据模型：形状（Shape）及其各类型的专属设置，对应 Python 版形状字典。
+//! Data model: shapes (Shape) and their per-kind settings, matching the Python shape dictionary.
 
 use std::collections::BTreeMap;
 
 use crate::Pt;
 
-/// 形状种类（Python 的 sh["kind"]）。
+/// Shape kind (Python's sh["kind"]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Line,
@@ -30,7 +30,7 @@ impl Kind {
     }
 }
 
-/// 自定义形状的填充方式（custom.py FILLS）。
+/// Custom shape fill mode (custom.py FILLS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Fill {
     #[default]
@@ -40,33 +40,33 @@ pub enum Fill {
     OutlineSpam,
 }
 
-/// Spam 起点对齐（custom.py ALIGNS）。
+/// Spam start alignment (custom.py ALIGNS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Align {
     #[default]
     Auto,
     Aligned,
-    /// 放不下整门限的余量分给两端（custom.py 的 "centred"）。
+    /// Split the leftover that can't fit a whole gate between the two ends (custom.py's "centred").
     Centred,
 }
 
-/// Spam 收尾（custom.py ENDS）：一段里放不下整门限的零头怎么处理。
+/// Spam ending (custom.py ENDS): what to do with the leftover that can't fit a whole gate in a segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Ends {
-    /// 够半个门限算一个整门限，否则丢掉（每段至少一个门限）。
+    /// Half a gate or more counts as a whole gate, otherwise it is dropped (at least one gate per segment).
     Round,
-    /// 零头留成短线。
+    /// Keep the leftover as a short note.
     Keep,
-    /// 丢掉；短于一个门限的段原样留一个音符（没有 ends 的旧形状按这个读）。
+    /// Drop it; a segment shorter than one gate keeps one note as-is (old shapes without ends read as this).
     #[default]
     Drop,
-    /// 同 drop，但音符不短于四分之一门限（不够就居中长出来）。
+    /// Same as drop, but notes are never shorter than a quarter gate (grown from the centre if needed).
     Min,
-    /// 段里的门限拉伸 / 压缩，正好放下整数个。
+    /// Stretch / squeeze the gates in a segment to fit a whole number of them.
     Stretch,
 }
 
-/// 对称曲线的方式（bezier.py Symmetry）。
+/// How a curve is made symmetric (bezier.py Symmetry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sym {
     Mirror,
@@ -81,7 +81,7 @@ pub enum Sym {
 pub enum Stroke {
     Poly {
         pts: Vec<Pt>,
-        /// 自由笔画的（可"画整齐"）
+        /// Drawn freehand (can be "Straightened")
         free: bool,
         smooth: i64,
         k: f64,
@@ -126,7 +126,7 @@ impl Stroke {
     }
 }
 
-/// 肿瘤形状（tumour.py SHAPES）。
+/// Tumour shape (tumour.py SHAPES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TumourShape {
     #[default]
@@ -136,7 +136,7 @@ pub enum TumourShape {
     Parabola,
 }
 
-/// 肿瘤方向（tumour.py SIDES）。
+/// Tumour side (tumour.py SIDES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TumourSide {
     #[default]
@@ -146,7 +146,7 @@ pub enum TumourSide {
     Random,
 }
 
-/// 肿瘤跟随线条的方式（tumour.py WRAPS）。
+/// How a tumour follows the line (tumour.py WRAPS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TumourWrap {
     #[default]
@@ -154,7 +154,7 @@ pub enum TumourWrap {
     Wrap,
 }
 
-/// 肿瘤设置（sh["tumour"]），默认值同 tumour.TUMOUR_DEFAULTS。
+/// Tumour settings (sh["tumour"]), defaults same as tumour.TUMOUR_DEFAULTS.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tumour {
     pub on: bool,
@@ -206,7 +206,7 @@ impl Default for Tumour {
     }
 }
 
-/// 文本设置（text.py TEXT_DEFAULTS + bbox/cap/k/holes）。
+/// Text settings (text.py TEXT_DEFAULTS + bbox/cap/k/holes).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSettings {
     pub text: String,
@@ -227,8 +227,8 @@ pub struct TextSettings {
 }
 
 impl Default for TextSettings {
-    /// text.TEXT_DEFAULTS 的值（bbox 用 project.py 对文本默认设置的 `[0, 0, 1, 1]`，
-    /// cap / k 用 `or 0.7` / `or 1.0` 的兜底值）。
+    /// Values from text.TEXT_DEFAULTS (bbox uses project.py's `[0, 0, 1, 1]` default for text
+    /// settings, cap / k use the `or 0.7` / `or 1.0` fallbacks).
     fn default() -> Self {
         Self {
             text: String::new(),
@@ -265,7 +265,7 @@ pub enum TextAlign {
     Right,
 }
 
-/// 漏斗里一条曲线（funnel.py clean_curve 的产物）。
+/// A curve inside the funnel (the product of funnel.py clean_curve).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunnelCurve {
     pub pts: Vec<Pt>,
@@ -274,7 +274,7 @@ pub struct FunnelCurve {
     pub flip: bool,
 }
 
-/// 漏斗的一个起点（funnel.py "starts" 元素）。
+/// One funnel start (an element of funnel.py "starts").
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunnelStart {
     pub line: usize,
@@ -282,7 +282,7 @@ pub struct FunnelStart {
     pub ends: [Option<FunnelCurve>; 2],
 }
 
-/// 漏斗填充方式（funnel.py FUNNEL_FILLS）。
+/// Funnel fill mode (funnel.py FUNNEL_FILLS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FunnelFill {
     #[default]
@@ -290,7 +290,7 @@ pub enum FunnelFill {
     Long,
 }
 
-/// 门限变化方式（funnel.py GATE_CHANGES）。
+/// Gate change mode (funnel.py GATE_CHANGES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GateChange {
     #[default]
@@ -298,7 +298,7 @@ pub enum GateChange {
     Smooth,
 }
 
-/// 门限跟随对象（funnel.py GATE_FOLLOWS）。
+/// What the gate follows (funnel.py GATE_FOLLOWS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GateFollow {
     #[default]
@@ -306,7 +306,7 @@ pub enum GateFollow {
     Curve,
 }
 
-/// 墙模式（funnel.py WALL_MODES）。
+/// Wall mode (funnel.py WALL_MODES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WallMode {
     #[default]
@@ -324,23 +324,23 @@ pub struct ShapeFrom {
     pub pts: Vec<Pt>,
 }
 
-/// 一个形状。字段与 Python 形状字典一一对应（各类型专属字段并存，按 kind 生效）。
+/// A shape. Fields correspond one-to-one with the Python shape dictionary (per-kind fields coexist and apply according to kind).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
     pub kind: Kind,
-    /// 形状的点：(beat, pitch)。漏斗：[线起点, 线终点, 墙1, 墙2, (额外线...)]
+    /// Shape points: (beat, pitch). Funnel: [line start, line end, wall 1, wall 2, (extra lines...)]
     pub pts: Vec<Pt>,
     pub vel0: f64,
     pub vel1: f64,
-    /// 速度包络；空 = vel0 → vel1 直线。
+    /// Velocity envelope; empty = straight line vel0 -> vel1.
     pub vel_env: Vec<Pt>,
     pub end_dot: bool,
     pub tumour: Option<Tumour>,
-    /// 自由笔"画整齐"灵敏度 0..100；0 = 保持原样。
+    /// Freehand "Straighten" sensitivity 0..100; 0 = keep as drawn.
     pub smooth: i64,
-    /// 弧 / 画整齐时的屏幕比例：几个 beat 对应一个 key。
+    /// On-screen scale for arcs / Straighten: how many beats per key.
     pub k: f64,
-    /// 曲线锚点中的尖角（anchor 序号）。
+    /// Sharp corners among the curve anchors (anchor indices).
     pub sharp: Vec<usize>,
     pub sym: Option<Sym>,
     /// Segments of a joined curve that aren't drawn and make no notes
@@ -358,14 +358,14 @@ pub struct Shape {
     pub fill: Fill,
     pub gate: f64,
     pub align: Align,
-    /// spam 收尾（1.2.0 新增；旧形状读作 drop）。
+    /// Spam ending (new in 1.2.0; old shapes read as drop).
     pub ends: Ends,
-    /// 轮廓重叠处也填上（否则重叠互相抵消，even-odd）。
+    /// Fill overlapping outline areas too (otherwise overlaps cancel out, even-odd).
     pub union: bool,
-    /// Fill / Spam "Outline"：轮廓的音符单独一条通道（1.2.0 新增）。
+    /// Fill / Spam "Outline": the outline's notes go on a separate channel (new in 1.2.0).
     pub apart: bool,
     pub text: Option<TextSettings>,
-    /// 粘贴的音符（pack_notes 的文本）。
+    /// Pasted notes (the text of pack_notes).
     pub notes: Option<String>,
     pub own_vel: bool,
     /// Which shapes this live shape was made of (convert.py's `from`; new in 1.2.0).
@@ -423,7 +423,7 @@ impl Default for Shape {
 }
 
 impl Shape {
-    /// 新建一个形状（对应 engine.make_shape 的简化：不做种类专属初始化，由调用方负责）。
+    /// Create a shape (a simplified version of engine.make_shape: no per-kind initialisation, the caller handles it).
     pub fn new(kind: Kind, pts: Vec<Pt>) -> Self {
         let mut sh = Self {
             kind,
@@ -436,7 +436,7 @@ impl Shape {
         sh
     }
 
-    /// 速度包络（envelope.velocity_env）。
+    /// Velocity envelope (envelope.velocity_env).
     pub fn velocity_env(&self) -> Vec<Pt> {
         if self.vel_env.is_empty() {
             vec![[0.0, self.vel0], [1.0, self.vel1]]

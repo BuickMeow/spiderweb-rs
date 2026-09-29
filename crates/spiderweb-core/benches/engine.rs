@@ -1,7 +1,7 @@
-//! 手写微基准：输出 libtest 风格 `test NAME ... bench: N ns/iter` 行，
-//! 供 CI 的 benchmark-action（tool: cargo）解析并画性能折线。
+//! Hand-written micro-benchmarks: print libtest-style `test NAME ... bench: N ns/iter` lines,
+//! for CI's benchmark-action (tool: cargo) to parse and draw the performance graph.
 //!
-//! 运行：cargo bench -p spiderweb-core --bench engine
+//! Run: cargo bench -p spiderweb-core --bench engine
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -29,7 +29,7 @@ fn bench(name: &str, iters: u32, mut f: impl FnMut() -> usize) {
     eprintln!("  ({name}: {n} notes)");
 }
 
-/// 一条跨越 64 个键的斜线。
+/// A slanted line spanning 64 keys.
 fn line_shape(tumour: bool) -> Shape {
     let mut sh = engine::make_shape(
         Kind::Line,
@@ -53,7 +53,7 @@ fn line_shape(tumour: bool) -> Shape {
     sh
 }
 
-/// 覆盖 128 键的 spam 矩形，约 `notes` 个音符。
+/// A spam rectangle covering 128 keys, about `notes` notes.
 fn spam_shape(notes: i64) -> Shape {
     let per_key = (notes / 128).max(1) as f64;
     let span = per_key * GATE;
@@ -76,7 +76,7 @@ fn spam_shape(notes: i64) -> Shape {
     }
 }
 
-/// 一个 spam 漏斗：从一条线张开到墙，约 `notes` 个音符。
+/// A spam funnel: opening from a line to a wall, about `notes` notes.
 fn funnel_shape(notes: i64) -> Shape {
     let span = (notes as f64 / 128.0).max(4.0);
     let curve = FunnelCurve {
@@ -117,7 +117,7 @@ fn main() {
     bench("custom_spam_100k", 10, || note_count(&spam));
     bench("funnel_spam_100k", 10, || note_count(&funnel));
 
-    // render：把 spam 的音符跑一遍重叠处理 + 通道分配
+    // render: run the spam notes through overlap handling + channel assignment
     let notes = engine::shape_notes_default(&spam, PPQ);
     bench("render_single_100k", 10, || {
         let (rendered, _) = engine::render(
