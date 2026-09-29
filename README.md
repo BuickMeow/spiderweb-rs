@@ -84,10 +84,18 @@ cargo run --release          # from the repository root
 ```
 
 Tagged builds (`git tag v1.2.0 && git push origin v1.2.0`) are produced by
-`.github/workflows/release.yml` on native Windows, macOS and Linux runners and
-attached to the GitHub release; the workflow can also be started manually to
-download the packages as artifacts. The builds are **unsigned**: macOS shows a
-Gatekeeper warning and Windows SmartScreen one, both normal for unsigned apps.
+`.github/workflows/release.yml` on native runners and attached to the GitHub
+release; the workflow can also be started manually to download the packages as
+artifacts:
+
+- `Spiderweb-windows-x64.zip` — `Spiderweb.exe`, portable (no installer needed)
+- `Spiderweb-macos.zip` — `Spiderweb.app` bundle (Apple Silicon, ad-hoc signed)
+- `Spiderweb-linux-x64.tar.gz` — `Spiderweb` binary
+
+The builds are **unsigned** (no paid certificate): on macOS, first launch needs
+right-click → Open; on Windows, SmartScreen needs "More info" → "Run anyway".
+Installers (`.msi`/`.dmg`) are not needed for this kind of tool; add them with
+`cargo-packager` later if that changes.
 
 Requirements: a stable Rust toolchain. On Linux, `libxkbcommon-dev`,
 `libwayland-dev`, `libx11-dev`, `libasound2-dev` and `pkg-config`.
