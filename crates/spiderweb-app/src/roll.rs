@@ -440,11 +440,16 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
     // A popup (context menu / dropdown) is open: the roll's input steps aside (upstream tk menus grab events)
     if !crate::roll_menu::is_popup_open(ui.ctx()) {
         let input = inputs(ui);
+        // `hovered`, not `contains_pointer`: near a window's edge the hit test
+        // still finds the widget layer below, so `contains_pointer` stays true
+        // and a window resize grab would reach the roll. Only the topmost
+        // interactive widget owns the pointer; while the roll itself is being
+        // dragged it stays `hovered`, so its own gestures keep working.
         handle_input(
             app,
             &input,
             Rect::from_min_size(Pos2::ZERO, rect.size()),
-            response.contains_pointer(),
+            response.hovered(),
         );
         if app.drag.is_none()
             && let Some(pos) = input.pos
@@ -682,7 +687,7 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect, pointer_over: bool) {
         on_right_release(app);
         app.right_drag = None;
     }
-    if input.secondary_double {
+    if pointer_over && input.secondary_double {
         app.toggle_select_tool();
     }
     if pointer_over
@@ -703,11 +708,17 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect, pointer_over: bool) {
         }
         app.drag = None;
     }
-    if input.scroll != Vec2::ZERO
+    // A pinch / zoom gesture has no scroll delta of its own (macOS trackpads
+    // report it as `Event::Zoom`), so it must trigger the handler too.
+    let gesture = (input.zoom - 1.0).abs() > 1e-4
+        || (input.pinch - 1.0).abs() > 1e-4
+        || input.pan != Vec2::ZERO;
+    if pointer_over
+        && (input.scroll != Vec2::ZERO || gesture)
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
-        on_wheel(app, pos, input);
+        on_wheel(&mut app.view, pos, input);
     }
 }
 
@@ -1647,18 +1658,25 @@ fn zoom_both(view: &mut View, pos: Pos2, f: f64) {
     view.top = p + (pos.y - view.ruler_h) as f64 / view.sy;
 }
 
-fn on_wheel(app: &mut App, pos: Pos2, input: &Inputs) {
-    let v = &mut app.view;
+fn on_wheel(v: &mut View, pos: Pos2, input: &Inputs) {
     // Two-finger / touchscreen pan (and pinch in the same gesture).
     if input.pan != Vec2::ZERO {
         v.t -= input.pan.x as f64 / v.sx;
         v.top += input.pan.y as f64 / v.sy;
     }
-    // Touchpad pinch: zoom both axes around the pointer.
-    if (input.pinch - 1.0).abs() > 1e-4 {
-        zoom_both(v, pos, input.pinch as f64);
+    // Pinch: proportional zoom around the pointer. A touch screen reports it as
+    // multi-touch, a macOS trackpad as a bare zoom gesture (no touch points).
+    let pinch = if (input.pinch - 1.0).abs() > 1e-4 {
+        Some(input.pinch)
+    } else if !input.ctrl && (input.zoom - 1.0).abs() > 1e-4 {
+        Some(input.zoom)
+    } else {
+        None
+    };
+    if let Some(f) = pinch {
+        zoom_both(v, pos, f as f64);
     }
-    if input.pan != Vec2::ZERO || (input.pinch - 1.0).abs() > 1e-4 {
+    if input.pan != Vec2::ZERO || pinch.is_some() {
         v.clamp();
         return;
     }
@@ -2293,6 +2311,119 @@ fn paint_playhead(app: &App, painter: &egui::Painter, rect: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression test for window input pass-through: a window on top of the
+    /// roll owns the pointer. `contains_pointer` stays true for the layer below
+    /// (near a window's edge the hit test includes it), while `hovered` is only
+    /// set for the topmost interactive widget - the guard `roll_ui` uses.
+    #[test]
+    fn a_window_over_the_roll_owns_the_pointer() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let run = |pointer: egui::Pos2, result: &mut (bool, bool)| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::PointerMoved(pointer)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.allocate_rect(ui.max_rect(), egui::Sense::click_and_drag());
+                    egui::Window::new("over_the_roll")
+                        .default_pos(egui::pos2(100.0, 100.0))
+                        .show(ui.ctx(), |ui| {
+                            ui.label("window");
+                        });
+                    *result = (response.contains_pointer(), response.hovered());
+                },
+            );
+            out.textures_delta.clear();
+        };
+
+        // The window is at (100, 100). Inside its edge (within the hit-test
+        // search radius) the layer below is still in the hit test; well inside
+        // the window it is dropped entirely.
+        let mut over_window_edge = (false, false);
+        let mut over_roll = (false, false);
+        run(egui::pos2(600.0, 400.0), &mut over_roll);
+        run(egui::pos2(102.0, 120.0), &mut over_window_edge);
+        run(egui::pos2(600.0, 400.0), &mut over_roll);
+        run(egui::pos2(102.0, 120.0), &mut over_window_edge);
+
+        assert!(
+            over_window_edge.0,
+            "contains_pointer is still true at the window edge: the old guard let presses through"
+        );
+        assert!(
+            !over_window_edge.1,
+            "the window owns the pointer, the roll must not be hovered"
+        );
+        assert!(over_roll.0 && over_roll.1, "the bare roll owns the pointer");
+    }
+
+    fn wheel_inputs(pinch: f32, zoom: f32, ctrl: bool) -> Inputs {
+        Inputs {
+            pos: None,
+            interact: None,
+            primary_pressed: false,
+            primary_released: false,
+            primary_down: false,
+            secondary_pressed: false,
+            secondary_released: false,
+            secondary_down: false,
+            secondary_double: false,
+            middle_pressed: false,
+            middle_released: false,
+            double: false,
+            ctrl,
+            shift: false,
+            alt: false,
+            scroll: Vec2::ZERO,
+            pinch,
+            zoom,
+            pan: Vec2::ZERO,
+        }
+    }
+
+    /// A macOS trackpad reports a pinch as a bare zoom gesture (no touch
+    /// points): it must zoom both axes proportionally. Ctrl/Cmd + wheel keeps
+    /// the time-axis-only zoom.
+    #[test]
+    fn trackpad_pinch_zooms_the_roll_proportionally() {
+        let view = || View {
+            t: 10.0,
+            top: 60.0,
+            sx: 100.0,
+            sy: 10.0,
+            kb_w: 50.0,
+            ruler_h: 20.0,
+            w: 800.0,
+            h: 600.0,
+            ready: true,
+            keys: 128,
+        };
+        let pos = Pos2::new(150.0, 120.0);
+
+        let mut v = view();
+        let (b0, p0) = (v.b_of(pos.x), v.p_of(pos.y));
+        on_wheel(&mut v, pos, &wheel_inputs(1.0, 1.5, false));
+        assert!((v.sx - 150.0).abs() < 1e-4, "sx = {}", v.sx);
+        assert!((v.sy - 15.0).abs() < 1e-4, "sy = {}", v.sy);
+        assert!((v.b_of(pos.x) - b0).abs() < 1e-9);
+        assert!((v.p_of(pos.y) - p0).abs() < 1e-9);
+
+        // Multi-touch (touch screen) pinch behaves the same.
+        let mut v = view();
+        on_wheel(&mut v, pos, &wheel_inputs(1.5, 1.0, false));
+        assert!((v.sx - 150.0).abs() < 1e-4);
+        assert!((v.sy - 15.0).abs() < 1e-4);
+
+        // Ctrl/Cmd + wheel stays time-axis only.
+        let mut v = view();
+        on_wheel(&mut v, pos, &wheel_inputs(1.0, 1.5, true));
+        assert!((v.sx - 150.0).abs() < 1e-4);
+        assert!((v.sy - 10.0).abs() < 1e-4);
+    }
 
     #[test]
     fn zoom_both_keeps_the_pointer_anchored() {

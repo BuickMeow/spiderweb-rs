@@ -314,7 +314,9 @@ fn read_input(ui: &egui::Ui) -> Inputs {
         ctrl: i.modifiers.command || i.modifiers.ctrl,
         shift: i.modifiers.shift,
         scroll_y: i.smooth_scroll_delta.y,
-        pinch: i.multi_touch().map(|t| t.zoom_delta).unwrap_or(1.0),
+        // `zoom_delta()` covers both a touch screen's multi-touch pinch and the
+        // bare zoom gesture a macOS trackpad sends (no touch points).
+        pinch: i.zoom_delta(),
         pan: i
             .multi_touch()
             .map(|t| t.translation_delta)
@@ -346,9 +348,11 @@ pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
     }
     let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
     // A window (Help, tips, drawer…) over the pane takes the pointer; keep
-    // processing while one of our own drags is in progress.
+    // processing while one of our own drags is in progress. `hovered`, not
+    // `contains_pointer`: at a window's edge the hit test still finds the pane
+    // below, and only the topmost interactive widget owns the pointer.
     let dragging = app.vel.pan.is_some() || app.vel.edit.is_some() || app.vel.curve.is_some();
-    if !popup_open && (response.contains_pointer() || dragging) {
+    if !popup_open && (response.hovered() || dragging) {
         let input = read_input(ui);
         handle_input(app, &input, pane);
         set_cursor(app, &input, pane, ui.ctx());

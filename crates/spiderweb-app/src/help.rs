@@ -560,6 +560,24 @@ fn type_query(query: &mut String, events: &[egui::Event]) {
     }
 }
 
+/// Help window body: the topic columns fill the space left above the footer.
+///
+/// Laid out bottom-up so the footer is measured first and the columns get the
+/// exact remainder. egui sizes a window from its content, so with a fixed-height
+/// body the column scroll areas never follow a corner drag and the height snaps
+/// back; filling the remainder lets the drag stick.
+fn help_body_and_footer_ui(
+    ui: &mut egui::Ui,
+    body: impl FnOnce(&mut egui::Ui),
+    footer: impl FnOnce(&mut egui::Ui),
+) {
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        footer(ui);
+        ui.separator();
+        ui.horizontal_top(body);
+    });
+}
+
 /// Help window UI (called every frame; does nothing when closed).
 pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     if !app.help.open {
@@ -586,97 +604,100 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut selected = app.help.topic.clone();
     let mut on = app.tips.on;
     let mut reset = false;
+    let mut about = false;
     let mut link: Option<&'static str> = None;
     let mut clips = std::mem::take(&mut app.help.clips);
 
-    // Body must be at least this tall: egui windows shrink to content height, and without this they would be much shorter than upstream's 900x620
-    // Keep a modest minimum so the window can be resized freely; the initial
-    // size comes from default_size below.
-    let body_h = 320.0;
     egui::Window::new(rust_i18n::t!("help.title", version = VERSION))
         .open(&mut open)
         .default_size([960.0, 760.0])
         .min_width(600.0)
         .min_height(240.0)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.set_min_height(body_h);
-                ui.vertical(|ui| {
-                    ui.set_width(250.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut query)
-                            .hint_text(rust_i18n::t!("help.search_hint"))
-                            .desired_width(ui.available_width()),
-                    );
-                    ui.label(
-                        egui::RichText::new(rust_i18n::t!("help.search_note"))
-                            .small()
-                            .weak(),
-                    );
-                    egui::ScrollArea::vertical()
-                        .id_salt("help_list")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for section in help_texts::SECTIONS {
-                                let topics: Vec<&Topic> = found
-                                    .iter()
-                                    .copied()
-                                    .filter(|t| t.section == *section)
-                                    .collect();
-                                if topics.is_empty() {
-                                    continue;
-                                }
-                                egui::CollapsingHeader::new(*section)
-                                    .default_open(true)
-                                    .id_salt(format!("help_{section}"))
-                                    .show(ui, |ui| {
-                                        for t in topics {
-                                            if ui
-                                                .selectable_label(
-                                                    selected.as_deref() == Some(t.id),
-                                                    t.title,
-                                                )
-                                                .clicked()
-                                            {
-                                                selected = Some(t.id.to_string());
+            help_body_and_footer_ui(
+                ui,
+                |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(250.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut query)
+                                .hint_text(rust_i18n::t!("help.search_hint"))
+                                .desired_width(ui.available_width()),
+                        );
+                        ui.label(
+                            egui::RichText::new(rust_i18n::t!("help.search_note"))
+                                .small()
+                                .weak(),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("help_list")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for section in help_texts::SECTIONS {
+                                    let topics: Vec<&Topic> = found
+                                        .iter()
+                                        .copied()
+                                        .filter(|t| t.section == *section)
+                                        .collect();
+                                    if topics.is_empty() {
+                                        continue;
+                                    }
+                                    egui::CollapsingHeader::new(*section)
+                                        .default_open(true)
+                                        .id_salt(format!("help_{section}"))
+                                        .show(ui, |ui| {
+                                            for t in topics {
+                                                if ui
+                                                    .selectable_label(
+                                                        selected.as_deref() == Some(t.id),
+                                                        t.title,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    selected = Some(t.id.to_string());
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                                }
+                            });
+                    });
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("help_text")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let cur = selected.clone();
+                                show_topic(
+                                    ui,
+                                    cur.as_deref(),
+                                    &mut selected,
+                                    &mut link,
+                                    &mut clips,
+                                    &mut app.help.banner,
+                                );
+                            });
+                    });
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut on, rust_i18n::t!("help.show_first_tip"));
+                        if ui.button(rust_i18n::t!("help.show_all")).clicked() {
+                            reset = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.link(format!("Spiderweb {VERSION}")).clicked() {
+                                about = true;
                             }
                         });
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("help_text")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let cur = selected.clone();
-                            show_topic(
-                                ui,
-                                cur.as_deref(),
-                                &mut selected,
-                                &mut link,
-                                &mut clips,
-                                &mut app.help.banner,
-                            );
-                        });
-                });
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut on, rust_i18n::t!("help.show_first_tip"));
-                if ui.button(rust_i18n::t!("help.show_all")).clicked() {
-                    reset = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.link(format!("Spiderweb {VERSION}")).clicked() {
-                        selected = Some("about".to_string());
-                    }
-                });
-            });
+                    });
+                },
+            );
         });
 
+    if about {
+        selected = Some("about".to_string());
+    }
     app.help.query = query;
     app.help.topic = selected;
     app.help.clips = clips;
@@ -1092,6 +1113,101 @@ mod tests {
             assert!(frame.width() > 0 && frame.height() > 0, "{name}");
             assert!(player.delay > Duration::ZERO, "{name}: no delay");
         }
+    }
+
+    /// Dragging the window's bottom-right corner must change its height.
+    /// egui sizes a window from its content, so a body that doesn't fill the
+    /// offered height cancels every vertical drag (the old fixed-height body did).
+    #[test]
+    fn help_window_height_follows_a_corner_drag() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 1000.0));
+        let title = "help_layout_test";
+        let run = |events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Window::new(title)
+                        .default_size([700.0, 520.0])
+                        .min_width(400.0)
+                        .min_height(240.0)
+                        .show(ui.ctx(), |ui| {
+                            help_body_and_footer_ui(
+                                ui,
+                                |ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_width(200.0);
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("test_list")
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                for i in 0..40 {
+                                                    ui.label(format!("item {i}"));
+                                                }
+                                            });
+                                    });
+                                    ui.separator();
+                                    ui.vertical(|ui| {
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("test_text")
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                for i in 0..40 {
+                                                    ui.label(format!("line {i}"));
+                                                }
+                                            });
+                                    });
+                                },
+                                |ui| {
+                                    ui.horizontal(|ui| {
+                                        let mut on = true;
+                                        ui.checkbox(&mut on, "tip");
+                                        let _ = ui.button("all");
+                                    });
+                                },
+                            );
+                        });
+                },
+            );
+            out.textures_delta.clear();
+        };
+
+        let window_rect = || {
+            let id = ctx.top_layer_id().expect("the window is visible").id;
+            ctx.memory(|m| m.area_rect(id))
+                .expect("the window has a rect")
+        };
+
+        run(vec![]);
+        run(vec![]);
+        let before = window_rect();
+
+        let corner = before.max - egui::vec2(2.0, 2.0);
+        let target = corner + egui::vec2(0.0, 120.0);
+        run(vec![egui::Event::PointerMoved(corner)]);
+        run(vec![egui::Event::PointerButton {
+            pos: corner,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        run(vec![egui::Event::PointerMoved(target)]);
+        run(vec![egui::Event::PointerMoved(target)]);
+        run(vec![egui::Event::PointerMoved(target)]);
+
+        let after = window_rect();
+        assert!(
+            (after.height() - (before.height() + 120.0)).abs() < 2.0,
+            "the height must follow the corner drag: before={before:?} after={after:?}"
+        );
+        assert!(
+            (after.width() - before.width()).abs() < 2.0,
+            "a pure vertical drag must not change the width: before={before:?} after={after:?}"
+        );
     }
 
     #[test]
