@@ -717,7 +717,15 @@ fn about_banner_ui(ui: &mut egui::Ui, cache: &mut Option<(bool, egui::TextureHan
         }
     }
     if let Some((_, tex)) = cache.as_ref() {
-        ui.add(egui::Image::new(tex));
+        // Shrink to the topic column when the window is narrower than the picture
+        let size = tex.size_vec2();
+        let w = ui.available_width().min(size.x);
+        let h = if size.x > 0.0 {
+            size.y * (w / size.x)
+        } else {
+            size.y
+        };
+        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
         ui.add_space(6.0);
     }
 }
