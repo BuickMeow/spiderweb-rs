@@ -1,13 +1,28 @@
 //! files/midi_out.py 对照测试（向量由 tools/gen_io_vectors.py 生成）。
 //!
-//! 首要断言：Rust 写出的文件与 Python 逐字节一致（hex 对照）。另外用 midly 解析一遍，
-//! 确认是合法的 SMF format 1。
+//! 首要断言：Rust 写出的文件与 Python 逐字节一致（hex 对照）。另外手写解析 SMF 头，
+//! 确认是合法的 format 1（不依赖任何 MIDI 库）。
 
 mod common;
 
 use common::*;
 use serde_json::Value;
 use spiderweb_io::midi::{CHANNELS, PPQ_WARN, midi_bytes, slot_track_channel, track_data, vlq};
+
+/// 手写解析 SMF 头："MThd"、长度 6、format 1、division = ppq；后面紧跟 "MTrk"。
+fn assert_smf_format1(bytes: &[u8], ppq: u16, name: &str) {
+    assert!(bytes.len() > 14, "{name}: 文件太短");
+    assert_eq!(&bytes[0..4], b"MThd", "{name}: 没有 MThd");
+    let hlen = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    assert_eq!(hlen, 6, "{name}: MThd 长度");
+    let format = u16::from_be_bytes([bytes[8], bytes[9]]);
+    assert_eq!(format, 1, "{name}: 不是 format 1");
+    let ntrks = u16::from_be_bytes([bytes[10], bytes[11]]);
+    assert!(ntrks >= 1, "{name}: 没有轨道");
+    let division = u16::from_be_bytes([bytes[12], bytes[13]]);
+    assert_eq!(division, ppq, "{name}: division 不是 PPQ");
+    assert_eq!(&bytes[14..18], b"MTrk", "{name}: 第一个块不是 MTrk");
+}
 
 fn notes6(v: &Value) -> Vec<[i64; 6]> {
     v.as_array()
@@ -37,14 +52,7 @@ fn midi_byte_vectors() {
         let want = unhex(s(&case["hex"]));
         assert_eq!(got, want, "{name}: MIDI 不是逐字节一致");
 
-        // midly 能解析：format 1，第一轨是速度 / 拍号
-        let smf = midly::Smf::parse(&got).unwrap_or_else(|e| panic!("{name}: midly 解析失败: {e}"));
-        assert_eq!(smf.header.format, midly::Format::Parallel, "{name}: format");
-        assert_eq!(
-            smf.header.timing,
-            midly::Timing::Metrical(ppq.into()),
-            "{name}: ppq"
-        );
+        assert_smf_format1(&got, ppq, name);
     }
 }
 
