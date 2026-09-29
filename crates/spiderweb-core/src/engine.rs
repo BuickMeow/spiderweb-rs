@@ -699,6 +699,33 @@ mod tests {
     }
 
     #[test]
+    fn pasted_notes_keep_their_tracks() {
+        // Domino rows: tick, gate, key, velocity, track (two tracks on the same key)
+        let rows = vec![
+            [0i64, 200, 60, 100, 0],
+            [100, 200, 60, 90, 1],
+            [300, 100, 64, 100, 0],
+            [300, 100, 64, 90, 1],
+        ];
+        let sh = crate::custom::notes_shape(&rows, 960.0, "Pasted notes").expect("shape");
+        let (notes, tracks) = shape_notes_tracks(&sh, 960.0, 128);
+        let tracks = tracks.expect("pasted notes must report tracks");
+        assert_eq!(tracks.len(), notes.len());
+        assert!(tracks.contains(&1), "track 1 survives the round trip");
+        // Multi channel: each pasted track gets its own slot
+        let (rendered, count) = render(
+            &[notes],
+            Mode::Auto,
+            Split::Key,
+            Some(&[Some(tracks)]),
+            None,
+        );
+        assert_eq!(count, 2, "two tracks -> two slots");
+        assert!(rendered.iter().any(|n| n.slot == 0));
+        assert!(rendered.iter().any(|n| n.slot == 1));
+    }
+
+    #[test]
     fn shape_notes_keep_slot_and_owner_zero() {
         let sh = Shape::new(Kind::Line, vec![[0.0, 60.0], [1.0, 64.0]]);
         let notes = shape_notes(&sh, 960.0, 128);

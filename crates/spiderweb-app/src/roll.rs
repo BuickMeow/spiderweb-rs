@@ -1782,6 +1782,8 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
         } else {
             paint_notes(app, painter, rect, area);
         }
+        // Green preview of what the shape being drawn would make
+        paint_draft_notes(app, painter, rect);
     }
 
     // Shape lines: faint dashed tumour lines, then unselected / selected
@@ -1856,6 +1858,54 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
 
 /// Painter fallback path (no wgpu render state): visibility filtering + decimation when there
 /// are too many. The GPU path in note_gpu.rs does not decimate.
+/// Green preview of the notes the shape being drawn would make (upstream draws
+/// the draft's notes on top, in DRAFT_COLOR). Skipped for huge drafts, which
+/// preview as their outline only (upstream PREVIEW_LIMIT).
+fn paint_draft_notes(app: &App, painter: &egui::Painter, rect: Rect) {
+    const PREVIEW_LIMIT: i64 = 200_000;
+    let Some(d) = &app.draft else {
+        return;
+    };
+    if app.note_count(d) > PREVIEW_LIMIT {
+        return;
+    }
+    let ppq = app.ppq as f64;
+    let notes = engine::shape_notes(d, ppq, app.keys);
+    let v = &app.view;
+    let t_lo = v.b_of(v.kb_w) * ppq;
+    let t_hi = v.b_of(v.w) * ppq;
+    let (p_lo, p_hi) = v.visible_pitches();
+    for n in &notes {
+        if (n.end as f64) < t_lo
+            || (n.start as f64) > t_hi
+            || (n.key as i64) < p_lo
+            || (n.key as i64) > p_hi
+        {
+            continue;
+        }
+        let x0 = v.x_of(n.start as f64 / ppq);
+        let x1 = v.x_of(n.end as f64 / ppq);
+        let lx0 = x0.round().max(v.kb_w - 2.0);
+        let lx1 = x1.round().min(v.w + 2.0);
+        if lx1 < v.kb_w || lx0 > v.w {
+            continue;
+        }
+        let (y0, y1) = v.row_y(n.key as f64);
+        let (fill, outline) = DRAFT_COLOR;
+        let level = (n.vel.clamp(0, 127) / 4) as f32;
+        let fill = fade(fill, 1.0 - level * 4.0 / 124.0);
+        let r = Rect::from_min_max(
+            Pos2::new(rect.min.x + lx0, rect.min.y + y0),
+            Pos2::new(
+                rect.min.x + lx1.max(lx0 + 1.0),
+                rect.min.y + y1.max(y0 + 1.0),
+            ),
+        );
+        painter.rect_filled(r, 0.0, fill);
+        painter.rect_stroke(r, 0.0, Stroke::new(1.0, outline), egui::StrokeKind::Inside);
+    }
+}
+
 fn paint_notes(app: &App, painter: &egui::Painter, rect: Rect, area: Rect) {
     let v = &app.view;
     let ppq = app.ppq as f64;

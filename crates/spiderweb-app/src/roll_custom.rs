@@ -435,12 +435,13 @@ pub fn paint_custom_box(app: &App, painter: &egui::Painter, rect: Rect, sh: &Sha
         return;
     };
     let s = app.scale();
-    let mut path: Vec<Pos2> = corners.to_vec();
-    path.push(corners[0]);
+    let at = |p: Pos2| Pos2::new(rect.min.x + p.x, rect.min.y + p.y);
+    // corners are roll-local; the painter works in screen coordinates
+    let mut path: Vec<Pos2> = corners.iter().map(|&p| at(p)).collect();
+    path.push(at(corners[0]));
     for seg in egui::Shape::dashed_line(&path, egui::Stroke::new(1.0, BOX_COLOR), 4.0, 3.0) {
         painter.add(seg);
     }
-    let at = |p: Pos2| Pos2::new(rect.min.x + p.x, rect.min.y + p.y);
     let m = 3.0 * s;
     let r = 4.0 * s;
     for k in 0..4 {
