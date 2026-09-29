@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790673494996,
+  "lastUpdate": 1790693183230,
   "repoUrl": "https://github.com/BuickMeow/spiderweb-rs",
   "entries": {
     "Benchmark": [
@@ -106,6 +106,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "render_single_100k",
             "value": 7519403,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "3347830431@qq.com",
+            "name": "节能降耗",
+            "username": "BuickMeow"
+          },
+          "committer": {
+            "email": "3347830431@qq.com",
+            "name": "节能降耗",
+            "username": "BuickMeow"
+          },
+          "distinct": true,
+          "id": "b81f555aff0188ca6fefa7f0362228b7ea4c96ce",
+          "message": "fix: help window resize, window edge input, trackpad pinch\n\n- help: lay the footer out bottom-up so the topic columns fill the remaining\n  height; the window height now follows a corner drag instead of snapping back\n  to the content height\n- roll/velocity: only act when the pane owns the pointer (Response::hovered);\n  a window resize grab at its edge no longer falls through to the panes, and\n  the wheel / double right-click got the same guard\n- roll: a bare zoom gesture (macOS trackpad pinch, no touch points) zooms both\n  axes proportionally around the pointer; Ctrl/Cmd+wheel stays time-axis only\n- velocity: pinch reads InputState::zoom_delta (trackpad or multi-touch) and\n  zooms the time axis\n- tests: help height follows a corner drag, a window owns the pointer at its\n  edge, trackpad pinch zooms the roll proportionally",
+          "timestamp": "2026-09-29T22:45:12+08:00",
+          "tree_id": "e3d3d1c8d9d77536bfb5a0b3f8ccba86306550ea",
+          "url": "https://github.com/BuickMeow/spiderweb-rs/commit/b81f555aff0188ca6fefa7f0362228b7ea4c96ce"
+        },
+        "date": 1790693182110,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "line_notes_64keys",
+            "value": 5341,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "tumour_line_64keys",
+            "value": 1253774,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "custom_spam_100k",
+            "value": 4500713,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "funnel_spam_100k",
+            "value": 8920900,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "render_single_100k",
+            "value": 7599426,
             "range": "± 0",
             "unit": "ns/iter"
           }
