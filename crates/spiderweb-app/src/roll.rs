@@ -1673,34 +1673,6 @@ fn on_wheel(app: &mut App, pos: Pos2, input: &Inputs) {
     v.clamp();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zoom_both_keeps_the_pointer_anchored() {
-        let mut v = View {
-            t: 10.0,
-            top: 60.0,
-            sx: 100.0,
-            sy: 10.0,
-            kb_w: 50.0,
-            ruler_h: 20.0,
-            w: 800.0,
-            h: 600.0,
-            ready: true,
-            keys: 128,
-        };
-        let pos = Pos2::new(150.0, 120.0);
-        let (b0, p0) = (v.b_of(pos.x), v.p_of(pos.y));
-        zoom_both(&mut v, pos, 2.0);
-        assert!((v.b_of(pos.x) - b0).abs() < 1e-9);
-        assert!((v.p_of(pos.y) - p0).abs() < 1e-9);
-        assert_eq!(v.sx, 200.0);
-        assert_eq!(v.sy, 20.0);
-    }
-}
-
 fn position_text(app: &App, pos: Pos2) -> String {
     let ppq = app.ppq as f64;
     let beats = app.beats as f64;
@@ -2290,5 +2262,33 @@ fn paint_playhead(app: &App, painter: &egui::Painter, rect: Rect) {
             Color32::from_rgb(0x0a, 0x50, 0xe0),
             Stroke::NONE,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_both_keeps_the_pointer_anchored() {
+        let mut v = View {
+            t: 10.0,
+            top: 60.0,
+            sx: 100.0,
+            sy: 10.0,
+            kb_w: 50.0,
+            ruler_h: 20.0,
+            w: 800.0,
+            h: 600.0,
+            ready: true,
+            keys: 128,
+        };
+        let pos = Pos2::new(150.0, 120.0);
+        let (b0, p0) = (v.b_of(pos.x), v.p_of(pos.y));
+        zoom_both(&mut v, pos, 2.0);
+        assert!((v.b_of(pos.x) - b0).abs() < 1e-9);
+        assert!((v.p_of(pos.y) - p0).abs() < 1e-9);
+        assert_eq!(v.sx, 200.0);
+        assert_eq!(v.sy, 20.0);
     }
 }
