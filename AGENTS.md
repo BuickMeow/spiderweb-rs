@@ -7,9 +7,9 @@ Read this together with [README.md](README.md) and [TESTING.md](TESTING.md).
 
 - A native Rust port of [Spiderweb](https://github.com/UnPrioritized/Spiderweb)
   (Python/Tkinter, MIT, © 2026 Kanade Tachibana).
-- **Upstream 1.2.0 is the last parity target.** After parity, development
-  continues in Rust only; the Python sources are reference material, not a
-  runtime or build dependency.
+- **Keep tracking upstream**: when a new upstream version ships, port its
+  changes too (the current target is 1.2.0). The Python sources are reference
+  material, never a runtime or build dependency.
 - The long-term plan is to move the UI-free engine (`spiderweb-core`) into the
   author's main editor (Yinhe). Keep `spiderweb-core` free of UI/platform code.
 - The `tools/` Python scripts are **development-only** (differential-test
