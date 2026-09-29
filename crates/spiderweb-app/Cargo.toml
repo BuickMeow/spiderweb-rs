@@ -16,6 +16,7 @@ midir = { workspace = true }
 rfd = { workspace = true }
 bytemuck = { workspace = true }
 rust-i18n = { workspace = true }
+image = { workspace = true }
 
 [features]
 default = []

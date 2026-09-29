@@ -3,14 +3,17 @@
 //! help window (F1, searchable, positioned by tool, scrollable), and the current tool's help
 //! at the bottom of the side panel.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use image::AnimationDecoder;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, Tool, VERSION};
+use crate::help_clips;
 use crate::help_texts::{self, Topic};
 
 /// New versions / source / issue tracker URL (WEBSITE of upstream files/about.py).
@@ -183,6 +186,263 @@ pub fn filter_topics(query: &str) -> Vec<&'static Topic> {
         .collect()
 }
 
+// ---------------------------------------------------------------- clips
+
+/// A part of a topic's `page`: plain text or one `[clip:NAME]` marker (upstream re.split).
+#[derive(Debug, PartialEq, Eq)]
+pub enum HelpPart<'a> {
+    Text(&'a str),
+    Clip(&'a str),
+}
+
+/// Splits a topic's `page` on `[clip:NAME]` markers (upstream `re.split(r"\[clip:([^\]]*)\]\n?")`):
+/// a marker and one newline after it disappear, an unclosed `[clip:` stays part of the text.
+pub fn split_clips(page: &str) -> Vec<HelpPart<'_>> {
+    let mut parts = Vec::new();
+    let mut rest = page;
+    while let Some(at) = rest.find("[clip:") {
+        let after = &rest[at + 6..];
+        let Some(end) = after.find(']') else {
+            break; // not a marker: keep it in the text
+        };
+        if at > 0 {
+            parts.push(HelpPart::Text(&rest[..at]));
+        }
+        parts.push(HelpPart::Clip(&after[..end]));
+        rest = &after[end + 1..];
+        if let Some(stripped) = rest.strip_prefix('\n') {
+            rest = stripped;
+        }
+    }
+    if !rest.is_empty() {
+        parts.push(HelpPart::Text(rest));
+    }
+    parts
+}
+
+/// The picture size of a clip without decoding it: the GIF logical screen / the PNG IHDR.
+fn clip_size(bytes: &[u8]) -> Option<[usize; 2]> {
+    if bytes.len() >= 10 && bytes.starts_with(b"GIF") {
+        Some([
+            u16::from_le_bytes([bytes[6], bytes[7]]) as usize,
+            u16::from_le_bytes([bytes[8], bytes[9]]) as usize,
+        ])
+    } else if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG") {
+        let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+        let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+        Some([w as usize, h as usize])
+    } else {
+        None
+    }
+}
+
+/// One clip playing (GIF) or shown still (PNG) in the Help window: decodes one frame at a time,
+/// keeps one canvas of them and uploads the frame in view to a single egui texture (upstream Clip).
+pub(crate) struct ClipPlayer {
+    name: String,
+    bytes: &'static [u8],
+    /// The GIF frames, decoded in order; exhausted = the clip loops (a new decoder from the start).
+    /// The image crate composes each frame onto a full RGBA canvas and applies the GIF's disposal
+    /// method (2 = restore background, 3 = restore previous) itself, like the upstream Clip does.
+    decoder: Option<image::Frames<'static>>,
+    /// A PNG clip: one still picture, nothing to animate.
+    still: bool,
+    failed: bool,
+    /// The decoded frame, not uploaded to the texture yet.
+    pending: Option<egui::ColorImage>,
+    delay: Duration,
+    elapsed: Duration,
+    last: Instant,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl ClipPlayer {
+    fn new(name: &str, bytes: &'static [u8]) -> Self {
+        Self {
+            name: name.to_string(),
+            bytes,
+            decoder: None,
+            still: !bytes.starts_with(b"GIF"),
+            failed: clip_size(bytes).is_none(),
+            pending: None,
+            delay: Duration::MAX,
+            elapsed: Duration::ZERO,
+            last: Instant::now(),
+            texture: None,
+        }
+    }
+
+    /// Decodes the next GIF frame (looping at the end) or the one PNG picture into `pending`.
+    fn decode_next(&mut self) {
+        if self.failed {
+            return;
+        }
+        if self.still {
+            match image::load_from_memory_with_format(self.bytes, image::ImageFormat::Png) {
+                Ok(picture) => {
+                    let rgba = picture.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    self.pending = Some(egui::ColorImage::from_rgba_unmultiplied(
+                        [w as usize, h as usize],
+                        rgba.as_raw(),
+                    ));
+                    self.delay = Duration::MAX;
+                }
+                Err(_) => self.failed = true, // a broken picture: leave the spot empty
+            }
+            return;
+        }
+        for _ in 0..2 {
+            if self.decoder.is_none() {
+                self.decoder = image::codecs::gif::GifDecoder::new(Cursor::new(self.bytes))
+                    .ok()
+                    .map(AnimationDecoder::into_frames);
+                if self.decoder.is_none() {
+                    self.failed = true;
+                    return;
+                }
+            }
+            match self.decoder.as_mut().and_then(Iterator::next) {
+                Some(Ok(frame)) => {
+                    let (numer, denom) = frame.delay().numer_denom_ms();
+                    let ms = u64::from(numer) / u64::from(denom.max(1));
+                    // Like the upstream Clip (and web browsers): no delay or a tiny one = 0.1 s
+                    self.delay = if ms < 20 {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_millis(ms)
+                    };
+                    let rgba = frame.into_buffer();
+                    let (w, h) = rgba.dimensions();
+                    self.pending = Some(egui::ColorImage::from_rgba_unmultiplied(
+                        [w as usize, h as usize],
+                        rgba.as_raw(),
+                    ));
+                    return;
+                }
+                Some(Err(_)) => {
+                    self.failed = true; // a broken frame: show nothing rather than retrying forever
+                    return;
+                }
+                None => self.decoder = None, // end of the GIF: the next try starts it over
+            }
+        }
+        self.failed = true;
+    }
+
+    /// Time passing while the clip is in view: shows the frames whose delay is up.
+    fn advance(&mut self, dt: Duration) {
+        self.elapsed += dt;
+        while self.elapsed >= self.delay {
+            self.elapsed -= self.delay;
+            self.decode_next();
+            if self.failed {
+                break;
+            }
+        }
+    }
+
+    /// While the clip is out of view its clock is pushed forward without decoding anything.
+    fn pause(&mut self, now: Instant) {
+        self.last = now;
+    }
+
+    /// Decodes / steps the clip and uploads the frame into its texture. Only call while visible;
+    /// returns the texture to draw, if any.
+    fn tick(&mut self, ctx: &egui::Context, now: Instant) -> Option<egui::TextureId> {
+        if self.failed {
+            return None;
+        }
+        if self.texture.is_none() && self.pending.is_none() {
+            self.last = now;
+            self.decode_next();
+        } else if !self.still {
+            let dt = now.saturating_duration_since(self.last);
+            self.last = now;
+            self.advance(dt);
+        }
+        if let Some(image) = self.pending.take() {
+            if let Some(texture) = self.texture.as_mut() {
+                texture.set(image, egui::TextureOptions::LINEAR);
+            } else {
+                self.texture = Some(ctx.load_texture(
+                    format!("help-clip-{}", self.name),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if !self.still && self.texture.is_some() {
+            ctx.request_repaint_after(self.delay.saturating_sub(self.elapsed));
+        }
+        self.texture.as_ref().map(egui::TextureHandle::id)
+    }
+}
+
+/// The clips of the topic on show: decoded lazily, dropped when the topic changes (or Help closes),
+/// so opening a topic never decodes another topic's clips and memory stays bounded.
+#[derive(Default)]
+pub struct ClipCache {
+    topic: Option<String>,
+    players: HashMap<String, ClipPlayer>,
+}
+
+impl ClipCache {
+    /// Starts (or keeps) a topic: another topic drops its clips and textures.
+    fn set_topic(&mut self, topic: Option<&str>) {
+        if self.topic.as_deref() != topic {
+            self.topic = topic.map(str::to_string);
+            self.players.clear();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.set_topic(None);
+        self.players.clear();
+    }
+
+    fn player(&mut self, name: &str, bytes: &'static [u8]) -> &mut ClipPlayer {
+        self.players
+            .entry(name.to_string())
+            .or_insert_with(|| ClipPlayer::new(name, bytes))
+    }
+}
+
+/// One clip in the topic text: `clips/<name>.gif` playing, or `clips/<name>.png` still. A clip that
+/// isn't embedded is silently skipped (upstream add_clip); decoding only happens while the picture
+/// is inside the scroll view, and each clip owns one texture (upstream Clip).
+fn show_clip(ui: &mut egui::Ui, cache: &mut ClipCache, name: &str) {
+    let Some(bytes) = help_clips::clip_bytes(name) else {
+        return;
+    };
+    let Some([w, h]) = clip_size(bytes) else {
+        return;
+    };
+    if w == 0 || h == 0 {
+        return; // a broken header: skip the marker
+    }
+    let natural = egui::vec2(w as f32, h as f32);
+    let scale = (ui.available_width().max(64.0) / natural.x).min(1.0);
+    let (rect, _) = ui.allocate_exact_size(natural * scale, egui::Sense::hover());
+    ui.add_space(6.0);
+    let now = Instant::now();
+    if !ui.is_rect_visible(rect) {
+        if let Some(player) = cache.players.get_mut(name) {
+            player.pause(now);
+        }
+        return;
+    }
+    let Some(texture) = cache.player(name, bytes).tick(ui.ctx(), now) else {
+        return;
+    };
+    ui.painter().image(
+        texture,
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
 // ---------------------------------------------------------------- tools / side panel
 
 /// The topics a tool's tip uses (upstream TOOL_TIPS: TOOL_TOPICS + DRAWER_TOOL_TOPICS). A tool tip
@@ -260,6 +520,8 @@ pub struct HelpState {
     pub topic: Option<String>,
     /// Search box.
     pub query: String,
+    /// Clips of the topic being viewed (help.rs).
+    pub clips: ClipCache,
 }
 
 /// Opens the help window (upstream open_help): with topic None, jumps to the current tool's topic.
@@ -323,6 +585,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut on = app.tips.on;
     let mut reset = false;
     let mut link: Option<&'static str> = None;
+    let mut clips = std::mem::take(&mut app.help.clips);
 
     // Body must be at least this tall: egui windows shrink to content height, and without this they would be much shorter than upstream's 900x620
     let body_h = (ctx.viewport_rect().height() * 0.72).clamp(520.0, 900.0);
@@ -385,7 +648,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let cur = selected.clone();
-                            show_topic(ui, cur.as_deref(), &mut selected, &mut link);
+                            show_topic(ui, cur.as_deref(), &mut selected, &mut link, &mut clips);
                         });
                 });
             });
@@ -405,6 +668,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
 
     app.help.query = query;
     app.help.topic = selected;
+    app.help.clips = clips;
     if on != app.tips.on {
         app.tips.on = on;
         app.tips.save();
@@ -417,6 +681,7 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     }
     if !open {
         app.help.open = false;
+        app.help.clips.clear(); // nothing of the topic is on screen any more
     }
 }
 
@@ -426,8 +691,10 @@ fn show_topic(
     id: Option<&str>,
     selected: &mut Option<String>,
     link: &mut Option<&'static str>,
+    clips: &mut ClipCache,
 ) {
     let Some(t) = id.and_then(help_texts::by_id) else {
+        clips.set_topic(None);
         ui.label(
             egui::RichText::new(rust_i18n::t!("help.nothing_found"))
                 .weak()
@@ -435,10 +702,24 @@ fn show_topic(
         );
         return;
     };
+    clips.set_topic(Some(t.id));
     ui.label(egui::RichText::new(t.section).small().weak());
     ui.label(egui::RichText::new(t.title).strong().size(18.0));
     ui.add_space(6.0);
-    ui.label(t.text);
+    // clips/<topic id>.gif (or .png) at the top, then the page with its [clip:...] markers in place;
+    // a marker whose clip is missing is left out (upstream add_clip returning False).
+    show_clip(ui, clips, t.id);
+    for part in split_clips(t.page) {
+        match part {
+            HelpPart::Text(text) => {
+                let text = text.trim_end_matches('\n');
+                if !text.is_empty() {
+                    ui.label(text);
+                }
+            }
+            HelpPart::Clip(name) => show_clip(ui, clips, name),
+        }
+    }
     if t.id == "about" {
         ui.add_space(8.0);
         if ui.button(rust_i18n::t!("help.website")).clicked() {
@@ -678,5 +959,82 @@ mod tests {
         t2.got_it();
         assert_eq!(t2.popup.as_deref(), Some("view"));
         assert!(t2.waiting.is_empty(), "welcome isn't queued back");
+    }
+
+    #[test]
+    fn split_clips_reads_markers() {
+        assert_eq!(
+            split_clips("no markers"),
+            vec![HelpPart::Text("no markers")]
+        );
+        assert!(split_clips("").is_empty());
+        // The marker and one newline after it disappear.
+        assert_eq!(
+            split_clips("before\n[clip:arc]\nafter"),
+            vec![
+                HelpPart::Text("before\n"),
+                HelpPart::Clip("arc"),
+                HelpPart::Text("after"),
+            ]
+        );
+        // Several markers in a row, and one right at the end.
+        assert_eq!(
+            split_clips("[clip:a][clip:b]"),
+            vec![HelpPart::Clip("a"), HelpPart::Clip("b")]
+        );
+        assert_eq!(
+            split_clips("keep\n[clip:]"),
+            vec![HelpPart::Text("keep\n"), HelpPart::Clip("")]
+        );
+        // A malformed marker (no ]) stays part of the text.
+        assert_eq!(
+            split_clips("text [clip:broken"),
+            vec![HelpPart::Text("text [clip:broken")]
+        );
+        // A topic's page really carries its markers (the Help window renders these).
+        let fill = help_texts::by_id("fill").expect("fill topic");
+        assert!(split_clips(fill.page).contains(&HelpPart::Clip("fill-ends-round")));
+        assert!(!fill.text.contains("[clip:"));
+    }
+
+    #[test]
+    fn clip_table_has_the_help_clips() {
+        let gif = help_clips::clip_bytes("arc").expect("arc.gif is embedded");
+        assert!(gif.starts_with(b"GIF"));
+        let png = help_clips::clip_bytes("tumours-menu").expect("tumours-menu.png is embedded");
+        assert!(png.starts_with(b"\x89PNG"));
+        assert!(help_clips::clip_bytes("no-such-clip").is_none());
+    }
+
+    #[test]
+    fn embedded_gif_decodes_with_delays() {
+        let bytes = help_clips::clip_bytes("arc").expect("arc.gif is embedded");
+        let mut player = ClipPlayer::new("arc", bytes);
+        let mut frames = 0;
+        for _ in 0..3 {
+            player.decode_next();
+            assert!(!player.failed);
+            let frame = player.pending.as_ref().expect("a decoded frame");
+            assert_eq!([frame.width(), frame.height()], clip_size(bytes).unwrap());
+            assert!(player.delay > Duration::ZERO, "every frame has a delay");
+            frames += 1;
+        }
+        assert!(frames >= 1);
+    }
+
+    /// Every embedded clip (GIF or PNG) has a good header and a first frame to show.
+    #[test]
+    fn every_embedded_clip_decodes() {
+        assert!(!help_clips::NAMES.is_empty());
+        for name in help_clips::NAMES {
+            let bytes = help_clips::clip_bytes(name).expect("a listed clip has bytes");
+            assert!(clip_size(bytes).is_some(), "{name}: no usable header");
+            let mut player = ClipPlayer::new(name, bytes);
+            player.decode_next();
+            assert!(!player.failed, "{name}: fails to decode");
+            let frame = player.pending.as_ref().expect("a frame");
+            assert!(frame.width() > 0 && frame.height() > 0, "{name}");
+            assert!(player.delay > Duration::ZERO, "{name}: no delay");
+        }
     }
 }

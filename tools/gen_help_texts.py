@@ -1,14 +1,16 @@
 """Mechanical conversion of help_texts.py: original scripts/window/help_texts.py -> crates/spiderweb-app/src/help_texts.rs.
 
 The original module is imported directly; TOPICS / SECTIONS / NEXT / SEE / TOOL_TOPICS become
-Rust constants as they are (strings escaped as Rust literals, non-ASCII kept as UTF-8). To change
-the wording, edit the original and run this script again:
+Rust constants as they are (strings escaped as Rust literals, non-ASCII kept as UTF-8). Each topic
+gets both texts upstream keeps: text (the [clip:...] markers stripped; search / side help / tips)
+and page (the Help window version, markers on their own lines). To change the wording, edit the
+original and run this script again:
 
     python3 tools/gen_help_texts.py
 
-The original script dir defaults to /Users/jieneng/Documents/GitHub/Spiderweb-main/scripts and
-can be overridden with the SPIDERWEB_SCRIPTS environment variable (same convention as
-tools/gen_*_vectors.py).
+The original script dir defaults to /Users/jieneng/Documents/GitHub/Spiderweb-1.2.0/scripts (the
+current port target) and can be overridden with the SPIDERWEB_SCRIPTS environment variable (same
+convention as tools/gen_*_vectors.py).
 """
 
 import os
@@ -17,7 +19,7 @@ import sys
 
 # when run in the worktree the original script dir cannot be derived; use the same fallback path as gen_*_vectors.py
 _SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS",
-                          "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
+                          "/Users/jieneng/Documents/GitHub/Spiderweb-1.2.0/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
@@ -57,6 +59,7 @@ def topic(t):
             f"        title: {lit(t['title'])},\n"
             f"        tip: {lit(t['tip'])},\n"
             f"        text: {lit(t['text'])},\n"
+            f"        page: {lit(t['page'])},\n"
             f"        words: {lit(t.get('words', ''))},\n"
             "    },")
 
@@ -67,7 +70,7 @@ def main():
     if missing:
         sys.exit(f"section not in SECTIONS: {sorted(missing)}")
     for t in TOPICS:
-        for key in ("id", "section", "title", "tip", "text"):
+        for key in ("id", "section", "title", "tip", "text", "page"):
             if key not in t:
                 sys.exit(f"topic {t.get('id', '?')} is missing {key}")
     ids = [t["id"] for t in TOPICS]
@@ -83,13 +86,15 @@ def main():
         "//! Regenerate with: python3 tools/gen_help_texts.py",
         "",
         "/// A help topic (an element of upstream TOPICS): tip is the first-use popup / tool button tooltip,",
-        "/// text is the full description (help window and side panel; upstream [clip:...] markers are removed).",
+        "/// text is the full description without clips (search, side help and tips) and page is the Help",
+        "/// window's version, which keeps the upstream [clip:...] markers on their own lines.",
         "pub struct Topic {",
         "    pub id: &'static str,",
         "    pub section: &'static str,",
         "    pub title: &'static str,",
         "    pub tip: &'static str,",
         "    pub text: &'static str,",
+        "    pub page: &'static str,",
         "    pub words: &'static str,",
         "}",
         "",

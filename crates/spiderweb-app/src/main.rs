@@ -10,6 +10,7 @@ mod drawer;
 mod drawer_tools;
 mod errors;
 mod help;
+mod help_clips;
 mod help_texts;
 mod history;
 #[cfg(test)]
