@@ -12,7 +12,8 @@ import sys
 from vec_common import write
 
 # 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
-_SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS", "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
+_SCRIPTS = (os.environ.get("SPIDERWEB_SCRIPTS") or os.environ.get("SPIDERWEB_SRC")
+            or "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
@@ -114,6 +115,16 @@ def gen():
     ]
     for triple in whole:
         add(cases, "full_circle", list(triple), A.full_circle)
+
+    # ---- arc_circle：一般三点 / k / 整圆 / 共线（没有圆弧时 None）
+    for p, k in (
+        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0),
+        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 0.5),
+        ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 2.0),
+        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0),
+        ([[2.0, 3.0], [2.0, 5.0], [2.0, 7.0]], 1.0),
+    ):
+        add(cases, "arc_circle", [p, k], A.arc_circle)
 
     # ---- arc_points：k / step / 共线 / 整圆 / 超半圆 / 点不足
     arc_pts = [

@@ -9,6 +9,7 @@ use eframe::egui;
 
 use spiderweb_core::custom::notes_shape;
 use spiderweb_core::engine::{self, Mode, Split};
+use spiderweb_core::joined;
 use spiderweb_core::shape::{Kind, Shape, TextSettings};
 use spiderweb_io::compat::{shape_from_json, shape_to_json};
 use spiderweb_io::project::{
@@ -592,6 +593,14 @@ impl App {
             )
             .to_string();
         }
+        if joined::is_joined(sh) {
+            let pieces = sh.gaps.len() + 1;
+            return if pieces > 1 {
+                rust_i18n::t!("shape.joined_pieces", pieces = pieces.to_string()).to_string()
+            } else {
+                rust_i18n::t!("shape.joined").to_string()
+            };
+        }
         if sh.kind == Kind::Custom {
             return rust_i18n::t!(
                 "shape.custom",
@@ -826,8 +835,8 @@ impl App {
                     p[1] = mid2 - p[1];
                 }
             }
-            if let Some(tm) = sh.tumour.as_mut() {
-                tm.mirror = !tm.mirror;
+            for tm in joined::all_tumours_mut(sh) {
+                tm.mirror = !tm.mirror; // mirrored: the bumps swap sides too
             }
             if sideways {
                 if !sh.vel_env.is_empty() {
@@ -885,7 +894,7 @@ impl App {
             if let Some(tx) = sh.text.as_mut() {
                 tx.k = r * r / tx.k;
             }
-            if let Some(tm) = sh.tumour.as_mut() {
+            for tm in joined::all_tumours_mut(sh) {
                 tm.size *= tm.k / r;
                 tm.length *= r / tm.k;
                 tm.dist *= r / tm.k;
@@ -1312,6 +1321,13 @@ impl App {
             }
             if i.consume_shortcut(&KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::V)) {
                 self.paste_from_domino();
+            }
+            // (the Shift one first: consume_shortcut ignores an extra Shift, so Ctrl+G would eat Ctrl+Shift+G)
+            if i.consume_shortcut(&KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::G)) {
+                self.split_selected();
+            }
+            if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::G)) {
+                self.join_selected();
             }
             if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::H)) {
                 self.flip(true);

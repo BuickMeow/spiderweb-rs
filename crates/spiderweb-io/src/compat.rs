@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use spiderweb_core::arc::clean_k as arc_k;
 use spiderweb_core::custom::{BOX_STROKE, check_notes, clean_curve, clean_strokes};
+use spiderweb_core::joined;
 use spiderweb_core::shape::{
     Align, Ends, Fill, FunnelCurve, FunnelFill, FunnelStart, GateChange, GateFollow, Kind, Shape,
     Stroke, Sym, TextSettings, Tumour, WallMode,
@@ -330,6 +331,11 @@ pub fn shape_from_json(value: &Value) -> Result<Option<Shape>, ShapeError> {
                 out.pts = pts;
                 out.sharp = sharp;
                 out.sym = sym;
+            }
+            // a joined curve's pieces / tumours (joined.py)
+            joined::clean_joined(sh, &mut out);
+            if joined::is_joined(&out) {
+                out.sym = None;
             }
         }
         Kind::Funnel => match funnel_shape(sh, out.clone()) {
@@ -817,7 +823,31 @@ pub fn shape_to_json(sh: &Shape) -> Value {
                     Value::Array(sh.sharp.iter().map(|&i| Value::from(i as i64)).collect()),
                 );
             }
-            if let Some(s) = sh.sym {
+            let joined = spiderweb_core::joined::is_joined(sh);
+            if !sh.gaps.is_empty() {
+                o.insert(
+                    "gaps".into(),
+                    Value::Array(sh.gaps.iter().map(|&i| Value::from(i as i64)).collect()),
+                );
+            }
+            if !sh.tumours.is_empty() {
+                o.insert(
+                    "tumours".into(),
+                    Value::Array(
+                        sh.tumours
+                            .iter()
+                            .map(|tm| tm.as_ref().map_or(Value::Null, tumour_value))
+                            .collect(),
+                    ),
+                );
+                if !sh.splits.is_empty() {
+                    o.insert(
+                        "splits".into(),
+                        Value::Array(sh.splits.iter().map(|&i| Value::from(i as i64)).collect()),
+                    );
+                }
+            }
+            if !joined && let Some(s) = sh.sym {
                 o.insert("sym".into(), Value::from(sym_str(s)));
             }
         }
@@ -952,6 +982,50 @@ mod tests {
             !sh.union && !sh.apart,
             "Python 的 `is True`：1 / \"yes\" 都不算"
         );
+    }
+
+    /// 1.2.0 joined curve keys: gaps / splits / tumours read in, sym dropped.
+    #[test]
+    fn reads_joined_curve_keys() {
+        let v = serde_json::json!({
+            "kind": "curve",
+            "pts": [[0, 60], [1, 60], [2, 60], [3, 60], [4, 60], [5, 60], [6, 60],
+                    [7, 60], [8, 60], [9, 60], [10, 60], [11, 60], [12, 60]],
+            "sym": "mirror",
+            "gaps": [2],
+            "splits": [1],
+            "tumours": [null, {"on": true}, {"on": true, "size": 2.0}],
+        });
+        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        assert_eq!(sh.gaps, vec![2]);
+        assert_eq!(sh.splits, vec![1]);
+        assert_eq!(sh.tumours.len(), 3);
+        assert!(sh.tumours[0].is_none());
+        assert!(sh.tumours[1].as_ref().expect("tm").on);
+        assert!((sh.tumours[2].as_ref().expect("tm").size - 2.0).abs() < 1e-12);
+        assert!(sh.tumour.is_none());
+        assert!(sh.sym.is_none(), "a joined curve has no symmetry");
+    }
+
+    /// The joined keys written back are read in again unchanged.
+    #[test]
+    fn writes_joined_curve_keys() {
+        let v = serde_json::json!({
+            "kind": "curve",
+            "pts": [[0, 60], [1, 60], [2, 60], [3, 60], [4, 60], [5, 60], [6, 60],
+                    [7, 60], [8, 60], [9, 60], [10, 60], [11, 60], [12, 60]],
+            "gaps": [2],
+            "splits": [1],
+            "tumours": [null, {"on": true}, {"on": true, "size": 2.0}],
+        });
+        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let out = shape_to_json(&sh);
+        assert_eq!(out["gaps"], Value::Array(vec![Value::from(2)]));
+        assert_eq!(out["splits"], Value::Array(vec![Value::from(1)]));
+        assert_eq!(out["tumours"].as_array().expect("tumours").len(), 3);
+        assert!(out.get("sym").is_none());
+        let again = shape_from_json(&out).expect("能读").expect("有效");
+        assert_eq!(shape_to_json(&again), out);
     }
 
     /// 写出去：ends = drop 与关着的开关省略（1.2.0 读不到时同样是 drop / false）。

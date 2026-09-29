@@ -290,6 +290,15 @@ pub struct Shape {
     /// 曲线锚点中的尖角（anchor 序号）。
     pub sharp: Vec<usize>,
     pub sym: Option<Sym>,
+    /// Segments of a joined curve that aren't drawn and make no notes
+    /// (1.2.0 joined.py `sh["gaps"]`).
+    pub gaps: Vec<usize>,
+    /// Anchors where a new tumour section starts inside a piece of a joined curve
+    /// (1.2.0 joined.py `sh["splits"]`).
+    pub splits: Vec<usize>,
+    /// Per-piece tumour settings of a joined curve (None = that piece has none)
+    /// (1.2.0 joined.py `sh["tumours"]`).
+    pub tumours: Vec<Option<Tumour>>,
     // ---- custom ----
     pub name: String,
     pub strokes: Vec<Stroke>,
@@ -331,6 +340,9 @@ impl Default for Shape {
             k: 1.0,
             sharp: Vec::new(),
             sym: None,
+            gaps: Vec::new(),
+            splits: Vec::new(),
+            tumours: Vec::new(),
             name: String::new(),
             strokes: Vec::new(),
             fill: Fill::Empty,

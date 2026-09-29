@@ -6,6 +6,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use spiderweb_core::Pt;
 use spiderweb_core::engine;
 use spiderweb_core::funnel;
+use spiderweb_core::joined;
 use spiderweb_core::shape::{Fill, Kind, Shape};
 
 use crate::app::{App, PartId, Tool};
@@ -518,9 +519,10 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
     for i in (0..app.shapes.len()).rev() {
         let sh = &app.shapes[i];
         let mut strokes = engine::shape_strokes(sh);
-        if sh.tumour.as_ref().map(|t| t.on).unwrap_or(false) {
+        if joined::all_tumours(sh).iter().any(|tm| tm.on) {
             let mut plain = sh.clone();
             plain.tumour = None;
+            plain.tumours.clear();
             strokes.extend(engine::shape_strokes(&plain));
         }
         if stroke_hit(app, &strokes, p) {
@@ -1740,11 +1742,12 @@ fn paint(app: &App, painter: &egui::Painter, rect: Rect) {
 
     // 形状线：肿瘤的淡虚线，然后未选中 / 选中
     for (i, sh) in app.shapes.iter().enumerate() {
-        if sh.tumour.as_ref().map(|t| t.on).unwrap_or(false)
+        if joined::all_tumours(sh).iter().any(|tm| tm.on)
             && (app.sels.contains(&i) || app.show_lines)
         {
             let mut plain = sh.clone();
             plain.tumour = None;
+            plain.tumours.clear();
             let color = if app.sels.contains(&i) {
                 Color32::from_rgb(0xe8, 0x9a, 0x9a)
             } else {

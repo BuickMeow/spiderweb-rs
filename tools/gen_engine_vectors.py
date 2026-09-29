@@ -285,6 +285,34 @@ def gen():
     add_notes(pasted_high, 960, 256)
     add_notes(pasted_high, 960, 128)
 
+    # ------------------------------------------------------------ joined curves (1.2.0 joined.py)
+    from notes import joined as Jo
+
+    def joined_shape(shapes, k=1.0, tol=1e-9):
+        got = Jo.join_shapes(copy.deepcopy(shapes), k, lambda p, q: math.dist(p, q) <= tol)
+        assert got is not None
+        return E.clean_shape(got)
+
+    jl1 = shape("line", [[0.0, 60.0], [4.0, 60.0]])
+    jl2 = shape("line", [[6.0, 60.0], [10.0, 60.0]])
+    joined_gap = joined_shape([jl1, jl2])
+    add("shape_path", [joined_gap], E.shape_path(joined_gap))
+    add("shape_strokes", [joined_gap], E.shape_strokes(joined_gap))
+    add_notes(joined_gap)
+    add_notes(joined_gap, 480)
+    jt1 = shape("line", [[0.0, 60.0], [4.0, 60.0]], tumour=tumour(size=2.0))
+    jt2 = shape("line", [[4.0, 60.0], [8.0, 64.0]], tumour=tumour(size=3.0, side="left"))
+    joined_tm = joined_shape([jt1, jt2])
+    add_notes(joined_tm)
+    add_notes(joined_tm, 480)
+    add("shape_strokes", [joined_tm], E.shape_strokes(joined_tm))
+    # every piece with the same tumour settings: one setting for the whole curve
+    js1 = shape("line", [[0.0, 60.0], [4.0, 60.0]], tumour=tumour(size=2.0))
+    js2 = shape("line", [[6.0, 60.0], [10.0, 60.0]], tumour=tumour(size=2.0))
+    joined_same = joined_shape([js1, js2])
+    add_notes(joined_same)
+    add_notes(joined_same, 480, 256)
+
     # ------------------------------------------------------------ shape_notes_tracks
     def add_tracks(sh, ppq=960, keys=128):
         add("shape_notes_tracks", [sh, ppq, keys], E.shape_notes_tracks(sh, ppq, keys))

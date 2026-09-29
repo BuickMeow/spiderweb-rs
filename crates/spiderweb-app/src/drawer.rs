@@ -401,7 +401,7 @@ impl Drawer {
             return None;
         };
         let map = self.screen_map();
-        for (j, kind) in bezier::pen_handles(pts, true).into_iter().rev() {
+        for (j, kind) in bezier::pen_handles(pts, true, &[]).into_iter().rev() {
             if kind == HandleKind::End || j >= pts.len() {
                 continue;
             }
@@ -436,6 +436,7 @@ impl Drawer {
             pts: pts.clone(),
             sharp: sharp.clone(),
             sym: *sym,
+            ..Default::default()
         };
         {
             let to_screen = self.screen_map();
@@ -464,6 +465,7 @@ impl Drawer {
             pts: pts.clone(),
             sharp: sharp.clone(),
             sym: *sym,
+            ..Default::default()
         };
         let source = match mouse {
             Some(p) => {
@@ -497,6 +499,7 @@ impl Drawer {
             pts: pts.clone(),
             sharp: sharp.clone(),
             sym: *sym,
+            ..Default::default()
         };
         match bezier::can_delete(&c, j) {
             None => true,
@@ -1280,13 +1283,13 @@ impl Drawer {
         if let Some(i) = selected_curve
             && let Some(Stroke::Curve { pts, .. }) = self.strokes.get(i)
         {
-            for (a, h) in bezier::handle_lines(pts) {
+            for (a, h) in bezier::handle_lines(pts, &[]) {
                 let pa = self.to_screen(a[0], a[1]);
                 let ph = self.to_screen(h[0], h[1]);
                 painter.line_segment([pa, ph], egui::Stroke::new(3.5, Color32::WHITE));
                 painter.line_segment([pa, ph], egui::Stroke::new(1.5, HANDLE_COLOR));
             }
-            for (j, kind) in bezier::pen_handles(pts, true) {
+            for (j, kind) in bezier::pen_handles(pts, true, &[]) {
                 if kind == HandleKind::End || j >= pts.len() {
                     continue;
                 }

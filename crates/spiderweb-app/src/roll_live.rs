@@ -490,7 +490,7 @@ pub fn stroke_handles(app: &App, sh: &Shape) -> Vec<(Pt, StrokeHandleId, bool)> 
     if let Some(k) = picked_curve_stroke(app, sh)
         && let Some(PathStroke::Curve { pts, .. }) = sh.strokes.get(k)
     {
-        for (j, kind) in bezier::pen_handles(pts, true) {
+        for (j, kind) in bezier::pen_handles(pts, true, &[]) {
             if kind == HandleKind::End {
                 continue;
             }
@@ -722,6 +722,7 @@ pub fn drag_stroke_handle(
                 pts: pts.clone(),
                 sharp: sharp.clone(),
                 sym: *sym,
+                ..Default::default()
             };
             let Some((to_screen, from_screen)) = stroke_maps(app, &fr.frame) else {
                 return hid;
@@ -762,6 +763,7 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
         pts: pts.clone(),
         sharp: sharp.clone(),
         sym: *sym,
+        ..Default::default()
     };
     match bezier::can_delete(&c, j) {
         None => {}
@@ -802,11 +804,13 @@ pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) ->
         pts: pts.clone(),
         sharp: sharp.clone(),
         sym: *sym,
+        ..Default::default()
     };
     let Some((to_screen, _)) = stroke_maps(app, &fr.frame) else {
         return false;
     };
-    let Some((seg, t, d)) = bezier::nearest(&c.pts, &to_screen, pos.x as f64, pos.y as f64, 64)
+    let Some((seg, t, d)) =
+        bezier::nearest(&c.pts, &to_screen, pos.x as f64, pos.y as f64, 64, &[])
     else {
         return false;
     };
@@ -888,7 +892,7 @@ pub fn paint_custom_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: 
         && let Some(PathStroke::Curve { pts, .. }) = sh.strokes.get(k)
         && let Some(to_bp) = frame_to_bp(&sh.pts)
     {
-        for (a, h) in bezier::handle_lines(pts) {
+        for (a, h) in bezier::handle_lines(pts, &[]) {
             let pa = at(app, rect, to_bp(a[0], a[1]));
             let ph = at(app, rect, to_bp(h[0], h[1]));
             painter.line_segment(

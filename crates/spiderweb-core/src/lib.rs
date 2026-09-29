@@ -8,6 +8,7 @@
 //! - [`tumour`] 线条上的肿瘤（凸起）
 //! - [`envelope`] 速度包络
 //! - [`custom`] 自定义形状（轮廓 / 填充 / spam）与粘贴音符
+//! - [`joined`] joining lines / curves / arcs into one Curve shape (1.2.0)
 //! - [`funnel`] 漏斗
 //! - [`text`] 文本 → 字形轮廓
 //! - [`engine`] 汇总：形状 → 音符、重叠处理、通道分配
@@ -19,6 +20,7 @@ pub mod engine;
 pub mod envelope;
 pub mod fonts;
 pub mod funnel;
+pub mod joined;
 pub mod paths;
 pub mod pyrandom;
 pub mod shape;

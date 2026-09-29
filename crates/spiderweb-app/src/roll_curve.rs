@@ -35,12 +35,13 @@ fn view_maps(
     )
 }
 
-/// 曲线的把手点 `(点号, 点, 种类)`，顺序即绘制顺序：拉出的手柄、中间锚点、两端（核心 pen_handles）。
+/// The curve's handle points `(point number, point, kind)` in drawing order: pulled-out handles,
+/// middle anchors, piece ends (core pen_handles).
 fn curve_point_handles(sh: &Shape) -> Vec<(usize, Pt, CurveHandle)> {
     if sh.kind != Kind::Curve {
         return Vec::new();
     }
-    bezier::pen_handles(&sh.pts, true)
+    bezier::pen_handles(&sh.pts, true, &sh.gaps)
         .into_iter()
         .filter_map(|(i, kind)| sh.pts.get(i).map(|p| (i, *p, kind)))
         .collect()
@@ -82,14 +83,18 @@ fn curve_of(sh: &Shape) -> Curve {
         pts: sh.pts.clone(),
         sharp: sh.sharp.clone(),
         sym: sh.sym,
+        gaps: sh.gaps.clone(),
+        splits: sh.splits.clone(),
     }
 }
 
-/// 把曲线的点与尖角写回形状（sym 不变）。
+/// Write the curve's points, corners, gaps and section marks back to the shape (sym unchanged).
 fn apply_curve(sh: &mut Shape, c: Curve) {
     sh.pts = c.pts;
     sh.sharp = c.sharp;
     sh.sym = c.sym;
+    sh.gaps = c.gaps;
+    sh.splits = c.splits;
 }
 
 /// 右键点 i 会发生什么（核心 can_delete）。
@@ -175,9 +180,14 @@ impl App {
         if sh.kind != Kind::Curve {
             return false;
         }
-        let Some((seg, t, d)) =
-            bezier::nearest(&sh.pts, &to_screen, pos.x as f64, pos.y as f64, 64)
-        else {
+        let Some((seg, t, d)) = bezier::nearest(
+            &sh.pts,
+            &to_screen,
+            pos.x as f64,
+            pos.y as f64,
+            64,
+            &sh.gaps,
+        ) else {
             return false;
         };
         if let Some(near) = near
@@ -256,7 +266,7 @@ pub fn paint_curve_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &
             rect.min.y + app.view.y_of(p[1]),
         )
     };
-    for (a, h) in bezier::handle_lines(&sh.pts) {
+    for (a, h) in bezier::handle_lines(&sh.pts, &sh.gaps) {
         painter.line_segment(
             [at(a), at(h)],
             Stroke::new((3.5 * s).max(3.0), Color32::WHITE),

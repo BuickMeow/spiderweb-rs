@@ -12,6 +12,7 @@ mod help;
 mod help_texts;
 #[cfg(test)]
 mod i18n_check;
+mod join_split;
 mod note_gpu;
 mod panels;
 mod playback;

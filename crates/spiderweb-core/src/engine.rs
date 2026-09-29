@@ -12,6 +12,7 @@ use crate::bezier;
 use crate::custom::{block_notes, custom_notes, custom_strokes};
 use crate::envelope::{env_values, velocity_env};
 use crate::funnel::{funnel_notes, funnel_strokes};
+use crate::joined::{is_joined, joined_paths};
 use crate::paths::{dedupe, dot_segment_notes, path_notes};
 use crate::shape::{Kind, Shape};
 use crate::smooth::smooth_path;
@@ -156,11 +157,13 @@ pub fn shape_path(sh: &Shape) -> Vec<Pt> {
     pts
 }
 
-/// 形状的几条折线（只有自定义形状和漏斗有多条）（engine.shape_strokes）。
+/// The shape's polylines (only custom shapes, funnels and joined curves have more than one)
+/// (engine.shape_strokes).
 pub fn shape_strokes(sh: &Shape) -> Vec<Vec<Pt>> {
     match sh.kind {
         Kind::Custom => custom_strokes(sh),
         Kind::Funnel => funnel_strokes(sh),
+        _ if is_joined(sh) => joined_paths(sh), // a joined curve: one path per piece
         _ => vec![shape_path(sh)],
     }
 }
@@ -208,7 +211,8 @@ pub fn shape_notes_default(sh: &Shape, ppq: f64) -> Vec<Note4> {
 pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Option<Vec<i64>>) {
     let end_dot = sh.end_dot;
     // 画线用的是同一批点；dedupe 也跨笔画边界去掉重复点
-    let mut path: Vec<Pt> = dedupe(&shape_strokes(sh).into_iter().flatten().collect::<Vec<Pt>>());
+    let strokes = shape_strokes(sh);
+    let mut path: Vec<Pt> = dedupe(&strokes.iter().flatten().copied().collect::<Vec<Pt>>());
     if path.is_empty() {
         return (Vec::new(), None);
     }
@@ -231,6 +235,20 @@ pub fn shape_notes_tracks(sh: &Shape, ppq: f64, keys: i64) -> (Vec<Note4>, Optio
         } else {
             funnel_notes(sh, ppq)
         };
+    } else if crate::joined::LINE_KINDS.contains(&sh.kind) && strokes.len() > 1 {
+        // every piece of a joined curve makes its own notes, like a line of its own (no notes across a gap)
+        let mut pieces: Vec<[i64; 3]> = Vec::new();
+        for a in &strokes {
+            let mut a = dedupe(a);
+            if let (Some(first), Some(last)) = (a.first().copied(), a.last().copied())
+                && last[0] < first[0]
+            {
+                a.reverse();
+            }
+            let scaled: Vec<Pt> = a.iter().map(|p| [p[0] * ppq, p[1]]).collect();
+            pieces.extend(path_notes(&scaled, end_dot));
+        }
+        raw = pieces;
     } else if end_dot && sh.kind == Kind::Poly && path.len() > 2 {
         raw = dot_segment_notes(&path);
     } else {

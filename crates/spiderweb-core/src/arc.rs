@@ -78,6 +78,20 @@ fn arc_through(m: [Pt; 3]) -> Option<(Pt, f64, f64, f64)> {
     Some((centre, r, t0, span))
 }
 
+/// The arc through pts[0], pts[1], pts[2] as (centre, radius, start angle, signed span), worked out with
+/// beats divided by k (as arc_points does: multiply a point's x by k again), or None if they're in a
+/// straight line (arc.arc_circle).
+pub fn arc_circle(pts: &[Pt], k: f64) -> Option<(Pt, f64, f64, f64)> {
+    if pts.len() < 3 {
+        return None;
+    }
+    arc_through([
+        [pts[0][0] / k, pts[0][1]],
+        [pts[1][0] / k, pts[1][1]],
+        [pts[2][0] / k, pts[2][1]],
+    ])
+}
+
 /// 从 pts[0] 经过 pts[1] 到 pts[2] 的弧的点列（共线时为直线；pts[2] 等于 pts[0] 时为整圆）。
 /// 起点与终点精确落在端点上。不足三点时用首尾两点。`k` 见模块说明，`step` 为相邻采样点的角度。
 pub fn arc_points(pts: &[Pt], k: f64, step: f64) -> Vec<Pt> {

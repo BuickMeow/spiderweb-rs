@@ -47,10 +47,19 @@ fn curve_arg(v: &Value) -> B::Curve {
     } else {
         ints(&v["sharp"])
     };
+    let opt_ints = |k: &str| {
+        if v[k].is_null() {
+            Vec::new()
+        } else {
+            ints(&v[k])
+        }
+    };
     B::Curve {
         pts: pts(&v["pts"]),
         sharp,
         sym: sym_of(&v["sym"]),
+        gaps: opt_ints("gaps"),
+        splits: opt_ints("splits"),
     }
 }
 
@@ -58,6 +67,18 @@ fn assert_curve_eq(got: &B::Curve, want: &Value, ctx: &str) {
     assert_pts_eq(&got.pts, &want["pts"], &format!("{ctx} pts"));
     assert_eq!(got.sharp, ints(&want["sharp"]), "{ctx} sharp");
     assert_eq!(got.sym, sym_of(&want["sym"]), "{ctx} sym");
+    assert_eq!(got.gaps, ints(&want["gaps"]), "{ctx} gaps");
+    assert_eq!(got.splits, ints(&want["splits"]), "{ctx} splits");
+}
+
+/// Optional gaps argument of pen_handles / handle_lines / nearest (default: empty).
+fn gaps_arg(v: Option<&Value>) -> Vec<usize> {
+    v.map_or(
+        Vec::new(),
+        |v| {
+            if v.is_null() { Vec::new() } else { ints(v) }
+        },
+    )
 }
 
 type ToScreen = Box<dyn Fn([f64; 2]) -> [f64; 2]>;
@@ -172,7 +193,7 @@ fn bezier_vectors() {
                 assert_eq!(g as i64, i(out), "{ctx}");
             }
             "pen_handles" => {
-                let g = B::pen_handles(&pts(&args[0]), b(&args[1]));
+                let g = B::pen_handles(&pts(&args[0]), b(&args[1]), &gaps_arg(args.get(2)));
                 let w = out.as_array().unwrap();
                 assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
                 for (k, (gi, gk)) in g.iter().enumerate() {
@@ -186,7 +207,7 @@ fn bezier_vectors() {
                 }
             }
             "handle_lines" => {
-                let g = B::handle_lines(&pts(&args[0]));
+                let g = B::handle_lines(&pts(&args[0]), &gaps_arg(args.get(1)));
                 let w = out.as_array().unwrap();
                 assert_eq!(g.len(), w.len(), "{ctx}: 数量不同");
                 for (k, (a, h)) in g.iter().enumerate() {
@@ -205,7 +226,14 @@ fn bezier_vectors() {
                 let (sx, sy) = screen_pair(&args[1]);
                 let (ts, _) = screen(sx, sy);
                 let n = args[4].as_u64().unwrap() as usize;
-                let g = B::nearest(&pts(&args[0]), &ts, f(&args[2]), f(&args[3]), n);
+                let g = B::nearest(
+                    &pts(&args[0]),
+                    &ts,
+                    f(&args[2]),
+                    f(&args[3]),
+                    n,
+                    &gaps_arg(args.get(5)),
+                );
                 if out.is_null() {
                     assert!(g.is_none(), "{ctx}: 应为 None");
                 } else {
@@ -272,6 +300,23 @@ fn bezier_vectors() {
                 B::set_symmetry(&mut c, sym_of(&args[1]), source, &ts, b(&args[4]));
                 assert_curve_eq(&c, out, &ctx);
             }
+            "piece_ends" => {
+                let got = B::piece_ends(&curve_arg(&args[0]));
+                let want: Vec<usize> = ints(out);
+                assert_eq!(got.into_iter().collect::<Vec<_>>(), want, "{ctx}");
+            }
+            "fixed_anchors" => {
+                let got = B::fixed_anchors(&curve_arg(&args[0]));
+                let want: Vec<usize> = ints(out);
+                assert_eq!(got.into_iter().collect::<Vec<_>>(), want, "{ctx}");
+            }
+            "shift_marks" => {
+                let mut c = curve_arg(&args[0]);
+                let after = args[1].as_u64().unwrap() as usize;
+                let d = args[2].as_i64().unwrap();
+                B::shift_marks(&mut c, after, d);
+                assert_curve_eq(&c, out, &ctx);
+            }
             "resample" => {
                 let n = args[1].as_u64().unwrap() as usize;
                 let g = B::resample(&pts(&args[0]), n);
@@ -289,5 +334,5 @@ fn bezier_vectors() {
         }
         checked += 1;
     }
-    assert!(checked >= 190, "用例太少：{checked}");
+    assert!(checked >= 245, "用例太少：{checked}");
 }

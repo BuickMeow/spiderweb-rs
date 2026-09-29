@@ -1462,6 +1462,49 @@ impl App {
                         self.delete_all();
                     }
                 });
+                // Join / Split (upstream window/join_split.py's buttons under the shape list)
+                let base_join = rust_i18n::t!("join.join_tip").to_string();
+                let problem = self.join_problem();
+                let tip = match &problem {
+                    Some(p) => format!("{base_join}\n\n{p}"),
+                    None => base_join,
+                };
+                ui.horizontal(|ui| {
+                    let resp = ui.add_enabled(
+                        problem.is_none(),
+                        egui::Button::new(rust_i18n::t!("join.button_join")),
+                    );
+                    if resp.clicked() {
+                        self.join_selected();
+                    }
+                    if problem.is_none() {
+                        resp.on_hover_text(tip);
+                    } else {
+                        resp.on_disabled_hover_text(tip);
+                    }
+                    let base_split = format!(
+                        "{}\n{}",
+                        rust_i18n::t!("join.split_tip"),
+                        rust_i18n::t!("join.split_here_tip")
+                    );
+                    let problem = self.split_problem();
+                    let tip = match &problem {
+                        Some(p) => format!("{base_split}\n\n{p}"),
+                        None => base_split,
+                    };
+                    let resp = ui.add_enabled(
+                        problem.is_none(),
+                        egui::Button::new(rust_i18n::t!("join.button_split")),
+                    );
+                    if resp.clicked() {
+                        self.split_selected();
+                    }
+                    if problem.is_none() {
+                        resp.on_hover_text(tip);
+                    } else {
+                        resp.on_disabled_hover_text(tip);
+                    }
+                });
             });
     }
 

@@ -284,6 +284,25 @@ fn shape_of(v: &Value) -> Shape {
             if let Some(x) = v.get("sym") {
                 sh.sym = sym_of(x);
             }
+            // a joined curve's pieces / tumours (joined.py)
+            if let Some(a) = v.get("gaps").and_then(Value::as_array) {
+                sh.gaps = a.iter().map(|x| i(x) as usize).collect();
+            }
+            if let Some(a) = v.get("splits").and_then(Value::as_array) {
+                sh.splits = a.iter().map(|x| i(x) as usize).collect();
+            }
+            if let Some(a) = v.get("tumours").and_then(Value::as_array) {
+                sh.tumours = a
+                    .iter()
+                    .map(|t| {
+                        if t.is_null() {
+                            None
+                        } else {
+                            Some(tumour_of(t))
+                        }
+                    })
+                    .collect();
+            }
         }
         Kind::Custom => {
             if let Some(x) = v.get("name").and_then(Value::as_str) {

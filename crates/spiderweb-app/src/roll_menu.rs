@@ -18,6 +18,9 @@ pub enum MenuAction {
     EditText,
     DeleteStroke,
     SaveToLibrary,
+    Join,
+    SplitHere,
+    SplitPieces,
     Delete,
     Duplicate,
     Copy,
@@ -62,6 +65,12 @@ pub struct MenuTarget {
     pub picked_stroke: Option<usize>,
     /// 被拾取的笔画正好是曲线（可以加锚点）
     pub picked_curve: Option<usize>,
+    /// The hit shape is a line kind (it can be cut in two here)
+    pub line_kind: bool,
+    /// The selected shapes can be joined
+    pub can_join: bool,
+    /// The hit shape can be split into separate shapes
+    pub can_split: bool,
 }
 
 fn item(label: impl Into<String>, action: MenuAction, enabled: bool) -> MenuEntry {
@@ -87,6 +96,9 @@ pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
         clipboard: !app.clipboard.is_empty(),
         picked_stroke: picked,
         picked_curve,
+        line_kind: spiderweb_core::joined::LINE_KINDS.contains(&sh.kind),
+        can_join: app.can_join(),
+        can_split: app.can_split_pieces(sh),
     })
 }
 
@@ -134,6 +146,31 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
             rust_i18n::t!("menu.save_library"),
             MenuAction::SaveToLibrary,
             false,
+        ));
+    }
+    if t.count >= 2 {
+        out.push(item(
+            if t.can_join {
+                rust_i18n::t!("menu.join_shapes")
+            } else {
+                rust_i18n::t!("menu.join_shapes_only")
+            },
+            MenuAction::Join,
+            t.can_join,
+        ));
+    }
+    if one && t.line_kind {
+        out.push(item(
+            rust_i18n::t!("menu.split_here"),
+            MenuAction::SplitHere,
+            true,
+        ));
+    }
+    if one && t.can_split {
+        out.push(item(
+            rust_i18n::t!("menu.split_separate"),
+            MenuAction::SplitPieces,
+            true,
         ));
     }
     if !out.is_empty() {
@@ -277,6 +314,9 @@ fn apply_action(app: &mut App, action: MenuAction, i: usize, pos: Pos2, shift: b
             }
         }
         MenuAction::SaveToLibrary => {}
+        MenuAction::Join => app.join_selected(),
+        MenuAction::SplitHere => app.split_here(i, pos),
+        MenuAction::SplitPieces => app.split_pieces_shape(i),
         MenuAction::Delete => app.delete_selected(),
         MenuAction::Duplicate => app.duplicate(),
         MenuAction::Copy => app.copy_selected(),
@@ -364,6 +404,9 @@ mod tests {
             clipboard: false,
             picked_stroke: None,
             picked_curve: None,
+            line_kind: spiderweb_core::joined::LINE_KINDS.contains(&kind),
+            can_join: false,
+            can_split: false,
         }
     }
 
@@ -443,6 +486,27 @@ mod tests {
         let got = menu_entries_for(&t);
         assert!(find(&got, MenuAction::AddCurveAnchor).is_none());
         assert!(enabled(&got, MenuAction::DeleteStroke));
+    }
+
+    #[test]
+    fn join_and_split_items_follow_the_selection() {
+        let t = target(Kind::Line);
+        assert!(find(&menu_entries_for(&t), MenuAction::SplitHere).is_some());
+        let mut t = target(Kind::Line);
+        t.count = 2;
+        t.can_join = true;
+        assert!(enabled(&menu_entries_for(&t), MenuAction::Join));
+        // a shape that can't be joined: the item is there but greyed out
+        t.can_join = false;
+        assert!(find(&menu_entries_for(&t), MenuAction::Join).is_some());
+        assert!(!enabled(&menu_entries_for(&t), MenuAction::Join));
+        // a custom shape isn't a line kind: no Split here
+        let custom = target(Kind::Custom);
+        assert!(find(&menu_entries_for(&custom), MenuAction::SplitHere).is_none());
+        // a joined curve with more than one piece: Split into separate shapes
+        let mut curve = target(Kind::Curve);
+        curve.can_split = true;
+        assert!(enabled(&menu_entries_for(&curve), MenuAction::SplitPieces));
     }
 
     #[test]

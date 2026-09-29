@@ -652,7 +652,7 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
             let q = funnel::box_point(&box_, p[0], p[1]);
             [app.view.x_of(q[0]) as f64, app.view.y_of(q[1]) as f64]
         };
-        let Some((seg, t, d)) = bezier::nearest(c, &to_screen, pos.x as f64, pos.y as f64, 64)
+        let Some((seg, t, d)) = bezier::nearest(c, &to_screen, pos.x as f64, pos.y as f64, 64, &[])
         else {
             continue;
         };

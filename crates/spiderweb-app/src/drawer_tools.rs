@@ -207,7 +207,10 @@ pub fn handles(strokes: &[Stroke], sel: Option<usize>) -> Vec<(usize, Spot, Pt)>
             }
             Stroke::Curve { pts, .. } => {
                 // 原版把 pen_handles 反过来放：端点的命中优先级最高
-                for (j, kind) in bezier::pen_handles(pts, Some(i) == sel).into_iter().rev() {
+                for (j, kind) in bezier::pen_handles(pts, Some(i) == sel, &[])
+                    .into_iter()
+                    .rev()
+                {
                     match kind {
                         HandleKind::End => out.push((i, Spot::Point(j), pts[j])),
                         HandleKind::Ctrl => out.push((i, Spot::Pen { j, ctrl: true }, pts[j])),

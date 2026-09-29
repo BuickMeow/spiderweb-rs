@@ -853,3 +853,110 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
     }
     finish(out.result(), k)
 }
+
+// ---------------------------------------------------------------------------
+// split_tumour
+// ---------------------------------------------------------------------------
+
+/// The path scaled by k (consecutive repeats dropped); None when there are fewer than two points
+/// (Python `_walk`).
+fn walk_of(path: &[Pt], k: f64) -> Option<Walk> {
+    let mut pts: Vec<Pt> = Vec::new();
+    for p in path {
+        let q = [p[0] / k, p[1]];
+        if pts.last() != Some(&q) {
+            pts.push(q);
+        }
+    }
+    if pts.len() > 1 {
+        Some(Walk::new(pts))
+    } else {
+        None
+    }
+}
+
+/// Where the bumps start along the Walk w (on-screen units): (range start, range end, starts, how much
+/// Fit stretched the distance) (tumour.bump_starts without graphs; [`Tumour`] has no graphs yet).
+fn bump_starts(w: &Walk, tm: &Tumour) -> (f64, f64, Vec<f64>, f64) {
+    let k = tm.k;
+    let lo = py_min(tm.start, tm.end) * w.total;
+    let hi = py_max(tm.start, tm.end) * w.total;
+    let dist = py_max(py_max(tm.dist / k, (hi - lo) / MAX_TUMOURS as f64), 1e-9);
+    // a closed loop (e.g. a full circle) with bumps all the way round: its end is its start again
+    let loop_ = w.closed && lo < 1e-9 && hi > w.total - 1e-9;
+    let mut stretch = 1.0;
+    let starts: Vec<f64>;
+    if tm.fit && hi - lo > 1e-9 {
+        // a whole number of steps fits the range, so the last one lands right on its end; round a
+        // loop with alternating sides, an even number, so the sides keep alternating where it meets up
+        let r = (hi - lo) / dist;
+        let mut n = py_max(1.0, round_half_even(r)) as i64;
+        if loop_ && tm.side == TumourSide::Alt {
+            n = py_max(2.0, 2.0 * round_half_even(r / 2.0)) as i64;
+        }
+        stretch = (hi - lo) / n as f64 / dist;
+        starts = (0..=n)
+            .map(|i| lo + (hi - lo) * i as f64 / n as f64)
+            .collect();
+    } else {
+        let mut v: Vec<f64> = Vec::new();
+        let mut s = lo;
+        while s <= hi + 1e-9 && v.len() < MAX_TUMOURS {
+            v.push(py_min(s, hi));
+            s += dist;
+        }
+        starts = v;
+    }
+    (lo, hi, starts, stretch)
+}
+
+/// Tumour settings for the two halves of a line cut in two (left / right: their (beat, pitch) points,
+/// both with the cut point), so the bumps stay where they were: each half gets its own part of the
+/// range and graphs, Fit is turned off (keeping the distance it had worked out) and the right half
+/// starts at the first bump after the cut (a bump across the cut is cut off there). Random sides are
+/// picked again; Lead in works at each half's ends (tumour.split_tumour; [`Tumour`] has no graphs yet).
+pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, Option<Tumour>) {
+    let mut combined: Vec<Pt> = left.to_vec();
+    combined.extend_from_slice(&right[1..]);
+    let copy = tm.clone();
+    let (Some(w), Some(wl)) = (walk_of(&combined, tm.k), walk_of(left, tm.k)) else {
+        return (Some(copy.clone()), Some(tm.clone()));
+    };
+    if w.total - wl.total < 1e-9 * w.total {
+        return (Some(copy), Some(tm.clone()));
+    }
+    let (lo, hi, starts, stretch) = bump_starts(&w, tm);
+    let cut = wl.total;
+    let mut base = copy;
+    base.fit = false;
+    base.dist = tm.dist * stretch;
+    base.start = 0.0;
+    base.end = 1.0;
+
+    let half = |a: f64, b: f64, r0: f64, r1: f64| -> Tumour {
+        let mut out = base.clone();
+        let length = b - a;
+        out.start = py_min(1.0, py_max(0.0, (r0 - a) / length));
+        out.end = py_min(1.0, py_max(0.0, (r1 - a) / length));
+        if r1 - r0 < 1e-9 {
+            // (no bumps left on this half)
+            out.on = false;
+        }
+        out
+    };
+    let first = half(0.0, cut, lo, py_min(hi, cut));
+    let nxt = starts
+        .iter()
+        .enumerate()
+        .find(|&(_, &s)| s >= cut - 1e-9)
+        .map(|(i, &s)| (i, s));
+    let mut second = half(cut, w.total, hi, hi);
+    if let Some((i, _)) = nxt
+        && tm.side == TumourSide::Alt
+        && i % 2 == 1
+    {
+        // (alternating: it has to start on the other side)
+        second.mirror = !second.mirror;
+    }
+    (Some(first), Some(second))
+}

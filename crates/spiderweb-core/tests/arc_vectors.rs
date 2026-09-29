@@ -56,6 +56,19 @@ fn arc_vectors() {
                     assert!(close(span, f(&out[3])), "{ctx}: 扫角");
                 }
             }
+            "arc_circle" => {
+                let g = A::arc_circle(&pts(&args[0]), f(&args[1]));
+                if out.is_null() {
+                    assert!(g.is_none(), "{ctx}: 应为 None");
+                } else {
+                    let (c, r, t0, span) = g.expect("应有圆弧");
+                    let wc = one(&out[0]);
+                    assert!(close(c[0], wc[0]) && close(c[1], wc[1]), "{ctx}: 圆心");
+                    assert!(close(r, f(&out[1])), "{ctx}: 半径");
+                    assert!(close(t0, f(&out[2])), "{ctx}: 起始角");
+                    assert!(close(span, f(&out[3])), "{ctx}: 扫角");
+                }
+            }
             "arc_points" => {
                 let g = A::arc_points(&pts(&args[0]), f(&args[1]), f(&args[2]));
                 assert_pts_eq(&g, out, &ctx);

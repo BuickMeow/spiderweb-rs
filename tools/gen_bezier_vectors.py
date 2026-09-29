@@ -14,7 +14,8 @@ import sys
 from vec_common import write
 
 # 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
-_SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS", "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
+_SCRIPTS = (os.environ.get("SPIDERWEB_SCRIPTS") or os.environ.get("SPIDERWEB_SRC")
+            or "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
@@ -96,12 +97,16 @@ def add(cases, fn, args, call):
     cases.append({"fn": fn, "args": a, "out": call(*a)})
 
 
-def mkcurve(pts, sharp=None, sym=None):
+def mkcurve(pts, sharp=None, sym=None, gaps=None, splits=None):
     c = {"pts": [list(p) for p in pts]}
     if sharp:
         c["sharp"] = list(sharp)
     if sym:
         c["sym"] = sym
+    if gaps:
+        c["gaps"] = list(gaps)
+    if splits:
+        c["splits"] = list(splits)
     return c
 
 
@@ -110,6 +115,8 @@ def curve_out(c):
         "pts": [[p[0], p[1]] for p in c["pts"]],
         "sharp": list(c.get("sharp", [])),
         "sym": c.get("sym"),
+        "gaps": list(c.get("gaps", [])),
+        "splits": list(c.get("splits", [])),
     }
 
 
@@ -135,9 +142,11 @@ def half_at_call(pts, sc, x, y):
     return B.half_at(pts, to_screen, x, y)
 
 
-def nearest_call(pts, sc, x, y, n):
+def nearest_call(pts, sc, x, y, n, gaps=None):
     to_screen, _ = screen(*sc)
-    return B.nearest(pts, to_screen, x, y, n)
+    if gaps is None:
+        return B.nearest(pts, to_screen, x, y, n)
+    return B.nearest(pts, to_screen, x, y, n, gaps)
 
 
 def set_sharp_call(c, sharp):
@@ -178,6 +187,12 @@ def set_symmetry_call(c, mode, source, sc, exact):
     c = copy.deepcopy(c)
     to_screen, _ = screen(*sc)
     B.set_symmetry(c, mode, source, to_screen, exact)
+    return curve_out(c)
+
+
+def shift_marks_call(c, after, d):
+    c = copy.deepcopy(c)
+    B.shift_marks(c, after, d)
     return curve_out(c)
 
 
@@ -418,6 +433,63 @@ def gen():
             pts.append([round(t + 0.25, 4), round(y, 4)])
         tol = (1e-4, 3e-3, 5e-2)[k % 3]
         add(cases, "fit", [pts, tol], B.fit)
+
+    # ---- 1.2.0: piece_ends / fixed_anchors / shift_marks, and the gap-aware editing
+    add(cases, "piece_ends", [mkcurve(C1)], lambda c: sorted(B.piece_ends(c)))
+    add(cases, "piece_ends", [mkcurve(C1, gaps=[1])], lambda c: sorted(B.piece_ends(c)))
+    add(cases, "piece_ends", [mkcurve(C2, gaps=[0, 2])], lambda c: sorted(B.piece_ends(c)))
+    add(cases, "fixed_anchors", [mkcurve(C1)], lambda c: sorted(B.fixed_anchors(c)))
+    add(cases, "fixed_anchors", [mkcurve(C1, gaps=[1])], lambda c: sorted(B.fixed_anchors(c)))
+    add(cases, "fixed_anchors", [mkcurve(C2, splits=[1, 2])], lambda c: sorted(B.fixed_anchors(c)))
+    add(cases, "fixed_anchors", [mkcurve(C2, gaps=[1], splits=[2])],
+        lambda c: sorted(B.fixed_anchors(c)))
+    for c, after, d in (
+        (mkcurve(C1), 0, 1), (mkcurve(C1), 1, -1),
+        (mkcurve(C1, gaps=[1], splits=[1]), 0, 1),
+        (mkcurve(C2, gaps=[0, 2], splits=[1]), 2, -1),
+        (mkcurve(C2, gaps=[1], splits=[2]), 1, 1),
+    ):
+        add(cases, "shift_marks", [c, after, d], shift_marks_call)
+
+    # pen_handles / handle_lines / nearest with gaps
+    for pts, sel, gaps in ((C1, True, [1]), (C1, False, [1]), (C1, True, [0]),
+                           (C2, True, [1]), (C1H, True, [1])):
+        add(cases, "pen_handles", [pts, sel, list(gaps)], B.pen_handles)
+    for pts, gaps in ((C1, [1]), (C1, [0]), (C1C, [1]), (S3, [0, 1])):
+        add(cases, "handle_lines", [pts, list(gaps)], B.handle_lines)
+    for pts, sc, x, y, n, gaps in (
+        (C1, [1.0, 1.0], 1.0, 61.0, 64, [0]),
+        (C1, [1.0, 1.0], 5.0, 59.0, 64, [1]),
+        (C1, [1.0, 1.0], 3.0, 60.0, 8, [0, 1]),
+        (C2, [2.0, 0.5], 6.0, 30.0, 16, [2]),
+    ):
+        add(cases, "nearest", [pts, sc, x, y, n, list(gaps)], nearest_call)
+
+    # can_delete / delete_point / add_anchor on joined curves (gaps / splits)
+    for pts, sharp, sym, gaps, splits, i in (
+        (C1, [], None, [1], [], 0), (C1, [], None, [1], [], 1), (C1, [], None, [1], [], 3),
+        (C2, [], None, [1], [], 3), (C2, [], None, [1], [], 4), (C2, [], None, [1], [], 6),
+        (C2, [], None, [], [1], 3), (C2, [], None, [], [1], 6), (C2, [], None, [], [1], 4),
+        (FIVE, [], None, [2], [3], 6), (FIVE, [], None, [2], [3], 9),
+    ):
+        c = mkcurve(pts, sharp, sym, gaps=gaps, splits=splits)
+        add(cases, "can_delete", [c, i], B.can_delete)
+    for pts, sharp, sym, gaps, splits, i in (
+        (C2, [], None, [1], [], 3), (C2, [], None, [1], [], 4), (C2, [], None, [1], [], 6),
+        (C2, [], None, [], [1], 3), (C2, [], None, [], [1], 4),
+        (FIVE, [], None, [2], [3], 9), (FIVE, [], None, [2], [], 3),
+    ):
+        c = mkcurve(pts, sharp, sym, gaps=gaps, splits=splits)
+        add(cases, "delete_point", [c, i, [1.0, 1.0], False], delete_point_call)
+    for pts, sharp, sym, gaps, splits, seg, t, new in (
+        (C1, [], None, [1], [], 1, 0.5, [4.0, 62.0]),   # a gap: not added
+        (C1, [], None, [1], [], 0, 0.5, [1.5, 60.5]),   # before the gap: marks shift
+        (C2, [], None, [1], [], 2, 0.5, [7.0, 60.0]),   # after the gap: marks shift
+        (C2, [], None, [], [1], 0, 0.5, [1.5, 60.0]),   # splits shift
+        (C2, [], None, [], [1], 2, 0.5, [7.0, 60.0]),
+    ):
+        c = mkcurve(pts, sharp, sym, gaps=gaps, splits=splits)
+        add(cases, "add_anchor", [c, seg, t, new, [1.0, 1.0], False], add_anchor_call)
 
     return {"module": "bezier", "cases": cases}
 

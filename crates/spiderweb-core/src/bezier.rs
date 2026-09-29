@@ -5,23 +5,29 @@
 //! 每第三个点（0, 3, 6, ...）是曲线经过的锚点，两个锚点之间是两个手柄：
 //! 前一个锚点的出手柄与后一个锚点的入手柄。
 
+use std::collections::BTreeSet;
+
 use crate::shape::Sym;
 use crate::{Pt, dist, hypot2};
 
-/// 一条曲线：`pts` 为扁平点列，`sharp` 为尖角锚点序号，`sym` 为对称方式。
-#[derive(Clone, Debug, PartialEq)]
+/// A curve: `pts` is the flat point list, `sharp` the corner anchor numbers, `sym` the symmetry mode.
+/// A joined curve (joined.rs) can also carry `gaps` (segment numbers that aren't drawn: the curve is in
+/// pieces) and `splits` (anchor numbers where a piece's next tumour section starts); their anchors stay,
+/// like the ends.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Curve {
     pub pts: Vec<Pt>,
     pub sharp: Vec<usize>,
     pub sym: Option<Sym>,
+    pub gaps: Vec<usize>,
+    pub splits: Vec<usize>,
 }
 
 impl Curve {
     pub fn new(pts: Vec<Pt>) -> Self {
         Self {
             pts,
-            sharp: Vec::new(),
-            sym: None,
+            ..Self::default()
         }
     }
 
@@ -305,6 +311,46 @@ pub fn make_symmetric(
 
 // ---------------------------------------------------------------- 钢笔编辑
 
+/// Anchor numbers that end a piece: the curve's two ends and the anchors on either side of each gap
+/// (Python `piece_ends`).
+pub fn piece_ends(c: &Curve) -> BTreeSet<usize> {
+    let last = anchor_count(&c.pts).saturating_sub(1);
+    let mut out: BTreeSet<usize> = [0, last].into_iter().collect();
+    for &g in &c.gaps {
+        out.insert(g);
+        out.insert(g + 1);
+    }
+    out
+}
+
+/// Anchors that can't be removed: piece ends and tumour section starts (Python `fixed_anchors`).
+pub fn fixed_anchors(c: &Curve) -> BTreeSet<usize> {
+    let mut out = piece_ends(c);
+    out.extend(c.splits.iter().copied());
+    out
+}
+
+/// Anchor (and gap segment) numbers after `after` moved by `d` (an anchor added / removed there)
+/// (Python `shift_marks`).
+pub fn shift_marks(c: &mut Curve, after: usize, d: i64) {
+    for marks in [&mut c.gaps, &mut c.splits] {
+        if marks.is_empty() {
+            continue;
+        }
+        *marks = marks
+            .iter()
+            .filter_map(|&a| {
+                if a > after {
+                    let n = a as i64 + d;
+                    (n >= 0).then_some(n as usize)
+                } else {
+                    Some(a)
+                }
+            })
+            .collect();
+    }
+}
+
 impl Curve {
     /// 设置尖角锚点（空则清除）。
     pub fn set_sharp(&mut self, sharp: &[usize]) {
@@ -426,8 +472,9 @@ pub fn drag_point(
     keep_symmetric(c, i, to_screen, exact);
 }
 
-/// 在第 seg 段的 t 处加一个锚点并移到 new（曲线经过那里）；对称曲线另一半也加一个。
-/// 那里已经是锚点（t = 0 / 1）时不加，返回 false。
+/// Add an anchor at t (0..1) on segment seg and move it to new (the curve goes through there); a
+/// symmetric curve gets one on the other half too. False (nothing added) if that's an anchor already
+/// or the segment is a gap.
 pub fn add_anchor(
     c: &mut Curve,
     seg: usize,
@@ -445,6 +492,9 @@ pub fn add_anchor(
         splits.push((segments(&c.pts).len() - 1 - seg, 1.0 - t));
     }
     let mut at = 3 * (seg + 1);
+    if c.gaps.contains(&seg) {
+        return false; // a gap between pieces isn't part of the curve
+    }
     let mut pts = c.pts.clone();
     let mut sharp = c.sharp.clone();
     // 后切的先做，先切的位置才不会被挪动
@@ -455,6 +505,7 @@ pub fn add_anchor(
             .iter()
             .map(|&a| if a > s { a + 1 } else { a })
             .collect();
+        shift_marks(c, s, 1);
         if s < seg {
             at += 3;
         }
@@ -501,6 +552,12 @@ pub fn can_delete(c: &Curve, i: usize) -> Option<CanDelete> {
     if a == 0 || a + 1 >= n {
         return None;
     }
+    if piece_ends(c).contains(&(a / 3)) {
+        return None;
+    }
+    if i.is_multiple_of(3) && fixed_anchors(c).contains(&(a / 3)) {
+        return None;
+    }
     if !i.is_multiple_of(3) {
         return Some(CanDelete::Handle);
     }
@@ -534,6 +591,7 @@ pub fn delete_point(c: &mut Curve, i: usize, to_screen: &dyn Fn(Pt) -> [f64; 2],
                     .filter(|&&b| b != k)
                     .map(|&b| if b > k { b - 1 } else { b })
                     .collect();
+                shift_marks(c, k, -1);
             }
             c.pts = pts;
             c.set_sharp(&sharp);
@@ -577,7 +635,7 @@ pub fn set_symmetry(
 /// 屏幕上的 (x, y) 离哪一半最近（0 = 前半，1 = 后半）。
 pub fn half_at(pts: &[Pt], to_screen: &dyn Fn(Pt) -> [f64; 2], x: f64, y: f64) -> usize {
     let segs = segments(pts).len();
-    match nearest(pts, to_screen, x, y, 64) {
+    match nearest(pts, to_screen, x, y, 64, &[]) {
         Some((seg, t, _)) if (seg as f64 + t) * 2.0 > segs as f64 => 1,
         _ => 0,
     }
@@ -594,14 +652,21 @@ pub enum HandleKind {
     End,
 }
 
-/// `[(点号, 种类)]`：按绘制顺序（锚点在最上）。未选中时只显示两个端点。
-pub fn pen_handles(pts: &[Pt], selected: bool) -> Vec<(usize, HandleKind)> {
+/// `[(point number, kind)]` in drawing order (anchors on top). Not selected: the piece ends only.
+/// `gaps`: segments between the pieces of a joined curve (their handles aren't shown, the anchors beside
+/// them are ends).
+pub fn pen_handles(pts: &[Pt], selected: bool, gaps: &[usize]) -> Vec<(usize, HandleKind)> {
     let n = pts.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut ends: BTreeSet<usize> = [0, n - 1].into_iter().collect();
+    for &g in gaps {
+        ends.insert(3 * g);
+        ends.insert(3 * g + 3);
+    }
     if !selected {
-        if n == 0 {
-            return Vec::new();
-        }
-        return vec![(0, HandleKind::End), (n - 1, HandleKind::End)];
+        return ends.into_iter().map(|i| (i, HandleKind::End)).collect();
     }
     let mut out: Vec<(usize, HandleKind)> = Vec::new();
     for (i, p) in pts.iter().enumerate() {
@@ -609,49 +674,57 @@ pub fn pen_handles(pts: &[Pt], selected: bool) -> Vec<(usize, HandleKind)> {
             continue;
         }
         let a = handle_anchor(i);
-        let first_or_last = i == 1 || i == n - 2;
-        let differs = a >= n || *p != pts[a];
-        if first_or_last || differs {
+        if gaps.contains(&((i - 1) / 3)) {
+            continue;
+        }
+        if ends.contains(&a) || *p != pts[a] {
             out.push((i, HandleKind::Ctrl));
         }
     }
     let mut i = 3;
     while i + 1 < n {
-        out.push((i, HandleKind::Anchor));
+        if !ends.contains(&i) {
+            out.push((i, HandleKind::Anchor));
+        }
         i += 3;
     }
-    if n > 0 {
-        out.push((0, HandleKind::End));
-        out.push((n - 1, HandleKind::End));
-    }
+    out.extend(ends.into_iter().map(|i| (i, HandleKind::End)));
     out
 }
 
-/// 要画的手柄线 `[(锚点, 手柄点)]`。
-pub fn handle_lines(pts: &[Pt]) -> Vec<(Pt, Pt)> {
+/// The handle lines to draw `[(anchor, handle point)]`; handle lines in a gap aren't shown.
+pub fn handle_lines(pts: &[Pt], gaps: &[usize]) -> Vec<(Pt, Pt)> {
     let mut out = Vec::new();
     for (i, p) in pts.iter().enumerate() {
         if i % 3 == 0 {
             continue;
         }
         let a = handle_anchor(i);
-        if a < pts.len() && *p != pts[a] {
+        if a >= pts.len() || gaps.contains(&((i - 1) / 3)) {
+            continue;
+        }
+        if *p != pts[a] {
             out.push((pts[a], *p));
         }
     }
     out
 }
 
-/// 屏幕上离 (x, y) 最近的曲线点 `(段号, t, 距离)`；没有段时返回 None。
+/// `(segment, t, distance)` of the curve point nearest to (x, y) on screen; segments in `gaps` are left
+/// out. None when there are no segments.
 pub fn nearest(
     pts: &[Pt],
     to_screen: &dyn Fn(Pt) -> [f64; 2],
     x: f64,
     y: f64,
     n: usize,
+    gaps: &[usize],
 ) -> Option<(usize, f64, f64)> {
     let mut best: Option<(usize, f64, f64)> = None;
     for (s, seg) in segments(pts).iter().enumerate() {
+        if gaps.contains(&s) {
+            continue;
+        }
         for i in 0..=n {
             let p = seg_point(seg[0], seg[1], seg[2], seg[3], i as f64 / n as f64);
             let sp = to_screen(p);
