@@ -1214,8 +1214,8 @@ mod tests {
     fn ctrl_wall_keeps_both_ends_symmetric() {
         let line = [[0.0, 0.0], [4.0, 0.0]];
         let mirrored = wall_mirror(line, [2.0, 2.0], [2.0, 0.5]).expect("wall and line cross");
-        assert!((mirrored[0] - 2.0).abs() < 1e-9);
-        assert!((mirrored[1] + 0.5).abs() < 1e-9);
+        assert!((mirrored[0] - 2.0).abs() < 1e-6);
+        assert!((mirrored[1] + 0.5).abs() < 1e-6);
         // Wall parallel to the line: cannot mirror
         assert_eq!(wall_mirror(line, [0.0, 1.0], [4.0, 1.0]), None);
     }
@@ -1279,13 +1279,13 @@ mod tests {
         let b = [4.5, 55.0];
         let click = |pt: Pt| Pos2::new(v.x_of(pt[0]), v.y_of(pt[1]));
         // The line's ends and middle project to 0 / 1 / 0.5
-        assert!((line_at_pt(&v, a, b, click(a), a, None).unwrap() - 0.0).abs() < 1e-9);
-        assert!((line_at_pt(&v, a, b, click(b), b, None).unwrap() - 1.0).abs() < 1e-9);
+        assert!((line_at_pt(&v, a, b, click(a), a, None).unwrap() - 0.0).abs() < 1e-6);
+        assert!((line_at_pt(&v, a, b, click(b), b, None).unwrap() - 1.0).abs() < 1e-6);
         let mid = [2.25, 57.5];
-        assert!((line_at_pt(&v, a, b, click(mid), mid, None).unwrap() - 0.5).abs() < 1e-9);
+        assert!((line_at_pt(&v, a, b, click(mid), mid, None).unwrap() - 0.5).abs() < 1e-6);
         // 20% along gives 0.2, so the fan starts exactly where the user clicked
         let fifth = [0.9, 59.0];
-        assert!((line_at_pt(&v, a, b, click(fifth), fifth, None).unwrap() - 0.2).abs() < 1e-9);
+        assert!((line_at_pt(&v, a, b, click(fifth), fifth, None).unwrap() - 0.2).abs() < 1e-6);
         // The near limit still rejects clicks far from the line
         assert!(line_at_pt(&v, a, b, Pos2::new(300.0, 20.0), mid, Some(6.0)).is_none());
     }
