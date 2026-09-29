@@ -280,6 +280,18 @@ impl App {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
         let perf = std::env::var("SPIDERWEB_PERF").is_ok();
+        if perf {
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                let info = rs.adapter.get_info();
+                eprintln!(
+                    "[perf] gpu: {} ({:?}, {:?})",
+                    info.name, info.backend, info.device_type
+                );
+                if matches!(info.device_type, eframe::egui_wgpu::wgpu::DeviceType::Cpu) {
+                    eprintln!("[perf] warning: software adapter, no GPU acceleration");
+                }
+            }
+        }
         let autosave_path = base.join("autosave.json");
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
         crate::errors::install(base.clone());

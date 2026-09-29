@@ -96,7 +96,15 @@ SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app
 ```
 
 - HUD (top right): frame-time EMA, shape count, note count
-- stderr: `[perf] load+render … ms`, `[perf] shapes_changed … ms`,
+- stderr: `[perf] gpu: <adapter>`, `[perf] load+render … ms`,
+  `[perf] shapes_changed … ms`, periodic frame-time p50/p95/max
+
+Extra switches for GPU/driver experiments:
+
+- `SPIDERWEB_PRESENT=mailbox|fifo|immediate|autovsync|autonovsync` — present mode
+  (Mailbox exists on Windows, not on macOS; default is AutoVsync)
+- `SPIDERWEB_LATENCY=1|2|3` — queued frames (`desired_maximum_frame_latency`)
+- `SPIDERWEB_VIEW="t,top,sx,sy"` — start at a fixed view for repeatable runs,
   `[perf] note_gpu: … instance chunks` (device buffer limit, uploaded slice's
   tick / key range and instance count per rebuild)
 

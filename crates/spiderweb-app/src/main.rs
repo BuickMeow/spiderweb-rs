@@ -32,6 +32,24 @@ mod test_support;
 mod text_dialog;
 mod tumour_window;
 
+/// `SPIDERWEB_PRESENT=mailbox|fifo|immediate|autovsync|autonovsync` overrides
+/// the surface present mode (Mailbox exists on Windows, not on macOS).
+fn present_mode_from_env() -> Option<eframe::egui_wgpu::wgpu::PresentMode> {
+    use eframe::egui_wgpu::wgpu::PresentMode;
+    match std::env::var("SPIDERWEB_PRESENT")
+        .ok()?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mailbox" => Some(PresentMode::Mailbox),
+        "fifo" | "vsync" => Some(PresentMode::Fifo),
+        "immediate" => Some(PresentMode::Immediate),
+        "autovsync" => Some(PresentMode::AutoVsync),
+        "autonovsync" => Some(PresentMode::AutoNoVsync),
+        _ => None,
+    }
+}
+
 fn main() {
     // Only English strings exist for now (the original is English); when more languages are added, switch to the system language here
     rust_i18n::set_locale("en");
@@ -69,9 +87,26 @@ fn main() {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
-            ..Default::default()
+        wgpu_options: {
+            let mut cfg = eframe::egui_wgpu::WgpuConfiguration {
+                wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
+                ..Default::default()
+            };
+            if let Some(mode) = present_mode_from_env() {
+                cfg.surface.present_mode = mode;
+            }
+            if let Ok(latency) = std::env::var("SPIDERWEB_LATENCY") {
+                if let Ok(n) = latency.parse::<u32>() {
+                    cfg.surface.desired_maximum_frame_latency = Some(n.clamp(1, 3));
+                }
+            }
+            if std::env::var("SPIDERWEB_PERF").is_ok() {
+                eprintln!(
+                    "[perf] requested present mode {:?}, frame latency {:?}",
+                    cfg.surface.present_mode, cfg.surface.desired_maximum_frame_latency
+                );
+            }
+            cfg
         },
         ..Default::default()
     };
