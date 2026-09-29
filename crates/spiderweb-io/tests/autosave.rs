@@ -1,4 +1,4 @@
-//! autosave 与 autosave-backup 的轮换语义（files/project.py load_autosave / restore_window）。
+//! Rotation semantics of autosave and autosave-backup (files/project.py load_autosave / restore_window).
 
 use serde_json::Value;
 use spiderweb_io::project::{
@@ -59,11 +59,11 @@ fn good_autosave_becomes_the_backup() {
         AutosaveOutcome::Opened(loaded) => assert_eq!(*loaded, p),
         other => panic!("应当打开: {other:?}"),
     }
-    // 这次启动的 autosave 复制成了备份
+    // this launch's autosave was copied to the backup
     let backup = backup_path(&path);
     assert!(backup.exists(), "备份应当存在");
     assert_eq!(Project::load(&backup).expect("读备份"), p);
-    // autosave 本身没动
+    // autosave itself was left alone
     assert_eq!(Project::load(&path).expect("读 autosave"), p);
 }
 
@@ -94,7 +94,7 @@ fn damaged_autosave_is_kept_aside_and_the_backup_opens() {
         other => panic!("应当是损坏流程: {other:?}"),
     }
 
-    // 再坏一次、同样的时间戳：不能覆盖刚才那份
+    // Corrupt it again with the same timestamp: the previous file must not be overwritten
     std::fs::write(&path, "又坏了").expect("写坏 autosave");
     match load_autosave(&path, "autosave-broken-20240928-120000") {
         AutosaveOutcome::Damaged { renamed_to, .. } => {
@@ -141,7 +141,7 @@ fn window_state_round_trip() {
     assert!(!win.live);
     assert_eq!(win.rest.get("welcome_tip"), Some(&Value::Bool(true)));
 
-    // 文件读不开时去读备份
+    // when the file cannot be read, fall back to the backup
     std::fs::write(&path, "坏").expect("写坏");
     let backup = backup_path(&path);
     let backup_project = Project::default();

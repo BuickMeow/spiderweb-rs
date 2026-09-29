@@ -1,18 +1,20 @@
-//! 数字框里的数学表达式（Python `files/mathexpr.py` 的移植）。
+//! Math expressions in numeric fields (port of Python `files/mathexpr.py`).
 //!
-//! - [`calc`]：`960*4`、`(60+4)*16` 这类简单算式；只有数字与 `+ - * / // % ** ( )`，
-//!   `x` 和 `×` 当乘号、`^` 当 `**`（注意原版先把 `^` 换成 `**`，所以手写 `**` 会被换成
-//!   `****` 而报错——这里照做）；支持 Python 的整数 / 浮点 / 复数语义。
-//! - [`formula`]：`x^2`、`sin(x*pi/2)` 这类公式 -> x 的函数；名字有 `x`、`pi`、`e`
-//!   和 [`FORMULA_FUNCS`]，报错消息与原版一致。
-//! - [`calc_int`]、[`fmt`] 同原版。
+//! - [`calc`]: simple expressions such as `960*4`, `(60+4)*16`; only numbers and
+//!   `+ - * / // % ** ( )`, with `x` and `×` as multiplication and `^` as `**` (note the
+//!   original first turns `^` into `**`, so a hand-written `**` becomes `****` and errors —
+//!   same here); supports Python's int / float / complex semantics.
+//! - [`formula`]: formulas such as `x^2`, `sin(x*pi/2)` -> a function of x; names are `x`,
+//!   `pi`, `e` and [`FORMULA_FUNCS`], with error messages matching the original.
+//! - [`calc_int`], [`fmt`] as in the original.
 //!
-//! 与原版的差异：整数的任意精度只用 i128（超出后退化成浮点）；负底数的分数次幂返回复数，
-//! 复数幂的末位与 CPython 可能有微小差别。
+//! Differences from the original: arbitrary-precision integers only use i128 (falling back to
+//! floats beyond that); a fractional power of a negative base returns a complex number, and
+//! the last bits of complex powers may differ slightly from CPython.
 
 use std::f64::consts::{E, PI};
 
-/// 表达式的值（Python 的 int / float / complex）。
+/// An expression's value (Python's int / float / complex).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CalcValue {
     Int(i128),
@@ -21,7 +23,7 @@ pub enum CalcValue {
 }
 
 impl CalcValue {
-    /// 实数部分；复数返回 None。
+    /// The real part; complex numbers return None.
     pub fn as_f64(self) -> Option<f64> {
         match self {
             CalcValue::Int(i) => Some(i as f64),
@@ -35,7 +37,7 @@ impl CalcValue {
     }
 }
 
-/// 求值错误；消息与原版的 ValueError / OverflowError 对应。
+/// Evaluation error; the messages correspond to the original's ValueError / OverflowError.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MathError {
     #[error("division by zero")]
@@ -48,16 +50,16 @@ pub enum MathError {
     Message(String),
 }
 
-/// 公式里的常量（FORMULA_NAMES）。
+/// Constants available in formulas (FORMULA_NAMES).
 pub const FORMULA_NAMES: [(&str, f64); 2] = [("pi", PI), ("e", E)];
 
-/// 公式里能用的函数（FORMULA_FUNCS）。
+/// Functions available in formulas (FORMULA_FUNCS).
 pub const FORMULA_FUNCS: [&str; 22] = [
     "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "sqrt", "exp", "log",
     "ln", "log10", "log2", "abs", "min", "max", "floor", "ceil", "round", "pow",
 ];
 
-// ---------------------------------------------------------------- 值
+// ---------------------------------------------------------------- values
 
 #[derive(Clone, Copy, Debug)]
 enum Num {
@@ -159,7 +161,7 @@ fn div(a: Num, b: Num) -> Result<Num, MathError> {
     if br == 0.0 && bi == 0.0 {
         return Err(MathError::DivisionByZero);
     }
-    // Python 的复数除法：按绝对值大的分量缩放。
+    // Python's complex division: scale by the component with the larger absolute value.
     if br.abs() >= bi.abs() {
         let ratio = bi / br;
         let den = br + bi * ratio;
@@ -177,8 +179,9 @@ fn div(a: Num, b: Num) -> Result<Num, MathError> {
     }
 }
 
-/// CPython `float_divmod`（floatobject.c）：先 fmod 再修正符号，商向最近的整数吸附。
-/// 直接 `(x / y).floor()` 在 x/y 落在整数边界附近时会差 1，这里的写法与原版一致。
+/// CPython `float_divmod` (floatobject.c): fmod first, then fix the sign; the quotient snaps
+/// to the nearest integer. A plain `(x / y).floor()` is off by 1 when x/y lands near an
+/// integer boundary; this version matches the original.
 fn float_divmod(vx: f64, wx: f64) -> Result<(f64, f64), MathError> {
     if wx == 0.0 {
         return Err(MathError::DivisionByZero);
@@ -240,7 +243,7 @@ fn modulo(a: Num, b: Num) -> Result<Num, MathError> {
     Ok(Num::Float(float_divmod(x, y)?.1))
 }
 
-/// `(a+bi)^(c+di)`，用 exp(w·ln z) 的常用算法（末位与原版可能有差）。
+/// `(a+bi)^(c+di)` via the usual exp(w·ln z) algorithm (last bits may differ from the original).
 fn cpow(a: f64, b: f64, c: f64, d: f64) -> Result<(f64, f64), MathError> {
     if a == 0.0 && b == 0.0 {
         if c == 0.0 && d == 0.0 {
@@ -272,11 +275,11 @@ fn pow(a: Num, b: Num) -> Result<Num, MathError> {
                 {
                     return Ok(Num::Int(v));
                 }
-                // 超出 i128 的整数：原版保持精确整数，这里退化成浮点（见模块说明）
+                // Integers beyond i128: the original keeps exact integers, this falls back to floats (see the module docs)
                 return pow_float(x as f64, y as f64);
             }
             (Num::Int(x), Num::Int(y)) => {
-                // 负指数 -> 浮点；负底数的整数次幂也走浮点。
+                // Negative exponent -> float; an integer power of a negative base also goes through floats.
                 return pow_float(x as f64, y as f64);
             }
             _ => {
@@ -362,7 +365,7 @@ fn math_func(name: &str, args: &[Num]) -> Result<Num, MathError> {
                 "cosh" => x.cosh(),
                 _ => x.exp(),
             };
-            // 溢出（输入有限而结果无穷）原版抛 OverflowError("math range error")
+            // Overflow (finite input, infinite result): the original raises OverflowError("math range error")
             if v.is_infinite() && x.is_finite() {
                 return range();
             }
@@ -488,7 +491,7 @@ fn math_func(name: &str, args: &[Num]) -> Result<Num, MathError> {
     }
 }
 
-// ---------------------------------------------------------------- 词法 / 语法
+// ---------------------------------------------------------------- lexer / parser
 
 #[derive(Clone, Debug)]
 enum Tok {
@@ -836,7 +839,7 @@ impl Parser {
     }
 }
 
-/// Python `ast.parse(mode="eval")` 对首行缩进的 IndentationError；`calc` 不 strip 输入。
+/// Python `ast.parse(mode="eval")`'s IndentationError for a first-line indent; `calc` does not strip its input.
 fn has_indent(text: &str) -> bool {
     for line in text.split('\n') {
         if line.trim().is_empty() {
@@ -860,7 +863,7 @@ fn parse(text: &str) -> Result<Ast, ()> {
     Ok(ast)
 }
 
-// ---------------------------------------------------------------- 求值
+// ---------------------------------------------------------------- evaluation
 
 fn eval(ast: &Ast, x: Option<f64>) -> Result<Num, MathError> {
     match ast {
@@ -906,7 +909,7 @@ fn unreadable(text: &str) -> MathError {
     MathError::Message(format!("can't read \"{text}\""))
 }
 
-/// `calc` 的求值：没有常量 / 函数调用（原版 ev 只认数字、二元与一元运算）。
+/// `calc`'s evaluation: no constants / function calls (the original's ev only knows numbers, binary and unary operations).
 fn eval_calc(ast: &Ast) -> Result<Num, MathError> {
     let unsupported = || Err(MathError::Message("unsupported".into()));
     match ast {
@@ -935,7 +938,7 @@ fn eval_calc(ast: &Ast) -> Result<Num, MathError> {
     }
 }
 
-/// 求值简单算式（`mathexpr.calc`）。
+/// Evaluate a simple expression (`mathexpr.calc`).
 pub fn calc(text: &str) -> Result<CalcValue, MathError> {
     let text = text.replace(['x', '×'], "*").replace('^', "**");
     let ast = parse(&text).map_err(|_| unreadable(&text))?;
@@ -946,14 +949,14 @@ pub fn calc(text: &str) -> Result<CalcValue, MathError> {
     }
 }
 
-/// [`calc`] 只要实数（复数当错误）。
+/// [`calc`] but real-valued only (complex numbers are an error).
 pub fn calc_f64(text: &str) -> Result<f64, MathError> {
     calc(text)?
         .as_f64()
         .ok_or_else(|| MathError::Message(format!("can't read \"{text}\"")))
 }
 
-/// 求值必须是整数（`mathexpr.calc_int`）。
+/// Evaluate; the result must be an integer (`mathexpr.calc_int`).
 pub fn calc_int(text: &str, lo: Option<i64>, hi: Option<i64>) -> Result<i64, MathError> {
     let value = calc(text)?;
     let value = match value {
@@ -984,16 +987,16 @@ pub fn calc_int(text: &str, lo: Option<i64>, hi: Option<i64>) -> Result<i64, Mat
     i64::try_from(value).map_err(|_| MathError::OutOfRange)
 }
 
-// ---------------------------------------------------------------- 公式
+// ---------------------------------------------------------------- formulas
 
-/// 编译好的公式（`mathexpr.formula` 返回的函数）。
+/// A compiled formula (the function `mathexpr.formula` returns).
 #[derive(Clone, Debug)]
 pub struct Formula {
     ast: Ast,
 }
 
 impl Formula {
-    /// 代入 x 求值；复数结果报 "not a real number"。
+    /// Evaluate at x; a complex result reports "not a real number".
     pub fn eval(&self, x: f64) -> Result<f64, MathError> {
         let v = eval(&self.ast, Some(x))?;
         if is_complex(v) {
@@ -1003,7 +1006,7 @@ impl Formula {
     }
 }
 
-/// 原版 `check` 对不支持的写法给的通用消息。
+/// The generic message the original `check` gives for unsupported syntax.
 const UNSUPPORTED_MSG: &str = "only numbers, x, + - * / ^ and functions like sin( ) work";
 
 fn check(ast: &Ast) -> Result<(), MathError> {
@@ -1037,7 +1040,7 @@ fn check(ast: &Ast) -> Result<(), MathError> {
     }
 }
 
-/// 编译 x 的公式（`mathexpr.formula`）。
+/// Compile a formula in x (`mathexpr.formula`).
 pub fn formula(text: &str) -> Result<Formula, MathError> {
     let text = text.trim().replace('×', "*").replace('^', "**");
     if text.is_empty() {
@@ -1049,7 +1052,7 @@ pub fn formula(text: &str) -> Result<Formula, MathError> {
     Ok(Formula { ast })
 }
 
-/// 数字 -> 短文本（`mathexpr.fmt`）。
+/// Number -> short text (`mathexpr.fmt`).
 pub fn fmt(x: f64) -> String {
     if (x - spiderweb_core::round_half_even(x)).abs() < 1e-6 {
         return (spiderweb_core::round_half_even(x) as i64).to_string();

@@ -1,7 +1,8 @@
-"""engine.py 的对照向量。
+"""Differential vectors for engine.py.
 
-Python 原版（notes/engine.py）直接跑：形状 dict 先过一遍 clean_shape（和实际工程一样），
-输出写到 crates/spiderweb-core/tests/vectors/engine.json，Rust 测试逐用例对照。
+The Python original (notes/engine.py) is run directly: shape dicts go through clean_shape first
+(as in a real project) and the output goes to crates/spiderweb-core/tests/vectors/engine.json
+for the Rust tests to compare case by case.
 """
 
 import copy
@@ -14,11 +15,11 @@ from vec_common import write
 from notes import custom as C
 from notes import engine as E
 
-# ---------------------------------------------------------------- 小工具
+# ---------------------------------------------------------------- helpers
 
 
 def to_json(x):
-    """转成 JSON 能序列化的形式（递归处理 numpy 与元组）。"""
+    """Convert to something JSON can serialise (recursively handling numpy and tuples)."""
     if isinstance(x, dict):
         return {str(k): to_json(v) for k, v in x.items()}
     if isinstance(x, np.ndarray):
@@ -35,7 +36,7 @@ def to_json(x):
 
 
 def shape(kind, pts, **kw):
-    """一个原始形状 dict -> clean_shape 后的有效形状（和工程的形状一样）。"""
+    """One raw shape dict -> the valid shape after clean_shape (like shapes in a project)."""
     d = {
         "kind": kind,
         "pts": [[float(b), float(p)] for b, p in pts],
@@ -80,7 +81,7 @@ def notes_rows(rows):
     return C.pack_notes(np.asarray(rows, np.int64))
 
 
-# ---------------------------------------------------------------- 常用形状
+# ---------------------------------------------------------------- common shapes
 
 C1 = [[0.0, 0.0], [0.7, 0.06], [0.94, 0.3], [1.0, 1.0]]
 C2 = [[0.0, 0.0], [0.1, 0.05], [0.2, 0.1], [0.5, 0.5], [0.6, 0.7], [0.8, 0.9], [1.0, 1.0]]
@@ -109,7 +110,7 @@ def custom(strokes, pts=BOX, **kw):
 
 
 def funnel_opts(fill="spam", fill_strokes=True, extra=False, reverse=False, wall="in"):
-    """常用漏斗设置。"""
+    """Common funnel settings."""
     if reverse:
         pts = [[8.0, 60.0], [2.0, 64.0], [2.0, 66.0], [2.0, 62.0]]
     else:
@@ -120,7 +121,7 @@ def funnel_opts(fill="spam", fill_strokes=True, extra=False, reverse=False, wall
     return shape("funnel", pts, starts=starts, fill=fill, wall=wall)
 
 
-# ---------------------------------------------------------------- 用例生成
+# ---------------------------------------------------------------- case generation
 
 def gen():
     cases = []
@@ -180,14 +181,14 @@ def gen():
     add("shape_strokes", [custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0]]), TRIANGLE[0]])],
         E.shape_strokes(custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0]]), TRIANGLE[0]])))
 
-    # ------------------------------------------------------------ shape_notes：line / poly / free
+    # ------------------------------------------------------------ shape_notes: line / poly / free
     def add_notes(sh, ppq=960, keys=128):
         add("shape_notes", [sh, ppq, keys], E.shape_notes(sh, ppq, keys))
 
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]]))
-    add_notes(shape("line", [[4.0, 64.0], [0.0, 60.0]]))  # 反向
-    add_notes(shape("line", [[0.0, 60.0], [4.0, 60.0]]))  # 水平
-    add_notes(shape("line", [[0.0, 60.0], [0.0, 64.0]]))  # 竖直
+    add_notes(shape("line", [[4.0, 64.0], [0.0, 60.0]]))  # reversed
+    add_notes(shape("line", [[0.0, 60.0], [4.0, 60.0]]))  # horizontal
+    add_notes(shape("line", [[0.0, 60.0], [0.0, 64.0]]))  # vertical
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], end_dot=True))
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], end_dot=True, vel0=90.0, vel1=60.0))
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], vel_env=[[0.0, 30.0], [0.4, 110.0], [0.4, 40.0],
@@ -196,7 +197,7 @@ def gen():
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], vel0=100.0, vel1=100.0))
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], vel_env=[[0.0, 64.0], [0.5, 64.0], [1.0, 64.0]]))
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], vel0=1.0, vel1=127.0))
-    add_notes(shape("line", [[-0.5, 60.0], [2.0, 64.0]]))  # 起点夹到 0
+    add_notes(shape("line", [[-0.5, 60.0], [2.0, 64.0]]))  # start clamped to 0
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]]), 480)
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], tumour=tumour(size=2.0)))
     add_notes(shape("line", [[0.0, 60.0], [4.0, 64.0]], tumour=tumour(size=2.0, shape="square", dist=0.25)))
@@ -214,7 +215,7 @@ def gen():
     add_notes(shape("free", [[0.0, 60.0], [1.0, 65.0], [2.0, 55.0], [3.0, 64.0], [4.0, 56.0],
                              [5.0, 63.0], [6.0, 57.0], [7.0, 62.0], [8.0, 60.0]], smooth=70, k=1.0))
 
-    # ------------------------------------------------------------ shape_notes：curve / arc
+    # ------------------------------------------------------------ shape_notes: curve / arc
     add_notes(shape("curve", [[0.0, 60.0], [1.0, 63.0], [3.0, 57.0], [4.0, 60.0]]))
     add_notes(shape("curve", [[4.0, 60.0], [3.0, 57.0], [1.0, 63.0], [0.0, 60.0]]))
     add_notes(shape("curve", [[0.0, 60.0], [1.0, 64.0], [2.0, 64.0], [3.0, 60.0], [4.0, 56.0], [5.0, 56.0],
@@ -226,10 +227,10 @@ def gen():
     add_notes(shape("arc", [[0.0, 60.0], [2.0, 64.0], [4.0, 60.0]], k=1.0))
     add_notes(shape("arc", [[0.0, 60.0], [2.0, 64.0], [4.0, 60.0]], k=2.0))
     add_notes(shape("arc", [[4.0, 60.0], [2.0, 64.0], [0.0, 60.0]], k=1.0))
-    add_notes(shape("arc", [[0.0, 60.0], [2.0, 60.0], [4.0, 60.0]], k=1.0))  # 共线
+    add_notes(shape("arc", [[0.0, 60.0], [2.0, 60.0], [4.0, 60.0]], k=1.0))  # collinear
     add_notes(shape("arc", [[0.0, 60.0], [2.0, 64.0], [4.0, 60.0]], k=1.0, end_dot=True))
 
-    # ------------------------------------------------------------ shape_notes：custom
+    # ------------------------------------------------------------ shape_notes: custom
     add_notes(custom(SQUARE, fill="empty"))
     add_notes(custom(SQUARE, fill="fill"))
     add_notes(custom(SQUARE, fill="spam"))
@@ -241,8 +242,9 @@ def gen():
     add_notes(custom(ELLIPSE, fill="fill"))
     add_notes(custom(ELLIPSE, fill="spam"))
     add_notes(custom(CURVE_ST, fill="empty"))
-    # （开放笔画 + spam：1.2.0 由 fill_plan 用直线补缺口，属 custom.py 的 Fills/Ends 移植，另有 agent；
-    # 这条用例先不生成，免得把它的行为算进 256 键的向量里）
+    # (open stroke + spam: 1.2.0 fills the gap with a straight line via fill_plan, part of the
+    # custom.py Fills/Ends port handled by another agent; this case is skipped for now so its
+    # behaviour is not folded into the 256-key vectors)
     add_notes(custom([stroke("poly", [[0.0, 0.0], [1.0, 1.0], [0.5, 0.5]])], fill="fill"))
     add_notes(custom(ARC_ST, fill="fill"))
     add_notes(custom(FREE_ST, fill="empty"))
@@ -257,7 +259,7 @@ def gen():
     add_notes(custom(SQUARE, pts=BOX, fill="spam", gate=0.03125))
     add_notes(custom(SQUARE, pts=BOX, fill="spam", align="aligned"), 480)
 
-    # ------------------------------------------------------------ shape_notes：funnel
+    # ------------------------------------------------------------ shape_notes: funnel
     add_notes(funnel_opts(fill="spam"))
     add_notes(funnel_opts(fill="long"))
     add_notes(funnel_opts(fill="spam", fill_strokes=False))
@@ -270,12 +272,12 @@ def gen():
     add_notes(funnel_opts(fill="spam"), 480)
     add_notes(funnel_opts(fill="spam"), 96)
 
-    # ------------------------------------------------------------ shape_notes：256 键
+    # ------------------------------------------------------------ shape_notes: 256 keys
     add_notes(shape("line", [[0.0, 120.0], [4.0, 140.0]]), 960, 256)
-    add_notes(shape("line", [[0.0, 120.0], [4.0, 140.0]]), 960, 128)  # 同样的形状：128 键滤掉 >127
+    add_notes(shape("line", [[0.0, 120.0], [4.0, 140.0]]), 960, 128)  # same shape: 128 keys filters out >127
     add_notes(shape("line", [[0.0, 124.0], [0.0, 130.0]]), 960, 256)
     add_notes(shape("line", [[0.0, 200.0], [0.0, 200.0]]), 960, 256)
-    add_notes(shape("line", [[0.0, 300.0], [0.0, 300.0]]), 960, 256)  # 超过 255：滤掉
+    add_notes(shape("line", [[0.0, 300.0], [0.0, 300.0]]), 960, 256)  # above 255: filtered out
     add_notes(shape("poly", [[0.0, 126.0], [4.0, 134.0]], end_dot=True), 960, 256)
     add_notes(shape("custom", [[0.0, 124.0], [4.0, 124.0], [0.0, 130.0]],
                     strokes=[stroke("poly", [[0.0, 0.0], [1.0, 0.0]])]), 960, 256)
@@ -389,7 +391,7 @@ def gen():
     add_resolve([[0, 50, 60, 50, 0, 0], [0, 0, 62, 50, 0, 0], [0, 80, 64, 50, 0, 0]])
     add_resolve([[0, 0, 60, 50, 0, 0], [0, 0, 62, 50, 0, 0]])
     add_resolve([[0, 100, 60, 50, 0, 0], [20, 30, 60, 90, 0, 0], [25, 150, 60, 70, 0, 0]])
-    # 256 键：slot 1 的 key 2 不能和 slot 0 的 key 130 算同一组（slot * 256 + key）
+    # 256 keys: slot 1's key 2 must not group with slot 0's key 130 (slot * 256 + key)
     add_resolve([[0, 100, 130, 50, 0, 0], [50, 80, 2, 60, 1, 0], [0, 200, 130, 50, 0, 0]])
 
     # ------------------------------------------------------------ render

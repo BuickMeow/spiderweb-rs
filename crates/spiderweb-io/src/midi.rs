@@ -1,9 +1,11 @@
-//! 标准 MIDI 文件（format 1）写出（Python `files/midi_out.py` 的逐字节移植）。
+//! Standard MIDI file (format 1) writing (byte-for-byte port of Python `files/midi_out.py`).
 //!
-//! 接收最终的 `(start, end, key, velocity, slot, owner)` 音符行（tick，`engine.render` 的
-//! 产物）与 PPQ / BPM / 每小节拍数，每个 slot 一轨、每轨一个通道（跳过鼓通道 10）。
-//! 文件布局与 Python 版逐字节一致：MThd + 速度 / 拍号 / 结束的第一轨（轨 0）+ 每个 slot 一轨；
-//! 同一 tick 上 note-off 在前，其余按音符顺序，时值用 VLQ 编码。
+//! Takes the final `(start, end, key, velocity, slot, owner)` note rows (ticks, produced by
+//! `engine.render`) plus PPQ / BPM / beats per bar, one track per slot and one channel per
+//! track (skipping drum channel 10). The file layout matches the Python version byte for
+//! byte: MThd + tempo / time signature / end-of-track first track (track 0) + one track per
+//! slot; at the same tick note-offs come first, the rest keeps note order, and deltas are
+//! VLQ-encoded.
 
 use std::io;
 use std::path::Path;
@@ -12,13 +14,13 @@ use spiderweb_core::round_half_even;
 
 use crate::safefile;
 
-/// 这么高的 PPQ 很多 MIDI 程序打不开（仍会写出）。
+/// Many MIDI programs cannot open a PPQ this high (it is still written).
 pub const PPQ_WARN: u16 = 32767;
 
-/// 除鼓通道 10（0 起为 9）外的所有 MIDI 通道（engine.CHANNELS）。
+/// All MIDI channels except drum channel 10 (9 zero-based) (engine.CHANNELS).
 pub const CHANNELS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
 
-/// slot -> (轨号, MIDI 通道)，每通道一轨，跳过鼓通道（engine.slot_track_channel）。
+/// slot -> (track number, MIDI channel), one track per channel, skipping the drum channel (engine.slot_track_channel).
 pub fn slot_track_channel(slot: i64) -> (i64, u8) {
     (
         slot,
@@ -26,7 +28,7 @@ pub fn slot_track_channel(slot: i64) -> (i64, u8) {
     )
 }
 
-/// 写出错误。
+/// Write error.
 #[derive(Debug, thiserror::Error)]
 pub enum MidiError {
     #[error("tempo out of range")]
@@ -35,7 +37,7 @@ pub enum MidiError {
     Io(#[from] io::Error),
 }
 
-/// 可变长数值（midi_out.vlq）。
+/// Variable-length quantity (midi_out.vlq).
 pub fn vlq(value: u64) -> Vec<u8> {
     let mut out = vec![(value & 0x7F) as u8];
     let mut value = value >> 7;
@@ -55,9 +57,10 @@ struct Event {
     vel: i64,
 }
 
-/// 一轨的事件（每个音符一个 note-on 一个 note-off）+ 结束标记（midi_out.track_data）。
+/// Events for one track (one note-on and one note-off per note) + end-of-track marker (midi_out.track_data).
 ///
-/// 事件按时间排序，同一 tick 上 note-off 在前，其余按音符原本的顺序；note-off 的力度为 0。
+/// Events are sorted by time, note-offs come first at the same tick, the rest keeps the
+/// original note order; note-off velocity is 0.
 pub fn track_data(notes: &[[i64; 6]], ch: u8) -> Vec<u8> {
     let mut events: Vec<Event> = Vec::with_capacity(notes.len() * 2);
     for (i, note) in notes.iter().enumerate() {
@@ -124,9 +127,9 @@ fn chunk(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 整个 MIDI 文件的字节（midi_out.write_midi 的内存版）。
+/// Bytes of the whole MIDI file (in-memory version of midi_out.write_midi).
 ///
-/// notes：`[start, end, pitch, velocity, slot, owner]`，每个 slot 一轨。
+/// notes: `[start, end, pitch, velocity, slot, owner]`, one track per slot.
 pub fn midi_bytes(ppq: u16, bpm: f64, beats: u8, notes: &[[i64; 6]]) -> Result<Vec<u8>, MidiError> {
     let micros = round_half_even(60_000_000.0 / bpm) as i64;
     if !(0..=0xFF_FFFF).contains(&micros) {
@@ -163,7 +166,7 @@ pub fn midi_bytes(ppq: u16, bpm: f64, beats: u8, notes: &[[i64; 6]]) -> Result<V
     Ok(out)
 }
 
-/// 写出 MIDI 文件（原子写，midi_out.write_midi）。
+/// Write a MIDI file (atomic write, midi_out.write_midi).
 pub fn write_midi(
     path: &Path,
     ppq: u16,

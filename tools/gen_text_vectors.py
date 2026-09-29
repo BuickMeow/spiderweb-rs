@@ -1,9 +1,11 @@
-"""text.py 的对照向量。
+"""Differential vectors for text.py.
 
-字体相关部分（layout / build / text_font）没法在 macOS 上生成对照向量：原版 fonts.py 走
-Windows GDI。这里只把用到字体 cap 的少数分支用桩字体固定住（CAPS），其余都是纯几何 /
-纯设置的函数。输入的浮点数先量化到 15 位有效数字再交给 Python 原版计算，保证 serde_json
-默认浮点解析能精确还原。字体部分的冒烟测试见 tests/text_vectors.rs。
+The font-related parts (layout / build / text_font) cannot get differential vectors on macOS:
+the original fonts.py goes through Windows GDI. Here only the few branches that use the font cap
+are pinned with a stub font (CAPS); the rest are pure geometry / pure settings functions. Every
+input float is first quantised to 15 significant digits before being handed to the Python
+original, so serde_json's default float parsing reproduces it exactly. The font-related smoke
+tests live in tests/text_vectors.rs.
 """
 
 import os
@@ -12,12 +14,12 @@ from types import SimpleNamespace
 
 from vec_common import write
 
-# 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
+# when run in the worktree, vec_common cannot derive the original script dir; add a fallback path
 _SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS", "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
-# ctypes.wintypes 只是 import 不碰 GDI，macOS 上也能导入 text.py；字体查询换成本地桩。
+# ctypes.wintypes is only imported and does not touch GDI, so text.py imports on macOS too; font queries are replaced with a local stub.
 from notes import text as T
 
 CAPS = {"Arial": 0.716, "Times New Roman": 0.662, "Courier New": 0.572, "Verdana": 0.727}
@@ -51,7 +53,7 @@ def rjson(v):
 
 
 def serde_parse(x):
-    """复刻 serde_json（未开 float_roundtrip）的浮点解析，用于自检。"""
+    """Replicate serde_json's float parsing (float_roundtrip off) for self-checks."""
     tok = repr(x)
     neg = tok.startswith("-")
     if neg:
@@ -100,10 +102,10 @@ def add(cases, fn, args, call, **extra):
     cases.append(case)
 
 
-# ---------------------------------------------------------------- 合成数据
+# ---------------------------------------------------------------- synthetic data
 
 def curve(poly):
-    """折线 -> 贝塞尔点列（直线：控制点在 1/3、2/3 处）。"""
+    """Polyline -> Bezier point list (straight segment: control points at 1/3 and 2/3)."""
     out = [list(poly[0])]
     for a, b in zip(poly, poly[1:]):
         out += [[a[0] + (b[0] - a[0]) / 3, a[1] + (b[1] - a[1]) / 3],
@@ -112,11 +114,11 @@ def curve(poly):
     return out
 
 
-# 折线多边形（首点 = 末点）
+# polyline polygons (first point = last point)
 SQ = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0], [0.0, 0.0]]
 SQ_REV = [[0.0, 0.0], [0.0, 2.0], [2.0, 2.0], [2.0, 0.0], [0.0, 0.0]]
 TRI = [[0.0, 0.0], [3.0, 0.0], [0.0, 2.0], [0.0, 0.0]]
-SPIKE = [[0.0, 0.0], [4.0, 0.0], [0.0, 0.4], [0.0, 0.0]]       # (4,0) 是很尖的角
+SPIKE = [[0.0, 0.0], [4.0, 0.0], [0.0, 0.4], [0.0, 0.0]]       # (4,0) is a very sharp corner
 DUP = [[0.0, 0.0], [0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 0.0]]
 TINY = [[0.0, 0.0], [1e-12, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0], [0.0, 0.0]]
 DEGEN = [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]]
@@ -125,22 +127,22 @@ INNER = [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [0.5, 0.5]]
 INNER_REV = [[0.5, 0.5], [0.5, 1.5], [1.5, 1.5], [1.5, 0.5], [0.5, 0.5]]
 CORE = [[0.75, 0.75], [1.25, 0.75], [1.25, 1.25], [0.75, 1.25], [0.75, 0.75]]
 CORE_REV = [[0.75, 0.75], [0.75, 1.25], [1.25, 1.25], [1.25, 0.75], [0.75, 0.75]]
-RING = [SQ, INNER_REV]  # 带洞的环
+RING = [SQ, INNER_REV]  # a ring with a hole
 
-# 贝塞尔轮廓（layout / find_holes 用）
+# Bezier contours (used by layout / find_holes)
 SQ_C = curve(SQ)
 SQ_REV_C = curve(SQ_REV)
 INNER_C = curve(INNER)
 INNER_REV_C = curve(INNER_REV)
 CORE_C = curve(CORE)
 CORE_REV_C = curve(CORE_REV)
-# 四段三次贝塞尔近似的圆（半径 1）
+# a circle approximated with four cubic Beziers (radius 1)
 CIRCLE_C = [[1.0, 0.0], [1.0, 0.5522847498307935], [0.5522847498307935, 1.0], [0.0, 1.0],
             [-0.5522847498307935, 1.0], [-1.0, 0.5522847498307935], [-1.0, 0.0],
             [-1.0, -0.5522847498307935], [-0.5522847498307935, -1.0], [0.0, -1.0],
             [0.5522847498307935, -1.0], [1.0, -0.5522847498307935], [1.0, 0.0]]
 def mktx(**kw):
-    """一份完整的文本设置（生成脚本里的 Python 字典）。"""
+    """A complete text settings dict (the Python dict used by the generators)."""
     tx = {"text": "Hi", "font": "Arial", "size": 24.0, "unit": "font", "weight": 400, "italic": False,
           "tracking": 0.0, "leading": 100.0, "align": "left", "threshold": 50.0, "grow": 0.0,
           "bbox": [0.0, 0.0, 1.0, 1.0], "cap": 0.716, "k": 1.0, "holes": []}
@@ -169,7 +171,7 @@ def text_polys_call(sh):
 def gen():
     cases = []
 
-    # ---- flatten：直线一步、弯按容差、退化点列、闭合轮廓
+    # ---- flatten: straight line in one step, curves by tolerance, degenerate point lists, closed contours
     flat_cases = [
         ([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], 0.004),
         ([[0.0, 0.0], [0.0, 2.0], [2.0, 2.0], [2.0, 0.0]], 0.004),
@@ -187,12 +189,12 @@ def gen():
     for pts, tol in flat_cases:
         add(cases, "flatten", [pts, tol], T.flatten)
 
-    # ---- area：方向、开折线、退化
+    # ---- area: orientation, open polylines, degenerate
     for poly in (SQ, SQ_REV, TRI, [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], [], [[1.0, 2.0]],
                  [[0.0, 0.0], [2.0, 2.0], [2.0, 0.0], [0.0, 2.0], [0.0, 0.0]]):
         add(cases, "area", [poly], T.area)
 
-    # ---- winding：里 / 外 / 边上、反向、非凸
+    # ---- winding: inside / outside / on the edge, reversed, non-convex
     for poly, x, y in (
         (SQ, 1.0, 1.0), (SQ, 3.0, 1.0), (SQ, 1.0, 3.0), (SQ, 0.0, 1.0), (SQ, 2.0, 1.0),
         (SQ, 0.0, 0.0), (SQ, 1.0, 0.0), (SQ_REV, 1.0, 1.0), (TRI, 1.0, 0.5), (TRI, 2.5, 0.5),
@@ -201,7 +203,7 @@ def gen():
     ):
         add(cases, "winding", [poly, x, y], T.winding)
 
-    # ---- offset：正 / 负、尖角、重复点、退化
+    # ---- offset: positive / negative, sharp corners, duplicate points, degenerate
     for poly, d in (
         (SQ, 0.5), (SQ, -0.5), (SQ, 0.0), (SQ_REV, 0.5), (SQ_REV, -0.5), (TRI, 0.25),
         (SPIKE, 0.3), (SPIKE, -0.3), (DUP, 0.5), (TINY, 0.5), (DEGEN, 0.5), (COLLINEAR, 0.4),
@@ -219,7 +221,7 @@ def gen():
                      (edge_sets[0], 3.0), (edge_sets[1], 1.0), (edge_sets[1], 0.0), (edge_sets[1], 2.0)):
         add(cases, "line_spans", [edges, y], T.line_spans)
 
-    # 覆盖阈值 0 / 50 / 100：正方形铺满 key 1；环在 key 1 上有洞
+    # coverage thresholds 0 / 50 / 100: the square fills key 1; the ring has a hole at key 1
     for polys, q, threshold in (
         ([SQ], 1.0, 0.0), ([SQ], 1.0, 50.0), ([SQ], 1.0, 100.0), ([SQ], 1.0, 33.0),
         (RING, 1.0, 0.0), (RING, 1.0, 50.0), (RING, 1.0, 100.0), (RING, 1.0, 21.0),
@@ -227,7 +229,7 @@ def gen():
     ):
         add(cases, "threshold_spans", [polys, q, threshold], T.threshold_spans)
 
-    # ---- find_holes：同字母的嵌套（含方向相反）、不同 glyph、圆环
+    # ---- find_holes: nesting within one glyph (including opposite winding), different glyphs, circular rings
     for contours in (
         [(0, SQ_C), (0, INNER_REV_C)],
         [(0, SQ_C), (0, INNER_C)],
@@ -240,7 +242,7 @@ def gen():
     ):
         add(cases, "find_holes", [contours], T.find_holes)
 
-    # ---- clean_text：合法、缺省、坏掉
+    # ---- clean_text: valid, missing, broken
     full = {"text": "Hi\nthere", "font": "Times New Roman", "size": 12.5, "unit": "rows", "weight": 700,
             "italic": True, "tracking": -30.0, "leading": 90.0, "align": "center", "threshold": 20.0,
             "grow": 0.25, "bbox": [-1.0, -0.5, 2.0, 1.5], "cap": 0.6, "k": 2.0, "holes": [1, 0, 1]}
@@ -296,7 +298,7 @@ def gen():
     for sh in sh_cases:
         add(cases, "text_axes", [sh], T.text_axes)
 
-    # ---- 轴变换
+    # ---- axis transforms
     for axes, x, y in ((AX, 1.0, 2.0), (AX, 0.0, 0.0), (AX, -1.5, 0.25)):
         add(cases, "to_roll", [axes, x, y], T.to_roll)
     for axes, b, p in ((AX, 10.0, 60.0), (AX, 14.0, 66.0), (AX_FLAT, 10.0, 60.0)):
@@ -306,7 +308,7 @@ def gen():
     for axes, f in ((AX, 1.0), (AX, 0.5), (AX, -2.0), (AX, 0.0)):
         add(cases, "scale_axes", [axes, f], T.scale_axes)
 
-    # ---- em 单位相关（字体只从桩拿 cap）
+    # ---- em-unit related (fonts only take cap from the stub)
     em_cases = [
         (mktx(), None),
         (mktx(), 40.0),
@@ -347,7 +349,7 @@ def gen():
         add(cases, "restyle", [tx, axes, changes], restyle_call,
             font_cap=cap_of(tx["font"]), new_cap=cap_of(new_family))
 
-    # ---- text_polys：合成笔画 + grow / 洞 / k
+    # ---- text_polys: synthetic strokes + grow / holes / k
     hole = curve(INNER_REV)
     sh_text = mktx(grow=0.0)
     sh_base = {"pts": [[10.0, 60.0], [20.0, 60.0], [10.0, 80.0]], "text": sh_text,

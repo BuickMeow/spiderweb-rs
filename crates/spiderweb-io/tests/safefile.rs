@@ -1,4 +1,4 @@
-//! files/safefile.py：原子写与临时文件清理。
+//! files/safefile.py: atomic writes and temp file cleanup.
 
 use spiderweb_io::safefile;
 

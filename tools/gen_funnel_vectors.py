@@ -1,8 +1,8 @@
-"""funnel.py 的对照向量。
+"""Differential vectors for funnel.py.
 
-Python 原版（notes/funnel.py）直接跑，输出写到
-crates/spiderweb-core/tests/vectors/funnel.json，Rust 测试逐用例对照。
-抛异常的用例记 "err": true、out 为 null，Rust 侧对应函数返回 None / Err。
+The Python original (notes/funnel.py) is run directly and the output goes to
+crates/spiderweb-core/tests/vectors/funnel.json for the Rust tests to compare case by case.
+Cases that raise record "err": true with out null, matching None / Err from the Rust functions.
 """
 
 import copy
@@ -31,7 +31,7 @@ def tolist(x):
     return x
 
 
-# ---------------------------------------------------------------- 构造小工具
+# ---------------------------------------------------------------- construction helpers
 
 def curve(pts, sharp=None, link=None, flip=False):
     d = {"pts": [[float(u), float(f)] for u, f in pts]}
@@ -69,7 +69,7 @@ def with_settings(base, **kw):
     return d
 
 
-# ---------------------------------------------------------------- 曲线与几何
+# ---------------------------------------------------------------- curves and geometry
 
 C1 = [[0.0, 0.0], [0.7, 0.06], [0.94, 0.3], [1.0, 1.0]]
 C2 = [[0.0, 0.0], [0.1, 0.05], [0.2, 0.1], [0.5, 0.5], [0.6, 0.7], [0.8, 0.9], [1.0, 1.0]]
@@ -184,7 +184,7 @@ def gen():
                 p = F.box_point(box, u, f)
                 add_call("box_uf", [box_args, p[0], p[1]], lambda box=box, p=p: F.box_uf(box, p[0], p[1]))
 
-    # ------------------------------------------------------------ 直线 / 曲线 / 区域
+    # ------------------------------------------------------------ lines / curves / regions
     for sh in SHAPES:
         add_call("funnel_lines", [sh], lambda sh=sh: F.funnel_lines(sh))
         add_call("funnel_segments", [sh], lambda sh=sh: F.funnel_segments(sh))
@@ -209,7 +209,7 @@ def gen():
     for (a, b), q in band_cases:
         add_call("line_band", [a, b, q], lambda a=a, b=b, q=q: F.line_band(a, b, q))
 
-    # ------------------------------------------------------------ 布局 / 网格 / 音符
+    # ------------------------------------------------------------ layout / grid / notes
     configs = [
         (SH_SIMPLE, 960, {}),
         (SH_SIMPLE, 960, {"follow": "curve"}),
@@ -259,7 +259,7 @@ def gen():
         else:
             add("funnel_openness", [sh, ppq, openness_ds], None)
 
-    # 手写的 dspans：funnel_openness / funnel_grid 的纯函数面
+    # hand-written dspans: the pure-function surface of funnel_openness / funnel_grid
     for dspans in (
         {60: [[0.0, 4.0], [6.0, 8.0]], 61: [[2.0, 10.0]], 62: [[8.0, 9.0]]},
         {60: [[0.0, 0.0]]},
@@ -280,7 +280,7 @@ def gen():
             for w in (0.0, 0.25, 0.5, 0.75, 1.0, 1.5):
                 add("funnel_gate", [sh, g0, g1, w], F.funnel_gate(sh, g0, g1, w))
 
-    # ------------------------------------------------------------ new_start / 手柄 / 伙伴
+    # ------------------------------------------------------------ new_start / handles / partners
     for sh in (SH_SIMPLE, SH_EXTRA2, SH_HALF, SH_POINT, SH_VERT, SH_COLLINEAR):
         for line in range(len(F.funnel_lines(sh))):
             for at in (0.0, 0.5, 1.0):
@@ -294,7 +294,7 @@ def gen():
         add_call("funnel_handle_lines", [sh], lambda sh=sh: F.funnel_handle_lines(sh))
     add_call("partners", [SH_SIMPLE, 9, 0], lambda: F.partners(SH_SIMPLE, 9, 0))
 
-    # ------------------------------------------------------------ 曲线变换
+    # ------------------------------------------------------------ curve transforms
     for c, flip in ((curve(C2, sharp=[]), False), (curve(C2, sharp=[]), True), (curve(C2, sharp=[1]), True),
                     (curve(C1, sharp=[]), False)):
         add_call("turned_curve", [c, flip], lambda c=c, flip=flip: F.turned_curve(c, flip))
@@ -324,7 +324,7 @@ def gen():
         ok = F.remove_funnel_parts(sh, lines, curves)
         add("remove_funnel_parts", [original, lines, curves], [ok, sh["pts"], sh["starts"]])
 
-    # ------------------------------------------------------------ 旧版 bends / old_funnel
+    # ------------------------------------------------------------ legacy bends / old_funnel
     old_cases = [
         {"pts": [[0.0, 60.0], [4.0, 64.0]], "sides": "one"},
         {"pts": [[0.0, 60.0], [4.0, 64.0]], "sides": "two"},
@@ -377,7 +377,7 @@ def gen():
         fn = F._smooth_curve(xs, ys)
         add("smooth_curve", [xs, ys, smooth_us], [fn(u) for u in smooth_us])
 
-    # ------------------------------------------------------------ 公式 / 预设
+    # ------------------------------------------------------------ formulas / presets
     for name in FORMULAS:
         for n in (1, 2, 7, 64, 400):
             add_call("formula_curve", [name, n], lambda name=name, n=n: F.formula_curve(FORMULAS[name], n))
@@ -386,7 +386,7 @@ def gen():
     add("preset_curve", [None], F.preset_curve(None))
     add("curve_presets", [], [[name, formula] for name, formula in F.CURVE_PRESETS])
 
-    # ------------------------------------------------------------ 清洗
+    # ------------------------------------------------------------ cleanup
     clean_funnel_cases = [
         {},
         {"fill": "long", "change": "smooth", "follow": "curve", "wall": "past",
