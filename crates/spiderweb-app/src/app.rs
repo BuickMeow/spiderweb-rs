@@ -234,6 +234,10 @@ pub struct App {
     pub font_families: Vec<String>,
     /// 自定义形状面板的 gate 文本框（ticks）
     pub custom_gate_text: String,
+    /// The tumour window (tumour_window.rs) is open.
+    pub tumour_window_open: bool,
+    /// The open graph window (only one at a time).
+    pub graph_window: Option<crate::tumour_window::GraphWindow>,
     /// 首次使用的 tip（help.rs）
     pub tips: Tips,
     /// 帮助窗口状态（help.rs）
@@ -336,6 +340,8 @@ impl App {
             font_dialog: None,
             font_families: Vec::new(),
             custom_gate_text: "60".into(),
+            tumour_window_open: false,
+            graph_window: None,
             tips: Tips::new(&base),
             help: HelpState::default(),
             drawer: None,
@@ -1537,6 +1543,8 @@ impl eframe::App for App {
             });
 
         crate::text_dialog::font_dialog_ui(self, &ctx);
+        // 肿瘤设置窗口与图形窗口（tumour_window.rs）
+        crate::tumour_window::tumour_window_ui(self, &ctx);
         // 帮助窗口与首次使用 tip（help.rs）
         crate::help::help_ui(self, &ctx);
         crate::help::tips_ui(self, &ctx);

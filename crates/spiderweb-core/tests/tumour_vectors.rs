@@ -195,10 +195,47 @@ fn assert_tumour_eq(got: Option<Tumour>, want: &Value, ctx: &str) {
         got.k,
         f(&want["k"])
     );
+    assert!(
+        close(got.rot, f(&want["rot"])),
+        "{ctx} rot: {} != {}",
+        got.rot,
+        f(&want["rot"])
+    );
+    assert!(
+        close(got.slant, f(&want["slant"])),
+        "{ctx} slant: {} != {}",
+        got.slant,
+        f(&want["slant"])
+    );
     assert_eq!(got.seed, i(&want["seed"]), "{ctx} seed");
     assert_eq!(got.on, b(&want["on"]), "{ctx} on");
     assert_eq!(got.mirror, b(&want["mirror"]), "{ctx} mirror");
     assert_eq!(got.fit, b(&want["fit"]), "{ctx} fit");
+    match (got.graphs.is_empty(), want.get("graphs")) {
+        (true, None) => {}
+        (false, Some(Value::Object(m))) => {
+            assert_eq!(got.graphs.len(), m.len(), "{ctx} graphs");
+            for (key, v) in m {
+                let g = got
+                    .graphs
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{ctx}: missing graphs[{key}]"));
+                assert_pts_eq(g, v, &format!("{ctx} graphs[{key}]"));
+            }
+        }
+        (true, Some(_)) => panic!("{ctx}: expected no graphs"),
+        (false, None) => panic!("{ctx}: unexpected graphs"),
+        (false, Some(_)) => panic!("{ctx}: malformed graphs"),
+    }
+}
+
+fn assert_graph_eq(got: Option<Vec<[f64; 2]>>, want: &Value, ctx: &str) {
+    match (got, want.is_null()) {
+        (None, true) => {}
+        (None, false) => panic!("{ctx}: expected a graph"),
+        (Some(_), true) => panic!("{ctx}: expected None"),
+        (Some(g), false) => assert_pts_eq(&g, want, ctx),
+    }
 }
 
 #[test]
@@ -213,13 +250,72 @@ fn tumour_vectors() {
             "clean_tumour" => {
                 assert_tumour_eq(T::clean_tumour(&args[0]), out, &ctx);
             }
+            "clean_graph" => {
+                assert_graph_eq(T::clean_graph(&args[0]), out, &ctx);
+            }
             "template" => {
                 let g = T::template(
                     shape_of(args[0].as_str().unwrap()),
                     f(&args[1]),
                     f(&args[2]),
+                    f(&args[3]),
                 );
                 assert_pts_eq(&g, out, &ctx);
+            }
+            "sub_graph" => {
+                let g = T::sub_graph(&pts(&args[0]), f(&args[1]), f(&args[2]));
+                assert_pts_eq(&g, out, &ctx);
+            }
+            "graph_fn" => {
+                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let got = T::graph_fn(&tm, args[1].as_str().unwrap(), f(&args[2]));
+                match (got, out.is_null()) {
+                    (None, true) => {}
+                    (None, false) => panic!("{ctx}: expected Some"),
+                    (Some(_), true) => panic!("{ctx}: expected None"),
+                    (Some(g), false) => {
+                        for (d, want) in floats(&args[3]).iter().zip(out.as_array().unwrap()) {
+                            assert!(
+                                close(g.eval(*d), f(want)),
+                                "{ctx}: graph_fn({d}) = {} != {}",
+                                g.eval(*d),
+                                f(want)
+                            );
+                        }
+                    }
+                }
+            }
+            "graph_starts" => {
+                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let dg =
+                    T::graph_fn(&tm, "dist", 1.0).unwrap_or_else(|| panic!("{ctx}: 无 dist graph"));
+                let (starts, stretch) = T::graph_starts(
+                    &dg,
+                    f(&args[1]),
+                    f(&args[2]),
+                    f(&args[3]),
+                    b(&args[4]),
+                    b(&args[5]),
+                );
+                assert_eq!(
+                    starts.len(),
+                    out[0].as_array().unwrap().len(),
+                    "{ctx}: starts"
+                );
+                for (i, (g, w)) in starts.iter().zip(out[0].as_array().unwrap()).enumerate() {
+                    assert!(close(*g, f(w)), "{ctx}: starts[{i}] = {g} != {w}");
+                }
+                assert!(
+                    close(stretch, f(&out[1])),
+                    "{ctx}: stretch {stretch} != {}",
+                    f(&out[1])
+                );
+            }
+            "split_tumour" => {
+                let tm = T::clean_tumour(&args[0]).unwrap_or_else(|| panic!("{ctx}: tm 无效"));
+                let (l, r) = T::split_tumour(&tm, &pts(&args[1]), &pts(&args[2]));
+                assert_tumour_eq(l, &out[0], &format!("{ctx} left"));
+                assert_tumour_eq(r, &out[1], &format!("{ctx} right"));
             }
             "cut" => {
                 let g = T::cut(&pts(&args[0]), f(&args[1]));

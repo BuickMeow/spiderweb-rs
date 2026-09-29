@@ -749,22 +749,31 @@ pub fn sym_str(s: Sym) -> &'static str {
 }
 
 fn tumour_value(tm: &Tumour) -> Value {
-    serde_json::json!({
-        "on": tm.on,
-        "shape": tumour_shape_str(tm.shape),
-        "size": tm.size,
-        "length": tm.length,
-        "dist": tm.dist,
-        "side": tumour_side_str(tm.side),
-        "wrap": tumour_wrap_str(tm.wrap),
-        "start": tm.start,
-        "end": tm.end,
-        "ease": tm.ease,
-        "fit": tm.fit,
-        "seed": tm.seed,
-        "mirror": tm.mirror,
-        "k": tm.k,
-    })
+    let mut o = Map::new();
+    o.insert("on".into(), Value::Bool(tm.on));
+    o.insert("shape".into(), Value::from(tumour_shape_str(tm.shape)));
+    o.insert("size".into(), num_value(tm.size));
+    o.insert("length".into(), num_value(tm.length));
+    o.insert("dist".into(), num_value(tm.dist));
+    o.insert("side".into(), Value::from(tumour_side_str(tm.side)));
+    o.insert("wrap".into(), Value::from(tumour_wrap_str(tm.wrap)));
+    o.insert("start".into(), num_value(tm.start));
+    o.insert("end".into(), num_value(tm.end));
+    o.insert("ease".into(), num_value(tm.ease));
+    o.insert("rot".into(), num_value(tm.rot));
+    o.insert("slant".into(), num_value(tm.slant));
+    o.insert("fit".into(), Value::Bool(tm.fit));
+    o.insert("seed".into(), Value::from(tm.seed));
+    o.insert("mirror".into(), Value::Bool(tm.mirror));
+    o.insert("k".into(), num_value(tm.k));
+    if !tm.graphs.is_empty() {
+        let mut g = Map::new();
+        for (key, pts) in &tm.graphs {
+            g.insert(key.clone(), pts_value(pts));
+        }
+        o.insert("graphs".into(), Value::Object(g));
+    }
+    Value::Object(o)
 }
 
 fn tumour_shape_str(s: spiderweb_core::shape::TumourShape) -> &'static str {
@@ -1110,5 +1119,39 @@ mod tests {
         assert_eq!(out["union"], Value::Bool(true));
         let again = shape_from_json(&out).expect("能读").expect("有效");
         assert_eq!(shape_to_json(&again), out);
+    }
+
+    /// 1.2.0 tumour rot / slant / graphs: read in, written back, read again unchanged.
+    #[test]
+    fn reads_and_writes_tumour_rot_slant_graphs() {
+        let v = serde_json::json!({
+            "kind": "line",
+            "pts": [[0, 60], [4, 60]],
+            "tumour": {
+                "on": true, "rot": 30.5, "slant": -0.25,
+                "graphs": {
+                    "size": [[0, 0.5], [1, 2.0]],
+                    "dist": [[0, 1.0], [0.5, 3.0], [1, 1.0]],
+                    "bogus": [[0, 2.0], [1, 2.0]],
+                },
+            },
+        });
+        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        let tm = sh.tumour.as_ref().expect("tumour");
+        assert!((tm.rot - 30.5).abs() < 1e-12);
+        assert!((tm.slant + 0.25).abs() < 1e-12);
+        assert_eq!(tm.graphs.len(), 2, "bogus keys are dropped");
+        let out = shape_to_json(&sh);
+        let graphs = out["tumour"]["graphs"].as_object().expect("graphs");
+        assert_eq!(graphs["size"], serde_json::json!([[0.0, 0.5], [1.0, 2.0]]));
+        let again = shape_from_json(&out).expect("能读").expect("有效");
+        assert_eq!(shape_to_json(&again), out);
+        // a flat graph at 100 % is dropped (as upstream clean_tumour does)
+        let v = serde_json::json!({
+            "kind": "line", "pts": [[0, 60], [4, 60]],
+            "tumour": {"graphs": {"size": [[0, 1.0], [1, 1.0]]}},
+        });
+        let sh = shape_from_json(&v).expect("能读").expect("有效");
+        assert!(sh.tumour.as_ref().expect("tumour").graphs.is_empty());
     }
 }

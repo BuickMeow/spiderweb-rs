@@ -8,6 +8,8 @@
 //! 所以 size 的单位是 key，length / dist 是沿线条的 beat。length 0 = 尖刺：每个凸起只是
 //! 一个被推向一侧的点，线条从一个尖刺直着折向下一个。
 
+use std::collections::BTreeMap;
+
 use crate::arc::arc_points;
 use crate::shape::{Tumour, TumourShape, TumourSide, TumourWrap};
 use crate::{Pt, dist, hypot2, round_half_even};
@@ -15,6 +17,12 @@ use serde_json::{Map, Value};
 
 /// 最多多少个凸起（tumour.py MAX_TUMOURS）。
 pub const MAX_TUMOURS: usize = 20000;
+
+/// The settings that can follow a graph (1.2.0 tumour.GRAPH_KEYS).
+pub const GRAPH_KEYS: [&str; 5] = ["size", "length", "dist", "rot", "slant"];
+
+/// Graph values from -1000 % to 1000 % (1.2.0 tumour.GRAPH_LIMIT).
+pub const GRAPH_LIMIT: f64 = 10.0;
 
 /// 圆形模板的采样步长（Python `math.radians(10)`）。
 const CIRCLE_STEP: f64 = 10.0 * (std::f64::consts::PI / 180.0);
@@ -71,6 +79,44 @@ fn py_max(a: f64, b: f64) -> f64 {
 /// CPython `min(a, b)`（并列时保留先出现的 a）。
 fn py_min(a: f64, b: f64) -> f64 {
     if b < a { b } else { a }
+}
+
+/// NumPy `np.interp(x, xp, fp)`（xp 单调不减；x 在两端之外时取端点的 fp）。
+fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
+    let Some(&first) = xp.first() else {
+        return f64::NAN;
+    };
+    if x <= first {
+        return fp.first().copied().unwrap_or(f64::NAN);
+    }
+    let Some(&last) = xp.last() else {
+        return f64::NAN;
+    };
+    if x >= last {
+        return fp.last().copied().unwrap_or(f64::NAN);
+    }
+    let i = bisect_right(xp, x) - 1;
+    let denom = xp[i + 1] - xp[i];
+    if denom == 0.0 {
+        return fp[i + 1];
+    }
+    fp[i] + (fp[i + 1] - fp[i]) * (x - xp[i]) / denom
+}
+
+/// NumPy `np.linspace(lo, hi, n)`（端点精确取 lo / hi）。
+fn np_linspace(lo: f64, hi: f64, n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![lo];
+    }
+    let step = (hi - lo) / (n - 1) as f64;
+    let mut out: Vec<f64> = (0..n).map(|i| lo + step * i as f64).collect();
+    if let Some(last) = out.last_mut() {
+        *last = hi;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +290,12 @@ pub fn clean_tumour(tm: &Value) -> Option<Tumour> {
     if let Some(v) = num(obj, "k") {
         out.k = py_min(1e9, py_max(1e-9, v));
     }
+    if let Some(v) = num(obj, "rot") {
+        out.rot = py_min(180.0, py_max(-180.0, v));
+    }
+    if let Some(v) = num(obj, "slant") {
+        out.slant = py_min(1.0, py_max(-1.0, v));
+    }
     if let Some(v) = obj.get("seed").and_then(py_int) {
         out.seed = v;
     }
@@ -251,7 +303,151 @@ pub fn clean_tumour(tm: &Value) -> Option<Tumour> {
     out.on = obj.get("on").and_then(Value::as_bool) != Some(false);
     out.mirror = obj.get("mirror").and_then(Value::as_bool) == Some(true);
     out.fit = obj.get("fit").and_then(Value::as_bool) == Some(true);
+    // graphs: only when the value is a dict (Python `isinstance(tm.get("graphs"), dict)`)
+    if let Some(Value::Object(g)) = obj.get("graphs") {
+        for key in GRAPH_KEYS {
+            if let Some(pts) = g.get(key).and_then(clean_graph) {
+                out.graphs.insert(key.to_string(), pts);
+            }
+        }
+    }
     Some(out)
+}
+
+// ---------------------------------------------------------------------------
+// graphs (1.2.0 tumour.py)
+// ---------------------------------------------------------------------------
+
+/// A cleaned graph from a file / another graph: [[u, f], ...] from u = 0 to u = 1 with u never
+/// going back (None if it's unusable or flat at 100 %). Python `clean_graph`.
+pub fn clean_graph(g: &Value) -> Option<Vec<Pt>> {
+    let items = g.as_array()?;
+    let mut pts: Vec<Pt> = Vec::with_capacity(items.len());
+    for item in items {
+        let pair = item.as_array()?;
+        if pair.len() != 2 {
+            return None;
+        }
+        let u = py_float(&pair[0])?;
+        let f = py_float(&pair[1])?;
+        pts.push([
+            py_min(1.0, py_max(0.0, u)),
+            py_min(GRAPH_LIMIT, py_max(-GRAPH_LIMIT, f)),
+        ]);
+    }
+    clean_graph_pts(pts)
+}
+
+/// The last steps of [`clean_graph`] on already numeric points (used on file values and on
+/// [`sub_graph`] results).
+pub fn clean_graph_pts(mut pts: Vec<Pt>) -> Option<Vec<Pt>> {
+    if pts.len() < 2 || pts.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
+        return None;
+    }
+    let last = pts.len() - 1;
+    pts[0][0] = 0.0;
+    pts[last][0] = 1.0;
+    for i in 0..last {
+        let a = pts[i][0];
+        if pts[i + 1][0] < a {
+            pts[i + 1][0] = a;
+        }
+    }
+    if pts.iter().all(|p| (p[1] - 1.0).abs() < 1e-12) {
+        return None;
+    }
+    Some(pts)
+}
+
+/// The setting's graph as a function of distances along the line (Python `graph_fn`): None when
+/// it has none.
+#[derive(Clone, Debug)]
+pub struct GraphFn {
+    u: Vec<f64>,
+    f: Vec<f64>,
+}
+
+impl GraphFn {
+    /// The multiplier at distance `d` (NumPy `np.interp`).
+    pub fn eval(&self, d: f64) -> f64 {
+        np_interp(d, &self.u, &self.f)
+    }
+}
+
+/// Python `graph_fn(tm, key, total)`.
+pub fn graph_fn(tm: &Tumour, key: &str, total: f64) -> Option<GraphFn> {
+    let g = tm.graphs.get(key)?;
+    if g.is_empty() {
+        return None;
+    }
+    Some(GraphFn {
+        u: g.iter().map(|p| p[0] * total).collect(),
+        f: g.iter().map(|p| p[1]).collect(),
+    })
+}
+
+/// The part of a graph from u = a to u = b, stretched to 0..1 (Python `sub_graph`).
+pub fn sub_graph(g: &[Pt], a: f64, b: f64) -> Vec<Pt> {
+    let us: Vec<f64> = g.iter().map(|p| p[0]).collect();
+    let fs: Vec<f64> = g.iter().map(|p| p[1]).collect();
+    let mut out: Vec<Pt> = Vec::with_capacity(g.len() + 2);
+    out.push([0.0, np_interp(a, &us, &fs)]);
+    for p in g {
+        if a + 1e-12 < p[0] && p[0] < b - 1e-12 {
+            out.push([(p[0] - a) / (b - a), p[1]]);
+        }
+    }
+    out.push([1.0, np_interp(b, &us, &fs)]);
+    out
+}
+
+/// Where the bumps start when the distance follows the graph dg: counting bumps along the range
+/// (1 / distance per unit of length), bump i starts where the count reaches i. With `fit` the
+/// count is stretched so a whole number of steps fits the range (`even`: an even number). Also
+/// returns how much that stretched the distance (1 = not). Python `graph_starts`.
+pub fn graph_starts(
+    dg: &GraphFn,
+    lo: f64,
+    hi: f64,
+    dist: f64,
+    fit: bool,
+    even: bool,
+) -> (Vec<f64>, f64) {
+    if hi - lo < 1e-9 {
+        return (vec![lo], 1.0);
+    }
+    let d = np_linspace(lo, hi, 4097);
+    let floor_rate = py_max((hi - lo) / MAX_TUMOURS as f64, 1e-9);
+    let rate: Vec<f64> = d
+        .iter()
+        .map(|&x| 1.0 / py_max(dist * dg.eval(x), floor_rate))
+        .collect();
+    let mut count: Vec<f64> = Vec::with_capacity(d.len());
+    count.push(0.0);
+    let mut acc = 0.0;
+    for i in 0..d.len() - 1 {
+        acc += (rate[i + 1] + rate[i]) / 2.0 * (d[i + 1] - d[i]);
+        count.push(acc);
+    }
+    let total = count[count.len() - 1];
+    let mut stretch = 1.0;
+    let marks: Vec<f64>;
+    if fit {
+        let n = if even {
+            py_max(2.0, 2.0 * round_half_even(total / 2.0)) as i64
+        } else {
+            py_max(1.0, round_half_even(total)) as i64
+        };
+        marks = np_linspace(0.0, total, (n + 1) as usize);
+        stretch = total / n as f64;
+    } else {
+        // (a bump within a thousandth of a step of the end still counts: after a split, the half
+        // whose Fit was turned off must still get the one Fit put right on the end)
+        let n = py_min((total + 1e-3).floor(), (MAX_TUMOURS - 1) as f64);
+        marks = (0..=(n as i64)).map(|i| i as f64).collect();
+    }
+    let starts: Vec<f64> = marks.iter().map(|&m| np_interp(m, &count, &d)).collect();
+    (starts, stretch)
 }
 
 // ---------------------------------------------------------------------------
@@ -259,10 +455,14 @@ pub fn clean_tumour(tm: &Value) -> Option<Tumour> {
 // ---------------------------------------------------------------------------
 
 /// 凸起模板：从 (0, 0) 到 (length, 0) 的（沿线的 x, 侧向的 y）点列。
-pub fn template(shape: TumourShape, length: f64, size: f64) -> Vec<Pt> {
+/// `slant` (-1..1, square only): the square's top is narrowed by that much of its length.
+pub fn template(shape: TumourShape, length: f64, size: f64, slant: f64) -> Vec<Pt> {
     match shape {
         TumourShape::Triangle => vec![[0.0, 0.0], [length / 2.0, size], [length, 0.0]],
-        TumourShape::Square => vec![[0.0, 0.0], [0.0, size], [length, size], [length, 0.0]],
+        TumourShape::Square => {
+            let m = length / 2.0 * slant;
+            vec![[0.0, 0.0], [m, size], [length - m, size], [length, 0.0]]
+        }
         TumourShape::Parabola => (0..=16)
             .map(|t| {
                 let t = t as f64;
@@ -575,35 +775,18 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
     if w.total < 1e-12 {
         return path.to_vec();
     }
-    let lo = py_min(tm.start, tm.end) * w.total;
-    let hi = py_max(tm.start, tm.end) * w.total;
     let length = py_max(0.0, tm.length / k);
-    let dist = py_max(py_max(tm.dist / k, (hi - lo) / MAX_TUMOURS as f64), 1e-9);
-    // 闭合环（比如整圆）且凸起绕一整圈：终点就是起点
-    let is_loop = w.closed && lo < 1e-9 && hi > w.total - 1e-9;
-    let mut starts: Vec<f64> = Vec::new();
-    if tm.fit && hi - lo > 1e-9 {
-        // 整数个凸起恰好铺满区间，最后一个正好落在区间终点；绕闭合环且左右交替时取偶数个，
-        // 这样接上时左右还在交替
-        let r = (hi - lo) / dist;
-        let mut n = py_max(1.0, round_half_even(r)) as i64;
-        if is_loop && tm.side == TumourSide::Alt {
-            n = py_max(2.0, 2.0 * round_half_even(r / 2.0)) as i64;
-        }
-        let span = hi - lo;
-        for i in 0..=n {
-            starts.push(lo + span * i as f64 / n as f64);
-        }
-    } else {
-        let mut s = lo;
-        while s <= hi + 1e-9 && starts.len() < MAX_TUMOURS {
-            starts.push(py_min(s, hi));
-            s += dist;
-        }
-    }
+    let (lo, hi, is_loop, starts, _) = bump_starts(&w, tm);
     if starts.is_empty() {
         return path.to_vec();
     }
+    let zg = graph_fn(tm, "size", w.total);
+    let lg = graph_fn(tm, "length", w.total);
+    let rg = graph_fn(tm, "rot", w.total);
+    let sg = graph_fn(tm, "slant", w.total);
+    let rot = tm.rot.to_radians();
+    let lean = rot.abs() > 1e-12;
+    let (sin, cos) = (rot.sin(), rot.cos());
     let mut rnd = crate::pyrandom::PyRandom::new(tm.seed);
     let flip = if tm.mirror { -1.0 } else { 1.0 };
     let mut sides: Vec<f64> = Vec::with_capacity(starts.len());
@@ -712,8 +895,29 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
         let (ux, uy) = w.directions(&starts);
         let mut block_pts = Vec::with_capacity(starts.len());
         for i in 0..starts.len() {
-            let h = size * sides[i] * grow(starts[i]);
-            block_pts.push([x[i] - uy[i] * h, y[i] + ux[i] * h]);
+            let mut h = size * grow(starts[i]);
+            if let Some(zg) = &zg {
+                h *= zg.eval(starts[i]);
+            }
+            if lean {
+                // tilted: part of the push goes along the line
+                let nx = -uy[i];
+                let ny = ux[i];
+                let (sn, cs) = match &rg {
+                    Some(rg) => {
+                        let r = rot * rg.eval(starts[i]);
+                        (r.sin(), r.cos())
+                    }
+                    None => (sin, cos),
+                };
+                block_pts.push([
+                    x[i] + (nx * cs * sides[i] + ux[i] * sn) * h,
+                    y[i] + (ny * cs * sides[i] + uy[i] * sn) * h,
+                ]);
+            } else {
+                let h = h * sides[i];
+                block_pts.push([x[i] - uy[i] * h, y[i] + ux[i] * h]);
+            }
         }
         out.block_array(&block_pts);
         if !fit_loop {
@@ -722,10 +926,15 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
             out.add(&tail);
         }
     } else {
-        let shape = template(tm.shape, length, size);
+        let slant = tm.slant;
+        let shape = if lg.is_none() && sg.is_none() {
+            Some(template(tm.shape, length, size, slant))
+        } else {
+            None
+        };
         let mut bump_pts: Vec<Pt> = Vec::new();
-        let mut par_simple: Vec<[f64; 6]> = Vec::new();
-        let mut par_wrap: Vec<[f64; 2]> = Vec::new();
+        let mut par_simple: Vec<[f64; 9]> = Vec::new();
+        let mut par_wrap: Vec<[f64; 4]> = Vec::new();
         let mut any_bump = false;
         for i in 0..starts.len() {
             let s = starts[i];
@@ -735,15 +944,52 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
             } else {
                 hi
             };
-            let e = py_min(s + length, room);
-            // 只在下个凸起或区间终点挡路的地方截断：比自身一半长度还高的圆凸起会鼓过自己的
-            // 端点，有地方时那部分要留着
-            let bump = cut(&shape, room - s);
+            let li = match &lg {
+                None => length,
+                Some(lg) => py_max(0.0, length * lg.eval(s)),
+            };
+            let e = py_min(s + li, room);
+            let nxt = if i + 1 < starts.len() {
+                starts[i + 1]
+            } else {
+                w.total
+            };
             if e - s < 1e-9 {
-                // 没地方了（它正好从区间终点开始）
+                // 没地方了（它正好从区间终点开始），或者长度为 0
                 let at = w.at(s);
                 out.add(&[at]);
-            } else if tm.wrap == TumourWrap::Simple {
+                let tail = base(e, nxt);
+                out.add(&tail);
+                continue;
+            }
+            // 只在下个凸起或区间终点挡路的地方截断：比自身一半长度还高的圆凸起会鼓过自己的
+            // 端点，有地方时那部分要留着
+            let bump = match &shape {
+                Some(tpl) => cut(tpl, room - s),
+                None => {
+                    let sl = match &sg {
+                        None => slant,
+                        Some(sg) => py_min(1.0, py_max(-1.0, slant * sg.eval(s))),
+                    };
+                    cut(&template(tm.shape, li, size, sl), room - s)
+                }
+            };
+            let r = match &rg {
+                None => rot,
+                Some(rg) => rot * rg.eval(s + li / 2.0),
+            };
+            let (sn, cs) = match &rg {
+                None => (sin, cos),
+                Some(_) => (r.sin(), r.cos()),
+            };
+            let bump = if zg.is_some() && tm.wrap == TumourWrap::Simple {
+                // points for the size to change along
+                let xs: Vec<f64> = (0..=16).map(|j| (e - s) * j as f64 / 16.0).collect();
+                subdivide(&bump, &xs)
+            } else {
+                bump
+            };
+            if tm.wrap == TumourWrap::Simple {
                 // 从起点到终点的直线段上
                 let a = w.at(s);
                 let b = w.at(e);
@@ -761,7 +1007,7 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 let bump = eased(&bump, s);
                 for p in &bump {
                     bump_pts.push(*p);
-                    par_simple.push([a[0], a[1], ux, uy, stretch, side]);
+                    par_simple.push([a[0], a[1], ux, uy, stretch, side, s, sn, cs]);
                 }
                 any_bump = true;
                 out.block(bump.len());
@@ -796,16 +1042,15 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 let bump = subdivide(&bump, &xs);
                 for p in &bump {
                     bump_pts.push(*p);
-                    par_wrap.push([s, side]);
+                    par_wrap.push([s, side, sn, cs]);
                 }
                 any_bump = true;
                 out.block(bump.len());
             }
-            let nxt = if i + 1 < starts.len() {
-                starts[i + 1]
-            } else {
-                w.total
-            };
+            if e >= hi - 1e-12 && nxt > e + 1e-12 {
+                // cut off by the range's end: down onto the line there
+                out.add(&[w.at(e)]);
+            }
             let tail = base(e, nxt);
             out.add(&tail);
         }
@@ -814,8 +1059,16 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
             if tm.wrap == TumourWrap::Simple {
                 let mut fill = Vec::with_capacity(bump_pts.len());
                 for (p, q) in bump_pts.iter().zip(par_simple.iter()) {
-                    let x = p[0] * q[4];
-                    let y = p[1];
+                    let mut x = p[0] * q[4];
+                    let mut y = p[1];
+                    if let Some(zg) = &zg {
+                        y *= zg.eval(q[6] + p[0]);
+                    }
+                    if lean {
+                        let (nx, ny) = (x + y * q[7], y * q[8]);
+                        x = nx;
+                        y = ny;
+                    }
                     fill.push([
                         q[0] + q[2] * x - q[3] * y * q[5],
                         q[1] + q[3] * x + q[2] * y * q[5],
@@ -823,23 +1076,35 @@ pub fn tumour_path(path: &[Pt], tm: &Tumour) -> Vec<Pt> {
                 }
                 out.fill(fill);
             } else {
-                let mut ds = Vec::with_capacity(bump_pts.len());
+                let mut ys: Vec<f64> = Vec::with_capacity(bump_pts.len());
+                let mut ds: Vec<f64> = Vec::with_capacity(bump_pts.len());
                 for (p, q) in bump_pts.iter().zip(par_wrap.iter()) {
-                    let mut d = q[0] + p[0];
+                    let s = q[0];
+                    let mut x = p[0];
+                    let mut y = p[1] * grow(s + p[0]);
+                    if let Some(zg) = &zg {
+                        y *= zg.eval(s + p[0]);
+                    }
+                    if lean {
+                        let (nx, ny) = (x + y * q[2], y * q[3]);
+                        x = nx;
+                        y = ny;
+                    }
+                    let mut d = s + x;
                     if w.closed {
                         // 圆凸起鼓过闭合环的起点 / 终点：绕着环走
                         d = py_mod(d, w.total);
                     }
+                    ys.push(y);
                     ds.push(d);
                 }
                 let dcs: Vec<f64> = ds.iter().map(|&d| d.clamp(0.0, w.total)).collect();
                 let (pxs, pys) = w.at_many(&dcs);
                 let (uxs, uys) = w.directions(&dcs);
                 let mut fill = Vec::with_capacity(bump_pts.len());
-                for (i, (p, q)) in bump_pts.iter().zip(par_wrap.iter()).enumerate() {
-                    let s = q[0];
+                for (i, q) in par_wrap.iter().enumerate() {
                     let side = q[1];
-                    let y = p[1] * grow(s + p[0]);
+                    let y = ys[i];
                     let over = ds[i] - dcs[i]; // 越出线条起点 / 终点：顺着那里的方向直着走
                     let nx = -uys[i];
                     let ny = uxs[i];
@@ -875,18 +1140,31 @@ fn walk_of(path: &[Pt], k: f64) -> Option<Walk> {
     }
 }
 
-/// Where the bumps start along the Walk w (on-screen units): (range start, range end, starts, how much
-/// Fit stretched the distance) (tumour.bump_starts without graphs; [`Tumour`] has no graphs yet).
-fn bump_starts(w: &Walk, tm: &Tumour) -> (f64, f64, Vec<f64>, f64) {
+/// Where the bumps start along the Walk w (on-screen units): (range start, range end, whether it's
+/// a closed loop with bumps all the way round, the starts, how much Fit stretched the distance
+/// (1 = not at all)). Python `bump_starts`.
+pub fn bump_starts(w: &Walk, tm: &Tumour) -> (f64, f64, bool, Vec<f64>, f64) {
     let k = tm.k;
     let lo = py_min(tm.start, tm.end) * w.total;
     let hi = py_max(tm.start, tm.end) * w.total;
     let dist = py_max(py_max(tm.dist / k, (hi - lo) / MAX_TUMOURS as f64), 1e-9);
     // a closed loop (e.g. a full circle) with bumps all the way round: its end is its start again
     let loop_ = w.closed && lo < 1e-9 && hi > w.total - 1e-9;
+    let dg = graph_fn(tm, "dist", w.total);
     let mut stretch = 1.0;
     let starts: Vec<f64>;
-    if tm.fit && hi - lo > 1e-9 {
+    if let Some(dg) = &dg {
+        let (s, st) = graph_starts(
+            dg,
+            lo,
+            hi,
+            dist,
+            tm.fit,
+            loop_ && tm.side == TumourSide::Alt,
+        );
+        starts = s;
+        stretch = st;
+    } else if tm.fit && hi - lo > 1e-9 {
         // a whole number of steps fits the range, so the last one lands right on its end; round a
         // loop with alternating sides, an even number, so the sides keep alternating where it meets up
         let r = (hi - lo) / dist;
@@ -907,17 +1185,17 @@ fn bump_starts(w: &Walk, tm: &Tumour) -> (f64, f64, Vec<f64>, f64) {
         }
         starts = v;
     }
-    (lo, hi, starts, stretch)
+    (lo, hi, loop_, starts, stretch)
 }
 
 /// Tumour settings for the two halves of a line cut in two (left / right: their (beat, pitch) points,
 /// both with the cut point), so the bumps stay where they were: each half gets its own part of the
 /// range and graphs, Fit is turned off (keeping the distance it had worked out) and the right half
 /// starts at the first bump after the cut (a bump across the cut is cut off there). Random sides are
-/// picked again; Lead in works at each half's ends (tumour.split_tumour; [`Tumour`] has no graphs yet).
+/// picked again; Lead in works at each half's ends (tumour.split_tumour).
 pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, Option<Tumour>) {
     let mut combined: Vec<Pt> = left.to_vec();
-    combined.extend_from_slice(&right[1..]);
+    combined.extend_from_slice(right.get(1..).unwrap_or(&[]));
     let copy = tm.clone();
     let (Some(w), Some(wl)) = (walk_of(&combined, tm.k), walk_of(left, tm.k)) else {
         return (Some(copy.clone()), Some(tm.clone()));
@@ -925,7 +1203,7 @@ pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, 
     if w.total - wl.total < 1e-9 * w.total {
         return (Some(copy), Some(tm.clone()));
     }
-    let (lo, hi, starts, stretch) = bump_starts(&w, tm);
+    let (lo, hi, _, starts, stretch) = bump_starts(&w, tm);
     let cut = wl.total;
     let mut base = copy;
     base.fit = false;
@@ -942,6 +1220,13 @@ pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, 
             // (no bumps left on this half)
             out.on = false;
         }
+        let mut graphs: BTreeMap<String, Vec<Pt>> = BTreeMap::new();
+        for (key, g) in &tm.graphs {
+            if let Some(g2) = clean_graph_pts(sub_graph(g, a / w.total, b / w.total)) {
+                graphs.insert(key.clone(), g2);
+            }
+        }
+        out.graphs = graphs;
         out
     };
     let first = half(0.0, cut, lo, py_min(hi, cut));
@@ -950,7 +1235,10 @@ pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, 
         .enumerate()
         .find(|&(_, &s)| s >= cut - 1e-9)
         .map(|(i, &s)| (i, s));
-    let mut second = half(cut, w.total, hi, hi);
+    let mut second = match nxt {
+        Some((_, s)) => half(cut, w.total, s, hi),
+        None => half(cut, w.total, hi, hi),
+    };
     if let Some((i, _)) = nxt
         && tm.side == TumourSide::Alt
         && i % 2 == 1
@@ -959,4 +1247,154 @@ pub fn split_tumour(tm: &Tumour, left: &[Pt], right: &[Pt]) -> (Option<Tumour>, 
         second.mirror = !second.mirror;
     }
     (Some(first), Some(second))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph(pairs: &[(f64, f64)]) -> Vec<Pt> {
+        pairs.iter().map(|&(u, f)| [u, f]).collect()
+    }
+
+    #[test]
+    fn clean_graph_clamps_and_drops_flat() {
+        let got = clean_graph(&serde_json::json!([[2.0, -50.0], [0.5, 100.0]])).expect("graph");
+        assert_eq!(got[0], [0.0, -10.0]);
+        assert_eq!(got[1], [1.0, 10.0]);
+        // the ends snap to 0 / 1; u never goes back
+        let got = clean_graph(&serde_json::json!([[0.5, 1.5], [0.0, 2.0]])).expect("graph");
+        assert_eq!(got[0], [0.0, 1.5]);
+        assert_eq!(got[1], [1.0, 2.0]);
+        // flat at 100 %: unusable
+        assert!(clean_graph(&serde_json::json!([[0.0, 1.0], [1.0, 1.0]])).is_none());
+        // fewer than two points / bad pairs
+        assert!(clean_graph(&serde_json::json!([[0.0, 0.0]])).is_none());
+        assert!(clean_graph(&serde_json::json!([[0.0, 0.0], [1.0]])).is_none());
+        assert!(clean_graph(&serde_json::json!("nope")).is_none());
+    }
+
+    #[test]
+    fn graph_fn_interpolates_and_clamps_at_the_ends() {
+        let tm = Tumour {
+            graphs: BTreeMap::from([(
+                "size".to_string(),
+                graph(&[(0.0, 0.5), (0.5, 2.0), (1.0, 1.0)]),
+            )]),
+            ..Tumour::default()
+        };
+        let g = graph_fn(&tm, "size", 2.0).expect("graph");
+        assert!((g.eval(0.0) - 0.5).abs() < 1e-12);
+        assert!((g.eval(0.5) - 1.25).abs() < 1e-12);
+        assert!((g.eval(1.0) - 2.0).abs() < 1e-12);
+        // outside the graph: the end values
+        assert!((g.eval(-3.0) - 0.5).abs() < 1e-12);
+        assert!((g.eval(9.0) - 1.0).abs() < 1e-12);
+        assert!(graph_fn(&tm, "rot", 2.0).is_none());
+    }
+
+    #[test]
+    fn sub_graph_keeps_the_values_at_the_cut() {
+        let g = graph(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+        let part = sub_graph(&g, 0.25, 0.75);
+        assert_eq!(part[0], [0.0, 1.0]);
+        assert_eq!(part[1], [0.5, 2.0]);
+        assert_eq!(part[2], [1.0, 1.5]);
+    }
+
+    #[test]
+    fn graph_starts_stretch_the_count_for_fit() {
+        let dg = GraphFn {
+            u: vec![0.0, 1.0],
+            f: vec![1.0, 1.0],
+        };
+        let (starts, stretch) = graph_starts(&dg, 0.0, 2.0, 0.75, false, false);
+        // 1 / 0.75 per unit over 2 units: floor(2 / 0.75 + 1e-3) + 1 = 3 marks
+        assert_eq!(starts.len(), 3);
+        assert!((starts[0] - 0.0).abs() < 1e-9);
+        assert!((starts[1] - 0.75).abs() < 1e-6);
+        assert!((starts[2] - 1.5).abs() < 1e-6);
+        assert!((stretch - 1.0).abs() < 1e-12);
+        let (starts, stretch) = graph_starts(&dg, 0.0, 2.0, 0.9, true, false);
+        assert_eq!(starts.len(), 3); // n = 2 steps, so 3 marks
+        assert!((starts[2] - 2.0).abs() < 1e-9);
+        assert!((stretch - 2.0 / 0.9 / 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn split_tumour_keeps_the_bumps_where_they_were() {
+        let tm = Tumour {
+            fit: true,
+            dist: 1.0,
+            length: 0.5,
+            k: 1.0,
+            ..Tumour::default()
+        };
+        let path = vec![[0.0, 60.0], [4.0, 60.0]];
+        let left = vec![[0.0, 60.0], [2.0, 60.0]];
+        let right = vec![[2.0, 60.0], [4.0, 60.0]];
+        let (l, r) = split_tumour(&tm, &left, &right);
+        let (l, r) = (l.expect("left"), r.expect("right"));
+        assert!(!l.fit && !r.fit);
+        assert!(l.on && r.on);
+        assert!((l.dist - 1.0).abs() < 1e-12);
+        assert!((r.dist - 1.0).abs() < 1e-12);
+        assert!((l.start - 0.0).abs() < 1e-12 && (l.end - 1.0).abs() < 1e-12);
+        assert!((r.start - 0.0).abs() < 1e-12 && (r.end - 1.0).abs() < 1e-12);
+        // Splitting a full line at its middle: each half's bumps are where the whole line's were.
+        let whole = tumour_path(&path, &tm);
+        let half = |p: &[Pt], t: &Tumour| tumour_path(p, t);
+        for x in [0.0, 1.0, 2.0] {
+            assert!(
+                half(&left, &l).iter().any(|p| (p[0] - x).abs() < 1e-9),
+                "left half should keep the bump at {x}"
+            );
+        }
+        for x in [2.0, 3.0, 4.0] {
+            assert!(
+                half(&right, &r).iter().any(|p| (p[0] - x).abs() < 1e-9),
+                "right half should keep the bump at {x}"
+            );
+        }
+        let bumps: Vec<f64> = whole
+            .iter()
+            .filter(|p| p[1].abs() > 1e-9)
+            .map(|p| p[0])
+            .collect();
+        assert!(!bumps.is_empty());
+    }
+
+    #[test]
+    fn split_tumour_slices_graphs() {
+        let tm = Tumour {
+            graphs: BTreeMap::from([(
+                "size".to_string(),
+                graph(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]),
+            )]),
+            fit: true,
+            k: 1.0,
+            ..Tumour::default()
+        };
+        let left = vec![[0.0, 60.0], [2.0, 60.0]];
+        let right = vec![[2.0, 60.0], [4.0, 60.0]];
+        let (l, r) = split_tumour(&tm, &left, &right);
+        let l = l.expect("left");
+        let r = r.expect("right");
+        let lg = l.graphs.get("size").expect("left graph");
+        assert_eq!(lg[0], [0.0, 0.0]);
+        assert_eq!(lg[lg.len() - 1], [1.0, 2.0]);
+        let rg = r.graphs.get("size").expect("right graph");
+        assert_eq!(rg[0], [0.0, 2.0]);
+        assert_eq!(rg[rg.len() - 1], [1.0, 1.0]);
+    }
+
+    #[test]
+    fn slant_narrows_the_square_top() {
+        let sq = template(TumourShape::Square, 1.0, 2.0, 1.0);
+        assert_eq!(sq[1], [0.5, 2.0]);
+        assert_eq!(sq[2], [0.5, 2.0]);
+        let sq = template(TumourShape::Square, 1.0, 2.0, -0.5);
+        assert_eq!(sq[1], [-0.25, 2.0]);
+        assert_eq!(sq[2], [1.25, 2.0]);
+    }
 }

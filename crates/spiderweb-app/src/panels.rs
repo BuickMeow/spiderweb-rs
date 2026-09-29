@@ -5,7 +5,7 @@ use eframe::egui;
 use spiderweb_core::funnel::{self, CURVE_PRESETS, FunnelSettings};
 use spiderweb_core::shape::{
     Align, Ends, Fill, FunnelCurve, FunnelFill, GateChange, GateFollow, Kind, Stroke, TextAlign,
-    TextSettings, TextUnit, Tumour, TumourShape, TumourSide, TumourWrap, WallMode,
+    TextSettings, TextUnit, Tumour, WallMode,
 };
 use spiderweb_core::smooth::clean_level;
 use spiderweb_core::text::{self, TextChange};
@@ -86,134 +86,12 @@ enum FreeTarget {
     Stroke(usize, usize),
 }
 
-/// 肿瘤设置的一次改动：按字段单独写回，多选时各形状的其它设置不动
-/// （原版 set_tumour 只设一个键）。字段名用来给同一手势的连续改动分组撤销。
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum TumourChange {
-    On(bool),
-    Shape(TumourShape),
-    Size(f64),
-    Length(f64),
-    Dist(f64),
-    Ease(f64),
-    Side(TumourSide),
-    Wrap(TumourWrap),
-    Start(f64),
-    End(f64),
-    Fit(bool),
-    Mirror(bool),
-    Seed(i64),
-}
-
-impl TumourChange {
-    fn key(self) -> &'static str {
-        match self {
-            TumourChange::On(_) => "on",
-            TumourChange::Shape(_) => "shape",
-            TumourChange::Size(_) => "size",
-            TumourChange::Length(_) => "length",
-            TumourChange::Dist(_) => "dist",
-            TumourChange::Ease(_) => "ease",
-            TumourChange::Side(_) => "side",
-            TumourChange::Wrap(_) => "wrap",
-            TumourChange::Start(_) => "start",
-            TumourChange::End(_) => "end",
-            TumourChange::Fit(_) => "fit",
-            TumourChange::Mirror(_) => "mirror",
-            TumourChange::Seed(_) => "seed",
-        }
-    }
-
-    fn apply(self, tm: &mut Tumour) {
-        match self {
-            TumourChange::On(v) => tm.on = v,
-            TumourChange::Shape(v) => tm.shape = v,
-            TumourChange::Size(v) => tm.size = v,
-            TumourChange::Length(v) => tm.length = v,
-            TumourChange::Dist(v) => tm.dist = v,
-            TumourChange::Ease(v) => tm.ease = v,
-            TumourChange::Side(v) => tm.side = v,
-            TumourChange::Wrap(v) => tm.wrap = v,
-            TumourChange::Start(v) => tm.start = v,
-            TumourChange::End(v) => tm.end = v,
-            TumourChange::Fit(v) => tm.fit = v,
-            TumourChange::Mirror(v) => tm.mirror = v,
-            TumourChange::Seed(v) => tm.seed = v,
-        }
-    }
-}
-
 /// 能带肿瘤的形状（原版 LINE_KINDS）。
 fn tumour_kind(kind: Kind) -> bool {
     matches!(
         kind,
         Kind::Line | Kind::Poly | Kind::Free | Kind::Curve | Kind::Arc
     )
-}
-
-fn tumour_shape_name(s: TumourShape) -> String {
-    match s {
-        TumourShape::Triangle => rust_i18n::t!("tool.triangle"),
-        TumourShape::Square => rust_i18n::t!("tool.square"),
-        TumourShape::Circle => rust_i18n::t!("tool.circle"),
-        TumourShape::Parabola => rust_i18n::t!("panel.tumour.parabola"),
-    }
-    .to_string()
-}
-
-fn tumour_side_name(s: TumourSide) -> String {
-    match s {
-        TumourSide::Alt => rust_i18n::t!("panel.tumour.side_alt"),
-        TumourSide::Left => rust_i18n::t!("panel.tumour.side_left"),
-        TumourSide::Right => rust_i18n::t!("panel.tumour.side_right"),
-        TumourSide::Random => rust_i18n::t!("panel.tumour.side_random"),
-    }
-    .to_string()
-}
-
-fn tumour_wrap_name(w: TumourWrap) -> String {
-    match w {
-        TumourWrap::Simple => rust_i18n::t!("panel.tumour.wrap_straight"),
-        TumourWrap::Wrap => rust_i18n::t!("panel.tumour.wrap_bent"),
-    }
-    .to_string()
-}
-
-/// 一行肿瘤数字框；改了就把（新值, 是不是新一次拖动）记进 `changes`。
-fn tumour_num_row(
-    ui: &mut egui::Ui,
-    row: NumberRow,
-    make: impl Fn(f64) -> TumourChange,
-    changes: &mut Vec<(TumourChange, bool)>,
-    fresh: &mut bool,
-) {
-    ui.horizontal(|ui| {
-        ui.label(row.label);
-        let mut v = row.value;
-        let resp = ui.add(
-            egui::DragValue::new(&mut v)
-                .speed(row.speed)
-                .range(row.range)
-                .max_decimals(3),
-        );
-        *fresh |= resp.drag_started();
-        if resp.changed() {
-            changes.push((make(v), *fresh));
-        }
-        if !row.unit.is_empty() {
-            ui.weak(row.unit);
-        }
-    });
-}
-
-/// "New random" 的种子：1..10^9（原版 random.randrange(1, 10**9)）。
-fn random_seed() -> i64 {
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(1);
-    let mut rnd = spiderweb_core::pyrandom::PyRandom::new(t);
-    rnd.randbelow(999_999_999) as i64 + 1
 }
 
 /// 主题的 tip 文案（工具栏按钮的悬浮提示；找不到就是空）。
@@ -500,7 +378,7 @@ impl App {
     // ------------------------------------------------------------ 肿瘤
 
     /// 当前屏幕比例：几个 beat 对应一个 key（原版 `roll.sy / roll.sx`，兜底 0.25）。
-    fn tumour_k(&self) -> f64 {
+    pub(crate) fn tumour_k(&self) -> f64 {
         if self.view.sx != 0.0 {
             self.view.sy / self.view.sx
         } else {
@@ -509,7 +387,7 @@ impl App {
     }
 
     /// 面板要改的肿瘤形状：选中的 line / poly / free / curve / arc（原版 tumour_targets）。
-    fn tumour_targets(&self) -> Vec<usize> {
+    pub(crate) fn tumour_targets(&self) -> Vec<usize> {
         self.sels
             .iter()
             .copied()
@@ -522,291 +400,64 @@ impl App {
             .collect()
     }
 
-    /// 肿瘤面板（原版 panel_tumour）：开关 / 形状 / 尺寸 / 长度 / 间距 / 方向 / 跟随 / 范围 /
-    /// 缓入 / 适配 / 种子 / 镜像。没选形状时改的是新形状默认设置（`Shape.tumour`）。
+    /// The side panel's tumour line (upstream panel_tumour): a short summary and a button that
+    /// opens the tumour window (tumour_window.rs), where the settings are.
     fn tumour_section(&mut self, ui: &mut egui::Ui) {
         let targets = self.tumour_targets();
-        if targets.is_empty() && !self.sels.is_empty() {
-            return; // 选中的都不能带肿瘤
-        }
-        if targets.is_empty() && !self.line_tool() {
-            return; // 没选东西：只有画线类工具下才给新形状调肿瘤
-        }
-        let placed = !targets.is_empty();
-        let current = if placed {
-            self.shapes[targets[0]].tumour.clone()
-        } else {
-            self.defaults.tumour.clone()
-        }
-        .unwrap_or(Tumour {
-            on: false, // 还没有肿瘤：原版 `get("tumour") or {"on": False}`（其余用默认值）
-            ..Tumour::default()
-        });
-        let ppq = self.ppq.max(1) as f64;
-        let on = current.on;
-        let shape = current.shape;
-        let side = current.side;
-        let wrap = current.wrap;
-        let fit = current.fit;
-        let mirror = current.mirror;
-        let size = current.size;
-        let length = (current.length * ppq).round();
-        let dist = (current.dist * ppq).round();
-        let ease = (current.ease * ppq).round();
-        let start = (current.start * 100.0 * 1000.0).round() / 1000.0;
-        let end = (current.end * 100.0 * 1000.0).round() / 1000.0;
-        let mut seed = current.seed;
-        let mut changes: Vec<(TumourChange, bool)> = Vec::new();
-        // 这一帧有没有数字框 / 滑块刚刚开始拖（新的一次手势 = 新的一步撤销）
-        let mut fresh = false;
-        let mut reroll = false;
-        egui::CollapsingHeader::new(rust_i18n::t!("panel.tumour.title"))
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    let mut on_edit = on;
-                    if ui
-                        .checkbox(&mut on_edit, rust_i18n::t!("panel.tumour.on"))
-                        .changed()
-                    {
-                        changes.push((TumourChange::On(on_edit), true));
-                    }
-                    ui.label(rust_i18n::t!("panel.tumour.shape"));
-                    let mut shape_edit = shape;
-                    egui::ComboBox::from_id_salt("tumour_shape")
-                        .selected_text(tumour_shape_name(shape_edit))
-                        .width(90.0)
-                        .show_ui(ui, |ui| {
-                            for s in [
-                                TumourShape::Triangle,
-                                TumourShape::Square,
-                                TumourShape::Circle,
-                                TumourShape::Parabola,
-                            ] {
-                                if ui
-                                    .selectable_label(shape_edit == s, tumour_shape_name(s))
-                                    .clicked()
-                                {
-                                    shape_edit = s;
-                                }
-                            }
-                        });
-                    if shape_edit != shape {
-                        changes.push((TumourChange::Shape(shape_edit), true));
-                    }
-                });
-                tumour_num_row(
-                    ui,
-                    NumberRow {
-                        label: rust_i18n::t!("panel.tumour.size").to_string(),
-                        unit: rust_i18n::t!("unit.keys").to_string(),
-                        value: size,
-                        range: 0.0..=1000.0,
-                        speed: 0.1,
-                    },
-                    TumourChange::Size,
-                    &mut changes,
-                    &mut fresh,
-                );
-                tumour_num_row(
-                    ui,
-                    NumberRow {
-                        label: rust_i18n::t!("panel.tumour.length").to_string(),
-                        unit: rust_i18n::t!("unit.ticks").to_string(),
-                        value: length,
-                        range: 0.0..=10_000_000.0,
-                        speed: 1.0,
-                    },
-                    |v| TumourChange::Length(v / ppq),
-                    &mut changes,
-                    &mut fresh,
-                );
-                tumour_num_row(
-                    ui,
-                    NumberRow {
-                        label: rust_i18n::t!("panel.tumour.distance").to_string(),
-                        unit: rust_i18n::t!("unit.ticks").to_string(),
-                        value: dist,
-                        range: 1.0..=10_000_000.0,
-                        speed: 1.0,
-                    },
-                    |v| TumourChange::Dist(v / ppq),
-                    &mut changes,
-                    &mut fresh,
-                );
-                tumour_num_row(
-                    ui,
-                    NumberRow {
-                        label: rust_i18n::t!("panel.tumour.lead_in").to_string(),
-                        unit: rust_i18n::t!("unit.ticks").to_string(),
-                        value: ease,
-                        range: 0.0..=10_000_000.0,
-                        speed: 1.0,
-                    },
-                    |v| TumourChange::Ease(v / ppq),
-                    &mut changes,
-                    &mut fresh,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(rust_i18n::t!("panel.tumour.side"));
-                    let mut side_edit = side;
-                    egui::ComboBox::from_id_salt("tumour_side")
-                        .selected_text(tumour_side_name(side_edit))
-                        .width(105.0)
-                        .show_ui(ui, |ui| {
-                            for s in [
-                                TumourSide::Alt,
-                                TumourSide::Left,
-                                TumourSide::Right,
-                                TumourSide::Random,
-                            ] {
-                                if ui
-                                    .selectable_label(side_edit == s, tumour_side_name(s))
-                                    .clicked()
-                                {
-                                    side_edit = s;
-                                }
-                            }
-                        });
-                    if side_edit != side {
-                        changes.push((TumourChange::Side(side_edit), true));
-                    }
-                    ui.label(rust_i18n::t!("panel.tumour.wrap"));
-                    let mut wrap_edit = wrap;
-                    egui::ComboBox::from_id_salt("tumour_wrap")
-                        .selected_text(tumour_wrap_name(wrap_edit))
-                        .width(130.0)
-                        .show_ui(ui, |ui| {
-                            for w in [TumourWrap::Simple, TumourWrap::Wrap] {
-                                if ui
-                                    .selectable_label(wrap_edit == w, tumour_wrap_name(w))
-                                    .clicked()
-                                {
-                                    wrap_edit = w;
-                                }
-                            }
-                        });
-                    if wrap_edit != wrap {
-                        changes.push((TumourChange::Wrap(wrap_edit), true));
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(rust_i18n::t!("panel.tumour.range"));
-                    let mut start_edit = start;
-                    let resp = ui.add(
-                        egui::DragValue::new(&mut start_edit)
-                            .speed(1.0)
-                            .range(0.0..=100.0)
-                            .max_decimals(3),
-                    );
-                    fresh |= resp.drag_started();
-                    if resp.changed() {
-                        changes.push((TumourChange::Start(start_edit / 100.0), fresh));
-                    }
-                    ui.label(rust_i18n::t!("panel.tumour.pct_to"));
-                    let mut end_edit = end;
-                    let resp = ui.add(
-                        egui::DragValue::new(&mut end_edit)
-                            .speed(1.0)
-                            .range(0.0..=100.0)
-                            .max_decimals(3),
-                    );
-                    fresh |= resp.drag_started();
-                    if resp.changed() {
-                        changes.push((TumourChange::End(end_edit / 100.0), fresh));
-                    }
-                    ui.label(rust_i18n::t!("panel.tumour.pct"));
-                    let mut fit_edit = fit;
-                    if ui
-                        .checkbox(&mut fit_edit, rust_i18n::t!("panel.tumour.fit"))
-                        .changed()
-                    {
-                        changes.push((TumourChange::Fit(fit_edit), true));
-                    }
-                    // "New random" 只在方向是 Random 且开着时能按（原版 reroll 按钮）
-                    let can_reroll = on && side == TumourSide::Random;
-                    if ui
-                        .add_enabled(
-                            can_reroll,
-                            egui::Button::new(rust_i18n::t!("panel.tumour.new_random")),
-                        )
-                        .on_hover_text(rust_i18n::t!("panel.tumour.reroll_tip"))
-                        .clicked()
-                    {
-                        reroll = true;
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(rust_i18n::t!("panel.tumour.seed"));
-                    let resp = ui.add(
-                        egui::DragValue::new(&mut seed)
-                            .speed(1.0)
-                            .range(0..=999_999_999),
-                    );
-                    fresh |= resp.drag_started();
-                    if resp.changed() {
-                        changes.push((TumourChange::Seed(seed), fresh));
-                    }
-                    let mut mirror_edit = mirror;
-                    if ui
-                        .checkbox(&mut mirror_edit, rust_i18n::t!("panel.tumour.mirror"))
-                        .changed()
-                    {
-                        changes.push((TumourChange::Mirror(mirror_edit), true));
-                    }
-                });
-                let info = if !on {
-                    rust_i18n::t!("panel.tumour.info_off").to_string()
-                } else if placed {
-                    rust_i18n::t!("panel.tumour.info_on").to_string()
-                } else {
-                    String::new()
-                };
-                ui.label(egui::RichText::new(info).weak().size(10.0));
-            });
-        for (change, fresh) in changes {
-            self.apply_tumour_setting(change, &targets, fresh);
-        }
-        if reroll {
-            let seed = random_seed();
-            self.apply_tumour_setting(TumourChange::Seed(seed), &targets, true);
-        }
-    }
-
-    fn line_tool(&self) -> bool {
-        matches!(
-            self.tool,
-            Tool::Line | Tool::Poly | Tool::Free | Tool::Curve | Tool::Arc
-        )
-    }
-
-    /// 改一个肿瘤设置：有目标就写进各形状的 `tumour`（没有就建一个），
-    /// 没目标就写进新形状默认设置。一次手势（同一个设置连续改）只压一次撤销步。
-    fn apply_tumour_setting(&mut self, change: TumourChange, targets: &[usize], fresh: bool) {
-        let k = self.tumour_k();
         if targets.is_empty() {
-            let tm = self.defaults.tumour.get_or_insert_with(Tumour::default);
-            change.apply(tm);
-            tm.k = k;
-            self.schedule_autosave();
-            return;
+            return; // nothing selected that can have tumours: the row isn't shown
         }
-        if fresh {
-            self.edit_key = None; // 新一次拖动 / 点击 = 新的一步撤销
-        }
-        let key = format!("tumour:{}:{:?}", change.key(), self.sels);
-        if self.edit_key.as_deref() != Some(key.as_str()) {
-            self.push_undo();
-            self.edit_key = Some(key);
-        }
-        for &i in targets {
-            if let Some(sh) = self.shapes.get_mut(i) {
-                let tm = sh.tumour.get_or_insert_with(Tumour::default);
-                change.apply(tm);
-                tm.k = k; // 尺寸按现在的卷帘样子算（原版 set_tumour）
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button(rust_i18n::t!("panel_tumour.tumours"))
+                .on_hover_text(rust_i18n::t!("panel_tumour.bumps_along_the_line_opens_the"))
+                .clicked()
+            {
+                crate::tumour_window::open_tumour_window(self);
             }
+            ui.label(egui::RichText::new(self.tumour_summary()).weak());
+        });
+    }
+
+    /// The summary line next to the button (upstream sync_tumour_summary).
+    fn tumour_summary(&self) -> String {
+        let tgts = self.tumour_targets();
+        if tgts.is_empty() {
+            return String::new();
         }
-        self.shapes_changed();
+        if tgts
+            .iter()
+            .any(|&i| self.shapes.get(i).is_some_and(|s| !s.tumours.is_empty()))
+        {
+            return rust_i18n::t!("panel_tumour.each_joined_shape_has_its_own").to_string();
+        }
+        let on: Vec<&Tumour> = tgts
+            .iter()
+            .filter_map(|&i| spiderweb_core::joined::shown_tumour(&self.shapes[i]))
+            .filter(|t| t.on)
+            .collect();
+        if on.is_empty() {
+            return rust_i18n::t!("panel_tumour.no_tumours").to_string();
+        }
+        if tgts.len() > 1 {
+            return rust_i18n::t!(
+                "panel_tumour.tumours_on_of",
+                n = on.len().to_string(),
+                n2 = tgts.len().to_string()
+            )
+            .to_string();
+        }
+        let tm = on[0];
+        let mut text = rust_i18n::t!(
+            "panel_tumour.keys",
+            dict = crate::tumour_window::tumour_shape_name(tm.shape),
+            size = spiderweb_io::mathexpr::fmt((tm.size * 100.0).round() / 100.0)
+        )
+        .to_string();
+        if !tm.graphs.is_empty() {
+            text.push_str(&rust_i18n::t!("panel_tumour.with_graphs"));
+        }
+        text
     }
 
     // ------------------------------------------------------------ 自定义形状面板

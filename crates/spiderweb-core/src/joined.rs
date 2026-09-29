@@ -78,13 +78,17 @@ pub fn reversed_bezier(pts: &[Pt], sharp: &[usize]) -> (Vec<Pt>, Vec<usize>) {
 }
 
 /// Tumour settings for the line run the other way round: same bumps (sides, range and graphs turned round)
-/// (Python `reversed_tumour`; graph entries aren't in [`Tumour`] yet).
+/// (Python `reversed_tumour`).
 pub fn reversed_tumour(tm: &Tumour) -> Tumour {
     let mut out = tm.clone();
     out.mirror = !out.mirror;
     let (s, e) = (out.start, out.end);
     out.start = 1.0 - e;
     out.end = 1.0 - s;
+    for g in out.graphs.values_mut() {
+        let reversed: Vec<Pt> = g.iter().rev().map(|p| [1.0 - p[0], p[1]]).collect();
+        *g = reversed;
+    }
     out
 }
 

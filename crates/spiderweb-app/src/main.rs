@@ -28,6 +28,7 @@ mod roll_velocity;
 #[cfg(test)]
 mod test_support;
 mod text_dialog;
+mod tumour_window;
 
 fn main() {
     // 目前只有英语一种文案（原版即英语）；以后加语言时在这里换成系统语言

@@ -1,5 +1,7 @@
 //! 数据模型：形状（Shape）及其各类型的专属设置，对应 Python 版形状字典。
 
+use std::collections::BTreeMap;
+
 use crate::Pt;
 
 /// 形状种类（Python 的 sh["kind"]）。
@@ -165,6 +167,15 @@ pub struct Tumour {
     pub start: f64,
     pub end: f64,
     pub ease: f64,
+    /// Each bump tilts by this many degrees, its feet staying on the line
+    /// (1.2.0 tumour.py "rot", positive leaning forward).
+    pub rot: f64,
+    /// The square's top is narrowed by this much of its length (1.2.0 tumour.py "slant";
+    /// -1..1, square only).
+    pub slant: f64,
+    /// Graphs that make a setting change along the line: setting name -> [[u, f], ...]
+    /// (1.2.0 tumour.py "graphs"; only keys in [`crate::tumour::GRAPH_KEYS`]).
+    pub graphs: BTreeMap<String, Vec<Pt>>,
     pub fit: bool,
     pub seed: i64,
     pub mirror: bool,
@@ -184,6 +195,9 @@ impl Default for Tumour {
             start: 0.0,
             end: 1.0,
             ease: 0.0,
+            rot: 0.0,
+            slant: 0.0,
+            graphs: BTreeMap::new(),
             fit: false,
             seed: 1,
             mirror: false,

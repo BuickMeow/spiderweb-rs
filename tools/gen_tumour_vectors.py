@@ -112,22 +112,68 @@ def gen():
     add_clean({"start": [0.5], "end": {"a": 1}})
     add_clean({"k": "1e-3", "ease": " 0.5 "})
 
-    # ---- template ----
-    for shape, length, size in [
-        ("triangle", 0.5, 2.0),
-        ("triangle", 0.125, -3.0),
-        ("triangle", 0.0, 2.0),
-        ("square", 0.5, 2.0),
-        ("square", 0.25, 0.0),
-        ("parabola", 0.5, 2.0),
-        ("parabola", 0.25, 0.0),
-        ("parabola", 0.1, -1.5),
-        ("circle", 0.5, 2.0),
-        ("circle", 0.5, 0.0),
-        ("circle", 0.1, 5.0),
-        ("circle", 0.5, -2.0),
+    # ---- clean_tumour: rot / slant (1.2.0) ----
+    add_clean({"rot": 45, "slant": -0.3})
+    add_clean({"rot": -181, "slant": 5})
+    add_clean({"rot": 181, "slant": -5})
+    add_clean({"rot": "45.5", "slant": "0.25"})
+    add_clean({"rot": None, "slant": None})
+    add_clean({"rot": "abc", "slant": [1]})
+    add_clean({"rot": "nan", "slant": "inf"})
+
+    # ---- clean_graph ----
+    for raw in [
+        None,
+        [],
+        [[0, 1]],
+        [[0, 1], [1, 1]],
+        [[0, 0.5], [1, 2]],
+        [[0, 0.5], [0.5, 2], [1, 0.5]],
+        [[2, 0.5], [1, 2]],
+        [[0, 100], [1, -100]],
+        [[0, "x"], [1, 1]],
+        [[0, 1], ["a", 2]],
+        [[0, 1], None],
+        [[0, 1], [1]],
+        [[0, "nan"], [1, 2]],
+        [["a", 1], [1, 2]],
+        "abc",
+        {"a": 1},
+        [0, 1],
+        [[0, 0.5], [0.25, 2], [0.75, 0.5], [1, 2], [1, 3]],
     ]:
-        add("template", [shape, length, size], T.template(shape, length, size))
+        add("clean_graph", [raw], T.clean_graph(raw))
+
+    # ---- graphs in clean_tumour ----
+    add_clean({"graphs": 5})
+    add_clean({"graphs": []})
+    add_clean({"graphs": {"size": [[0, 1], [1, 1]]}})
+    add_clean({"graphs": {"size": "x"}})
+    add_clean({"graphs": {"bogus": [[0, 2], [1, 2]]}})
+    add_clean({"graphs": {"size": [[0, 0.5], [1, 2]], "bogus": [[0, 2], [1, 2]], "dist": [[0, 1], [0.5, 3], [1, 1]]}})
+    add_clean({"size": 4.0, "graphs": {"size": [[0, 0], [1, 3]], "rot": [[0, -1], [1, 1]]}})
+
+    # ---- template (1.2.0: slant) ----
+    for shape, length, size, slant in [
+        ("triangle", 0.5, 2.0, 0.0),
+        ("triangle", 0.125, -3.0, 0.0),
+        ("triangle", 0.0, 2.0, 0.0),
+        ("triangle", 0.5, 2.0, 0.75),
+        ("square", 0.5, 2.0, 0.0),
+        ("square", 0.25, 0.0, 0.0),
+        ("square", 0.5, 2.0, 0.5),
+        ("square", 0.5, 2.0, -1.0),
+        ("square", 0.5, 2.0, 1.0),
+        ("square", 0.25, -3.0, 0.3),
+        ("parabola", 0.5, 2.0, 0.0),
+        ("parabola", 0.25, 0.0, 0.0),
+        ("parabola", 0.1, -1.5, 0.5),
+        ("circle", 0.5, 2.0, 0.0),
+        ("circle", 0.5, 0.0, 0.0),
+        ("circle", 0.1, 5.0, 0.5),
+        ("circle", 0.5, -2.0, 0.0),
+    ]:
+        add("template", [shape, length, size, slant], T.template(shape, length, size, slant))
 
     # ---- cut ----
     tri = T.template("triangle", 0.5, 2.0)
@@ -158,6 +204,43 @@ def gen():
         (folded, [0.45, 0.25]),
     ]:
         add("subdivide", [bump, xs], T.subdivide(bump, xs))
+
+    # ---- sub_graph (1.2.0) ----
+    for g, a, b in [
+        ([[0.0, 1.0], [1.0, 1.0]], 0.0, 1.0),
+        ([[0.0, 0.5], [0.5, 2.0], [1.0, 0.5]], 0.0, 0.5),
+        ([[0.0, 0.5], [0.5, 2.0], [1.0, 0.5]], 0.5, 1.0),
+        ([[0.0, 0.5], [0.5, 2.0], [1.0, 0.5]], 0.25, 0.75),
+        ([[0.0, 0.5], [1.0, 2.0]], 0.3, 0.9),
+        ([[0.0, 2.0], [0.5, 0.0], [1.0, 2.0]], 0.1, 0.4),
+    ]:
+        add("sub_graph", [g, a, b], T.sub_graph(g, a, b))
+
+    # ---- graph_fn / graph_starts (1.2.0) ----
+    for raw, key, total, ds in [
+        ({"graphs": {"size": [[0, 0.5], [1, 2.0]]}}, "size", 2.0, [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0]),
+        ({"graphs": {"size": [[0, 0.5], [0.5, 2.0], [1, 0.5]]}}, "size", 1.0, [0.0, 0.1, 0.5, 0.9, 1.0]),
+        ({"graphs": {"size": [[0, 3.0], [1, 0.0]]}}, "size", 4.0, [-1.0, 0.0, 2.0, 4.0, 5.0]),
+        ({}, "size", 1.0, [0.5]),
+        ({"graphs": {"dist": [[0, 2.0], [1, 0.5]]}}, "dist", 1.0, [0.0, 0.3, 0.7, 1.0]),
+    ]:
+        cleaned = T.clean_tumour(raw)
+        dg = T.graph_fn(cleaned, key, total)
+        add("graph_fn", [raw, key, total, ds], None if dg is None else [float(dg(d)) for d in ds])
+
+    for raw, lo, hi, dist, fit, even in [
+        ({"graphs": {"dist": [[0, 0.5], [1, 1.5]]}}, 0.0, 1.0, 0.125, False, False),
+        ({"graphs": {"dist": [[0, 2.0], [1, 0.5]]}}, 0.0, 1.0, 0.1, False, False),
+        ({"graphs": {"dist": [[0, 2.0], [1, 0.5]]}}, 0.0, 1.0, 0.1, True, False),
+        ({"graphs": {"dist": [[0, 0.5], [0.5, 2.0], [1, 1.0]]}}, 0.0, 1.0, 0.15, False, True),
+        ({"graphs": {"dist": [[0, 0.5], [0.5, 2.0], [1, 1.0]]}}, 0.25, 0.75, 0.05, True, False),
+        ({"graphs": {"dist": [[0, 3.0], [1, 0.25]]}}, 0.0, 1.0, 0.4, True, True),
+        ({"graphs": {"dist": [[0, 1.5], [1, 0.5]]}}, 0.5, 0.5, 0.1, False, False),
+        ({"graphs": {"dist": [[0, 10.0], [1, 0.1]]}}, 0.0, 1.0, 0.01, False, False),
+    ]:
+        cleaned = T.clean_tumour(raw)
+        dg = T.graph_fn(cleaned, "dist", 1.0)
+        add("graph_starts", [raw, lo, hi, dist, fit, even], T.graph_starts(dg, lo, hi, dist, fit, even))
 
     # ---- tumour_path：4 shape × 4 side（random 用不同 seed）× 2 wrap ----
     for shape in ["triangle", "square", "circle", "parabola"]:
@@ -270,6 +353,65 @@ def gen():
     add_tp(POLY, tm(shape="triangle", side="alt", dist=0.2, length=0.1, wrap="wrap"))
     add_tp(LINE, tm(shape="triangle", side="alt", dist=0.0625, length=0.0625))
 
+    # ---- rot / slant (1.2.0) ----
+    for rot in [45.0, 90.0, 180.0, -30.0, -180.0, 179.9]:
+        add_tp(LINE, tm(shape="triangle", side="alt", rot=rot))
+    add_tp(LINE, tm(shape="square", side="alt", rot=45.0))
+    add_tp(LINE, tm(shape="circle", side="left", wrap="wrap", rot=30.0))
+    add_tp(POLY, tm(shape="triangle", side="random", wrap="simple", rot=-60.0, seed=3))
+    add_tp(CIRCLE, tm(shape="triangle", side="alt", wrap="wrap", rot=90.0, fit=True))
+    add_tp(LINE, tm(shape="triangle", side="alt", length=0.0, rot=45.0))
+    add_tp(LINE, tm(shape="square", side="alt", length=0.0, rot=120.0))
+    add_tp(LINE, tm(shape="square", side="alt", slant=0.5))
+    add_tp(LINE, tm(shape="square", side="alt", slant=-1.0))
+    add_tp(LINE, tm(shape="square", side="alt", slant=1.0, rot=45.0))
+    add_tp(POLY, tm(shape="square", side="right", wrap="wrap", slant=0.25))
+    add_tp(LINE, tm(shape="triangle", side="alt", slant=0.5))
+
+    # ---- graphs in tumour_path (1.2.0) ----
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"size": [[0, 0.0], [1, 2.0]]}))
+    add_tp(LINE, tm(shape="circle", side="left", wrap="wrap", graphs={"size": [[0, 0.5], [0.5, 2.0], [1, 0.5]]}))
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"length": [[0, 0.0], [0.5, 1.0], [1, 0.0]]}))
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"rot": [[0, -1.0], [1, 1.0]]}))
+    add_tp(LINE, tm(shape="square", side="alt", graphs={"slant": [[0, 0.0], [1, 1.0]]}))
+    add_tp(LINE, tm(shape="triangle", side="alt", fit=True, graphs={"dist": [[0, 2.0], [1, 0.5]]}))
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"dist": [[0, 0.5], [1, 2.0]]}))
+    add_tp(POLY, tm(shape="triangle", side="alt", wrap="wrap", graphs={"size": [[0, 1.0], [1, 3.0]]}))
+    add_tp(POLY, tm(shape="triangle", side="alt", wrap="wrap", graphs={"dist": [[0, 1.5], [1, 0.5]]}))
+    add_tp(CIRCLE, tm(shape="triangle", side="alt", wrap="wrap", fit=True,
+                      graphs={"size": [[0, 1.0], [1, 2.0]], "rot": [[0, 1.0], [1, -1.0]]}))
+    add_tp(LINE, tm(shape="square", side="alt", rot=30.0,
+                    graphs={"size": [[0, 1.0], [1, 2.0]], "length": [[0, 1.0], [0.5, 0.5], [1, 1.0]],
+                            "rot": [[0, 0.5], [1, 1.5]], "slant": [[0, 0.5], [1, 1.0]],
+                            "dist": [[0, 1.0], [1, 2.0]]}))
+    add_tp(POLY, tm(shape="circle", side="random", wrap="wrap", seed=13, rot=-45.0,
+                    graphs={"size": [[0, 2.0], [1, 0.5]], "length": [[0, 1.0], [1, 0.0]]}))
+    # (a graph that only ever says 100 % is dropped: same as no graph)
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"size": [[0, 1.0], [1, 1.0]]}))
+    # (0 graph value: no size / no length)
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"size": [[0, 0.0], [1, 0.0]]}))
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"length": [[0, 0.0], [1, 0.0]]}))
+    # (negative graph value)
+    add_tp(LINE, tm(shape="triangle", side="alt", graphs={"size": [[0, -1.0], [1, 1.0]]}))
+
+    # ---- split_tumour (1.2.0) ----
+    SPLIT_POLY = [[0.0, 60.0], [0.5, 62.0], [1.0, 60.0], [1.5, 63.0]]
+    for raw, path, cut in [
+        (tm(shape="triangle", side="alt"), SPLIT_POLY, 2),
+        (tm(shape="triangle", side="alt", fit=True, dist=0.3), SPLIT_POLY, 1),
+        (tm(shape="square", side="random", seed=5, wrap="wrap"), SPLIT_POLY, 3),
+        (tm(shape="triangle", side="alt", start=0.1, end=0.9), SPLIT_POLY, 2),
+        (tm(shape="triangle", side="alt", graphs={"size": [[0, 0.5], [1, 2.0]],
+                                                   "dist": [[0, 1.0], [1, 2.0]]}), SPLIT_POLY, 2),
+        (tm(shape="triangle", side="alt", graphs={"rot": [[0, -1.0], [1, 1.0]],
+                                                   "length": [[0, 1.0], [0.5, 0.5], [1, 1.0]]}), SPLIT_POLY, 2),
+        (tm(shape="circle", side="left", wrap="wrap", rot=30.0), CIRCLE, 5),
+        (tm(shape="triangle", side="alt", length=0.0), SPLIT_POLY, 2),
+    ]:
+        cleaned = T.clean_tumour(raw)
+        left, right = path[:cut], path[cut - 1:]
+        add("split_tumour", [cleaned, left, right], list(T.split_tumour(cleaned, left, right)))
+
     # ---- 随机压力：固定种子，形状 / 方向 / 包裹 / 区间 / 缓动 / fit 混着来 ----
     rnd = random.Random(12345)
     shapes = ["triangle", "square", "circle", "parabola"]
@@ -302,7 +444,13 @@ def gen():
             return [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]]
         return [[0.0, 60.0], [rnd.uniform(0.2, 1), 61.0], [0.0, rnd.uniform(60.5, 62)]]
 
-    for _ in range(60):
+    for _ in range(80):
+        graphs = {}
+        if rnd.random() < 0.45:
+            key = rnd.choice(["size", "length", "dist", "rot", "slant"])
+            graphs[key] = [[0.0, rnd.choice([0.5, 1.0, 2.0])],
+                           [round(rnd.uniform(0, 1), 3), rnd.choice([0.0, 0.5, 1.5, 3.0])],
+                           [1.0, rnd.choice([0.5, 1.0, 2.0])]]
         raw = tm(
             shape=rnd.choice(shapes),
             side=rnd.choice(sides),
@@ -313,10 +461,13 @@ def gen():
             start=round(rnd.uniform(0, 1), 3),
             end=round(rnd.uniform(0, 1), 3),
             ease=rnd.choice([0.0, 0.0, 0.05, 0.2, 0.5]),
+            rot=rnd.choice([0.0, 0.0, 30.0, -45.0, 90.0, 180.0]),
+            slant=rnd.choice([0.0, 0.0, 0.5, -1.0]),
             fit=rnd.random() < 0.35,
             seed=rnd.randint(0, 1000),
             mirror=rnd.random() < 0.3,
             k=rnd.choice([0.125, 0.25, 0.5, 1.0, 2.0]),
+            graphs=graphs,
         )
         add_tp(rand_path(), raw)
 

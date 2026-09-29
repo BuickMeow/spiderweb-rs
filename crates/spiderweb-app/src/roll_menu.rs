@@ -18,6 +18,7 @@ pub enum MenuAction {
     EditText,
     DeleteStroke,
     SaveToLibrary,
+    Tumours,
     Join,
     SplitHere,
     TurnIntoLive,
@@ -68,6 +69,8 @@ pub struct MenuTarget {
     pub picked_curve: Option<usize>,
     /// The hit shape is a line kind (it can be cut in two here)
     pub line_kind: bool,
+    /// The selection can carry tumours (the tumour window opens with "Tumours…")
+    pub tumour: bool,
     /// The selected shapes can be joined
     pub can_join: bool,
     /// The selection can be turned into a live shape (no problem at all).
@@ -100,6 +103,7 @@ pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
         picked_stroke: picked,
         picked_curve,
         line_kind: spiderweb_core::joined::LINE_KINDS.contains(&sh.kind),
+        tumour: !app.tumour_targets().is_empty(),
         can_join: app.can_join(),
         live: crate::convert_ui::live_problem(app).is_none(),
         can_split: app.can_split_pieces(sh),
@@ -150,6 +154,13 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
             rust_i18n::t!("menu.save_library"),
             MenuAction::SaveToLibrary,
             false,
+        ));
+    }
+    if t.tumour {
+        out.push(item(
+            rust_i18n::t!("menu.tumours"),
+            MenuAction::Tumours,
+            true,
         ));
     }
     if t.count >= 2 {
@@ -326,6 +337,7 @@ fn apply_action(app: &mut App, action: MenuAction, i: usize, pos: Pos2, shift: b
             }
         }
         MenuAction::SaveToLibrary => {}
+        MenuAction::Tumours => crate::tumour_window::open_tumour_window(app),
         MenuAction::Join => app.join_selected(),
         MenuAction::SplitHere => app.split_here(i, pos),
         MenuAction::TurnIntoLive => crate::convert_ui::turn_into_live(app),
@@ -418,6 +430,7 @@ mod tests {
             picked_stroke: None,
             picked_curve: None,
             line_kind: spiderweb_core::joined::LINE_KINDS.contains(&kind),
+            tumour: spiderweb_core::joined::LINE_KINDS.contains(&kind),
             can_join: false,
             live: false,
             can_split: false,

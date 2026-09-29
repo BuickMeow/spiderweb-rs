@@ -63,18 +63,48 @@ pub fn assert_json_eq(got: &Value, want: &Value, ctx: &str) {
     }
 }
 
+/// The 1.2.0 tumour keys a 1.1.0-generated vector doesn't spell out (they default to 0).
+fn tumour_want(v: &Value) -> Value {
+    let Some(d) = v.as_object() else {
+        return v.clone();
+    };
+    let mut out: Map<String, Value> = d.clone();
+    out.entry("rot").or_insert(Value::from(0.0));
+    out.entry("slant").or_insert(Value::from(0.0));
+    Value::Object(out)
+}
+
 /// 形状对照：Python `clean_shape` 对 free 形状只有文件里有 "smooth" 时才写 smooth/k，
-/// 而 Rust `Shape` 总带着它们；补上默认值再比。
+/// 而 Rust `Shape` 总带着它们；补上默认值再比。肿瘤的 rot / slant 是 1.2.0 新增的，
+/// 由 1.1.0 参考生成的向量里没有（默认 0），同样补上。
 pub fn shape_want(v: &Value) -> Value {
     let Some(d) = v.as_object() else {
         return v.clone();
     };
-    if d.get("kind").and_then(Value::as_str) != Some("free") {
-        return v.clone();
-    }
     let mut out: Map<String, Value> = d.clone();
-    out.entry("smooth").or_insert(Value::from(0));
-    out.entry("k").or_insert(Value::from(1.0));
+    if d.get("kind").and_then(Value::as_str) == Some("free") {
+        out.entry("smooth").or_insert(Value::from(0));
+        out.entry("k").or_insert(Value::from(1.0));
+    }
+    if let Some(tm) = out.get("tumour").cloned() {
+        out.insert("tumour".into(), tumour_want(&tm));
+    }
+    if let Some(Value::Array(list)) = out.get("tumours").cloned() {
+        out.insert(
+            "tumours".into(),
+            Value::Array(
+                list.iter()
+                    .map(|t| {
+                        if t.is_null() {
+                            t.clone()
+                        } else {
+                            tumour_want(t)
+                        }
+                    })
+                    .collect(),
+            ),
+        );
+    }
     Value::Object(out)
 }
 
