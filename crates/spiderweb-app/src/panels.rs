@@ -1722,11 +1722,12 @@ impl App {
                     .get(targets[0])
                     .map(|sh| sh.starts.is_empty())
                     .unwrap_or(false);
-                s += if no_starts {
-                    rust_i18n::t!("panel.funnel.info_no_starts").as_ref()
+                let hint = if no_starts {
+                    rust_i18n::t!("panel.funnel.info_no_starts")
                 } else {
-                    rust_i18n::t!("panel.funnel.info_start_curve").as_ref()
+                    rust_i18n::t!("panel.funnel.info_start_curve")
                 };
+                s += hint.as_ref();
             }
             s
         } else {
