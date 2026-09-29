@@ -1742,8 +1742,10 @@ pub fn unpack_notes(text: &str) -> Result<Vec<[i64; 5]>, NotesError> {
     }
     let cols = if tracks { 5 } else { 4 };
     let values: Vec<i64> = bytes
-        .chunks_exact(4)
-        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c) as i64)
         .collect();
     if !values.len().is_multiple_of(cols) {
         return Err(NotesError::Shape);

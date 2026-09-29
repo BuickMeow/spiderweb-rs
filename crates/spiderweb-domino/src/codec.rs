@@ -281,7 +281,7 @@ pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Op
 
     let mut rows: Vec<[i64; 5]> = Vec::new();
     for (run, tr) in &runs {
-        for rec in run.chunks_exact(NOTE_REC) {
+        for rec in run.as_chunks::<NOTE_REC>().0 {
             rows.push([
                 le32(rec, 12) as i64,
                 le32(rec, 36) as i64,

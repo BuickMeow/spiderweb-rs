@@ -30,6 +30,9 @@ Read this together with [README.md](README.md) and [TESTING.md](TESTING.md).
 
 ## Commands
 
+CI runs the latest stable Rust toolchain; run `rustup update stable` so local
+clippy sees the same lints as CI.
+
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
