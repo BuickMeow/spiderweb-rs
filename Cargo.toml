@@ -6,6 +6,15 @@ members = [
     "crates/spiderweb-io",
     "crates/spiderweb-app",
 ]
+# Without this, `cargo run` cannot choose between spiderweb-app and the
+# dev-only xtask binary. Commands without a package flag use these four;
+# `--workspace` (CI) still includes xtask.
+default-members = [
+    "crates/spiderweb-core",
+    "crates/spiderweb-domino",
+    "crates/spiderweb-io",
+    "crates/spiderweb-app",
+]
 resolver = "2"
 
 [workspace.package]
