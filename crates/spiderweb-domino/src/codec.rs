@@ -60,6 +60,37 @@ const NOTE_REC: usize = 40;
 /// （多余的列是给调用方用的，原版同样忽略）。
 pub type Note6 = [i64; 6];
 
+/// Where copying / pasting starts (the saved values of upstream `DOMINO_STARTS`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DominoStart {
+    /// `"note"`: the first note is at tick 0 (copying drops the empty lead, pasting puts the
+    /// first note on the play line).
+    Note,
+    /// `"bar"`: start at the bar line before the first note, keeping the empty lead (the
+    /// default of upstream `clip_data`).
+    #[default]
+    Bar,
+}
+
+impl DominoStart {
+    /// The saved value used by project files / the dropdown (`"note"` / `"bar"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DominoStart::Note => "note",
+            DominoStart::Bar => "bar",
+        }
+    }
+
+    /// Saved value -> start; None for anything unknown.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "note" => Some(DominoStart::Note),
+            "bar" => Some(DominoStart::Bar),
+            _ => None,
+        }
+    }
+}
+
 /// `clip_data` / `read_notes` 的错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -98,28 +129,46 @@ pub fn item(tag: u16, body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 原版 `clip_data`：音符行 -> 剪贴板字节。
+/// Upstream `clip_data`: note rows -> clipboard bytes.
 ///
-/// 每个有音符的 slot 一轨（按 slot 升序，轨内按 (tick, key) 稳定排序），复制范围从首个
-/// 音符之前的小节线到最后一个音符结束之后的小节线（至少 1 小节）。`ppq` 以 u16 写入，
-/// 原版 `struct.pack("<H", ppq)` 在超出 `0..=65535` 时会抛错，这里由参数类型保证。
-/// `notes` 为空或 `bar <= 0` 时返回错误（原版分别报 numpy / 除零错误）。
-pub fn clip_data(notes: &[Note6], ppq: u16, bar: i64) -> Result<Vec<u8>, Error> {
+/// One track per slot that has notes (slot order, notes sorted by (tick, key) like the
+/// original). `start`: [`DominoStart::Bar`] runs from the bar line before the first note to
+/// the bar line after the last (at least one bar, the original default);
+/// [`DominoStart::Note`] runs from the first note to the last, that stretch being the length
+/// (first note at tick 0). `ppq` goes in as a u16 (`struct.pack("<H", ppq)` raises when it
+/// doesn't fit `0..=65535`; the parameter type guarantees that here). Empty `notes` is an
+/// error; with the `bar` start `bar <= 0` is one too (numpy / division by zero upstream).
+/// The `note` start never uses `bar`, so it isn't checked there, like the original.
+pub fn clip_data(
+    notes: &[Note6],
+    ppq: u16,
+    bar: i64,
+    start: DominoStart,
+) -> Result<Vec<u8>, Error> {
     if notes.is_empty() {
         return Err(Error::Empty);
-    }
-    if bar <= 0 {
-        return Err(Error::BadBar);
     }
     let first_start = notes.iter().map(|n| n[0]).min().ok_or(Error::Empty)?;
     let max_end = notes.iter().map(|n| n[1]).max().ok_or(Error::Empty)?;
 
-    // Python 的 // 是向下取整：first = min(start) // bar * bar
-    let first = (first_start as i128).div_euclid(bar as i128) * bar as i128;
-    // length = max(ceil((max_end - first) / bar) * bar, bar)
-    let span = max_end as i128 - first;
-    let ceil_div = -(-span).div_euclid(bar as i128);
-    let length = ceil_div.saturating_mul(bar as i128).max(bar as i128);
+    let (first, length) = match start {
+        DominoStart::Note => {
+            // first = min(start); length = max(max_end - first, 1)
+            let first = first_start as i128;
+            (first, (max_end as i128 - first).max(1))
+        }
+        DominoStart::Bar => {
+            if bar <= 0 {
+                return Err(Error::BadBar);
+            }
+            // Python's // rounds down: first = min(start) // bar * bar
+            let first = (first_start as i128).div_euclid(bar as i128) * bar as i128;
+            // length = max(ceil((max_end - first) / bar) * bar, bar)
+            let span = max_end as i128 - first;
+            let ceil_div = -(-span).div_euclid(bar as i128);
+            (first, ceil_div.saturating_mul(bar as i128).max(bar as i128))
+        }
+    };
     if length > u32::MAX as i128 {
         return Err(Error::TooLarge);
     }

@@ -2,7 +2,7 @@
 
 use flate2::read::ZlibDecoder;
 use serde_json::Value;
-use spiderweb_domino::{Error, MAGIC, clip_data, read_notes, read_notes_max_key};
+use spiderweb_domino::{DominoStart, Error, MAGIC, clip_data, read_notes, read_notes_max_key};
 use std::io::Read;
 
 fn vectors() -> Value {
@@ -69,20 +69,34 @@ fn case_name(case: &Value) -> &str {
     case["name"].as_str().expect("用例没有 name")
 }
 
+fn start_of(case: &Value) -> DominoStart {
+    match case["start"].as_str().expect("case has no start") {
+        "note" => DominoStart::Note,
+        "bar" => DominoStart::Bar,
+        other => panic!("unknown start {other}"),
+    }
+}
+
 /// clip_data：Rust 的解压负载必须和 Python 逐字节相同，且 Rust 自己读得回来。
 #[test]
 fn clip_vectors() {
     let data = vectors();
     let cases = data["clip"].as_array().expect("clip 不是数组");
+    let (mut saw_note, mut saw_bar) = (false, false);
     for case in cases {
         let name = case_name(case);
         let notes = notes6(&case["notes"]);
         let ppq = case["ppq"].as_u64().expect("ppq") as u16;
         let bar = i(&case["bar"]);
+        let start = start_of(case);
+        match start {
+            DominoStart::Note => saw_note = true,
+            DominoStart::Bar => saw_bar = true,
+        }
         let py_raw = unhex(case["raw"].as_str().expect("raw"));
         let py_payload = unhex(case["payload"].as_str().expect("payload"));
 
-        let got = clip_data(&notes, ppq, bar).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let got = clip_data(&notes, ppq, bar, start).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(got.starts_with(MAGIC), "{name}: 魔数不对");
         assert_eq!(size_field(&got), py_payload.len(), "{name}: 大小字段不对");
         assert_eq!(
@@ -101,6 +115,15 @@ fn clip_vectors() {
         assert_eq!(rust, py, "{name}: Rust raw 读回的结果和 Python raw 不同");
     }
     assert!(cases.len() >= 9, "clips 用例太少：{}", cases.len());
+    assert!(
+        saw_note && saw_bar,
+        "the clip vectors must cover both the note and bar starts"
+    );
+    assert_eq!(
+        DominoStart::default(),
+        DominoStart::Bar,
+        "clip_data's default start"
+    );
 }
 
 /// clip_data 的错误语义：空、bar 0、长度超出 u32。
@@ -121,7 +144,11 @@ fn clip_error_vectors() {
             "too_large" => Error::TooLarge,
             other => panic!("未知错误种类 {other}"),
         };
-        assert_eq!(clip_data(&notes, ppq, bar), Err(want), "{name}");
+        assert_eq!(
+            clip_data(&notes, ppq, bar, start_of(case)),
+            Err(want),
+            "{name}"
+        );
     }
     assert!(cases.len() >= 3, "clip_errors 用例太少：{}", cases.len());
 }
@@ -167,7 +194,7 @@ fn high_keys_round_trip_with_max_key() {
     // 音符 item 的 key 是 u8：key 200 编码得下；默认读取按原版丢 >127，
     // 256k 档（max_key = 255）能原样读回。
     let notes = vec![[0i64, 100, 200, 80, 0, 0]];
-    let raw = clip_data(&notes, 960, 3840).expect("编码");
+    let raw = clip_data(&notes, 960, 3840, DominoStart::Bar).expect("encode");
     let (rows, _) = read_notes(&raw).expect("读取");
     assert!(rows.iter().all(|r| r[2] != 200), "默认应丢弃 >127 的键");
     let (rows, _) = read_notes_max_key(&raw, 255).expect("读取");

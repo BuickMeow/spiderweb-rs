@@ -16,10 +16,10 @@ renderer, a pure-Rust note engine and no Python runtime.
 
 | Area | State |
 |---|---|
-| Feature parity | upstream **1.1.0** complete; **1.2.0** in progress (done: 256-key mode, custom fill upgrade, join/split, turn-into-live-shape; remaining: tumour graphs, snap system, history panel, Domino start) |
+| Feature parity | upstream **1.1.0** complete; **1.2.0** in progress (done: 256-key mode, custom fill upgrade, join/split, turn-into-live-shape, snap system, Domino start; remaining: tumour graphs, history panel) |
 | Correctness | **2800+ differential test cases** against the original Python engine (paths, bezier/arc, smooth, tumour, text, custom, convert, funnel, joined, engine) |
 | Formats | MIDI export is **byte-identical** to the original; project JSON and the Domino clipboard format are cross-checked with Python |
-| Tests | 176 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
+| Tests | 183 workspace tests, `clippy -D warnings` clean, `cargo fmt --check` clean |
 | CI | `.github/workflows/ci.yml` — fmt / clippy / test / release build on Ubuntu, macOS and Windows |
 | Performance | see below; tracked per commit on the [benchmark dashboard](https://buickmeow.github.io/spiderweb-rs/dev/bench/) |
 

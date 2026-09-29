@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 spiderweb-core = { path = "../spiderweb-core" }
+spiderweb-domino = { path = "../spiderweb-domino" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

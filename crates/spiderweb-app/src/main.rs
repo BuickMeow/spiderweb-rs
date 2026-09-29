@@ -25,6 +25,7 @@ mod roll_live;
 mod roll_menu;
 mod roll_text;
 mod roll_velocity;
+mod snap_picker;
 #[cfg(test)]
 mod test_support;
 mod text_dialog;

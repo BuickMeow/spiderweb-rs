@@ -11,6 +11,7 @@ use spiderweb_core::custom::notes_shape;
 use spiderweb_core::engine::{self, Mode, Split};
 use spiderweb_core::joined;
 use spiderweb_core::shape::{Kind, Shape, TextSettings};
+use spiderweb_domino::DominoStart;
 use spiderweb_io::compat::{shape_from_json, shape_to_json};
 use spiderweb_io::project::{
     self as proj, AutosaveOutcome, ChannelMode, ChannelSplit, CustomDefaults, FunnelDefaults,
@@ -24,6 +25,7 @@ use crate::roll::{Drag, RightDrag, View};
 use crate::roll_menu::MenuState;
 use crate::roll_text::Typing;
 use crate::roll_velocity::VelocityState;
+use crate::snap_picker::CustomSnapWindow;
 use crate::text_dialog::FontDialog;
 
 /// 程序版本（原版 files/about.py 的 VERSION；帮助窗口标题与 about 文案用）。
@@ -169,12 +171,17 @@ pub struct App {
     pub tool: Tool,
     pub draw_tool: Tool,
     pub live: bool,
+    /// The snap text (`spiderweb_io::snap` spelling).
     pub snap: String,
+    /// The "Customised snap" window; None = closed.
+    pub snap_window: Option<CustomSnapWindow>,
     pub show_lines: bool,
     pub show_notes: bool,
     pub show_velocity: bool,
     pub channel_mode: ChannelMode,
     pub channel_split: ChannelSplit,
+    /// Where copying / pasting to Domino starts (1.2.0's Project -> Domino start).
+    pub domino_start: DominoStart,
     /// 工程的按键范围：128 或 256（原版 app.keys；0 .. keys - 1）
     pub keys: i64,
     pub ppq: i64,
@@ -282,11 +289,13 @@ impl App {
             draw_tool: Tool::Line,
             live: false,
             snap: "1/16".to_string(),
+            snap_window: None,
             show_lines: true,
             show_notes: true,
             show_velocity: false,
             channel_mode: ChannelMode::Single,
             channel_split: ChannelSplit::Key,
+            domino_start: DominoStart::Note,
             keys: 128,
             ppq: 960,
             beats: 4,
@@ -436,6 +445,7 @@ impl App {
         };
         self.channel_mode = p.channel_mode;
         self.channel_split = p.channel_split;
+        self.domino_start = p.domino_start;
         self.keys = p.keys;
         self.view.keys = self.keys;
         self.snap = p.snap;
@@ -467,6 +477,7 @@ impl App {
             channel_mode: self.channel_mode,
             channel_split: self.channel_split,
             keys: self.keys,
+            domino_start: self.domino_start,
             snap: self.snap.clone(),
             defaults: spiderweb_io::compat::ShapeDefaults {
                 vel0: self.defaults.vel0,
@@ -973,7 +984,12 @@ impl App {
             return;
         }
         let ppq = self.ppq;
-        match spiderweb_domino::clip_data(&notes, self.ppq as u16, self.beats * self.ppq) {
+        match spiderweb_domino::clip_data(
+            &notes,
+            self.ppq as u16,
+            self.beats * self.ppq,
+            self.domino_start,
+        ) {
             Ok(raw) => {
                 if spiderweb_domino::put_on_clipboard(&raw) {
                     let what = if self.sels.is_empty() {
@@ -992,11 +1008,17 @@ impl App {
                     } else {
                         rust_i18n::t!("status.first_of_tracks", n = tracks.to_string()).to_string()
                     };
+                    let how = if self.domino_start == DominoStart::Note {
+                        rust_i18n::t!("status.how_cursor").to_string()
+                    } else {
+                        rust_i18n::t!("status.how_bar_line").to_string()
+                    };
                     let mut copied = rust_i18n::t!(
                         "status.copied_domino",
                         what = what,
                         ppq = ppq.to_string(),
-                        place = place
+                        place = place,
+                        how = how
                     )
                     .to_string();
                     if high > 0 {
@@ -1006,6 +1028,7 @@ impl App {
                         ));
                     }
                     self.status = copied;
+                    self.tips.show_waiting("domino");
                 } else {
                     self.status = rust_i18n::t!("status.clipboard_error").to_string();
                 }
@@ -1025,16 +1048,24 @@ impl App {
             spiderweb_domino::ClipboardGet::Data(raw) => {
                 let max_key = if self.keys >= 256 { 255 } else { 127 };
                 match spiderweb_domino::read_notes_max_key(&raw, max_key) {
-                    Ok((rows, their_ppq)) => {
-                        if let Some(mut sh) = notes_shape(&rows, self.ppq as f64, "Pasted notes") {
-                            // 粘贴起点对齐到播放线（原版把复制内容的起点放在播放线）
-                            let t0 = rows.iter().map(|r| r[0]).min().unwrap_or(0) as f64
-                                / self.ppq as f64;
-                            let shift = self.playhead - t0;
-                            for p in &mut sh.pts {
-                                p[0] += shift;
+                    Ok((mut rows, their_ppq)) => {
+                        // "note": the first note is at tick 0, so the clipboard's empty lead is dropped
+                        if self.domino_start == DominoStart::Note
+                            && let Some(first) = rows.iter().map(|r| r[0]).min()
+                        {
+                            for r in &mut rows {
+                                r[0] -= first;
                             }
-                            self.add_shape(sh);
+                        }
+                        let name = rust_i18n::t!("shape.pasted_notes").to_string();
+                        if let Some(sh) = notes_shape(&rows, self.ppq as f64, &name) {
+                            // the start lands on the play line, itself snapped to the grid (upstream paste_from_domino)
+                            let at = match self.snap_beats() {
+                                Some(sb) => (self.playhead / sb).round() * sb,
+                                None => self.playhead,
+                            };
+                            self.cancel_draft();
+                            self.add_copies(&[sh], at);
                             let n = rows.len();
                             let note = match their_ppq {
                                 Some(p) if i64::from(p) != self.ppq => {
@@ -1050,6 +1081,7 @@ impl App {
                                 note = note
                             )
                             .to_string();
+                            self.tips.show_waiting("domino");
                         } else {
                             self.status = rust_i18n::t!("status.domino_no_notes").to_string();
                         }
@@ -1134,23 +1166,15 @@ impl App {
 
     // ------------------------------------------------------------ 吸附
 
+    /// The snap step in beats (quarter notes), None when snapping is off (upstream `snap_beats`).
     pub fn snap_beats(&self) -> Option<f64> {
-        if self.snap == "Off" {
-            return None;
-        }
-        self.snap
-            .split('/')
-            .nth(1)
-            .and_then(|d| d.parse::<f64>().ok())
-            .map(|d| 4.0 / d)
+        crate::snap_picker::snap_step(&self.snap, self.beats)
     }
 
+    /// The snap step in ticks (1 with snapping off, upstream `App.snap_ticks`).
     #[allow(dead_code)] // 数字框步进待移植
     pub fn snap_ticks(&self) -> i64 {
-        match self.snap_beats() {
-            Some(sb) => ((sb * self.ppq as f64).round() as i64).max(1),
-            None => 1,
-        }
+        spiderweb_io::snap::snap_ticks(&self.snap, self.beats as f64, self.ppq)
     }
 
     // ------------------------------------------------------------ 播放
@@ -1537,6 +1561,7 @@ impl eframe::App for App {
             });
 
         crate::text_dialog::font_dialog_ui(self, &ctx);
+        crate::snap_picker::custom_snap_window_ui(self, &ctx);
         // 帮助窗口与首次使用 tip（help.rs）
         crate::help::help_ui(self, &ctx);
         crate::help::tips_ui(self, &ctx);

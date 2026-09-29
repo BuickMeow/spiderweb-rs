@@ -58,10 +58,10 @@ def rows5(notes):
 def clip_cases():
     cases = []
 
-    def add(name, notes, ppq, bar):
+    def add(name, notes, ppq, bar, start="bar"):
         arr = rows5(notes)
-        raw = D.clip_data(arr, ppq, bar)
-        cases.append({"name": name, "notes": arr.tolist(), "ppq": ppq, "bar": bar,
+        raw = D.clip_data(arr, ppq, bar, start)
+        cases.append({"name": name, "notes": arr.tolist(), "ppq": ppq, "bar": bar, "start": start,
                       "raw": raw.hex(), "payload": zlib.decompress(raw[len(D.MAGIC) + 4:]).hex()})
 
     add("single_on_bar", [[960, 1200, 60, 100, 0]], 480, 480)
@@ -75,6 +75,13 @@ def clip_cases():
     add("clamp_and_filter", [[0, 5, 200, 0, 0], [3, 9, 60, 200, 0], [7, 7, 61, 100, 0]], 96, 100)
     add("ppq_max", [[0, 240, 60, 100, 0]], 65535, 240)
     add("long_run", [[i * 10, i * 10 + 5, 60 + i % 12, 1 + i % 127, 0] for i in range(130)], 480, 3840)
+    # start="note": the first note is at tick 0, no empty lead (the length is not padded to bars)
+    add("note_start_off", [[1000, 1300, 60, 100, 0], [1400, 1990, 61, 110, 0]], 480, 480, "note")
+    add("note_multi_slot", [[500, 600, 60, 100, 1], [10, 20, 61, 101, 0],
+                            [100, 150, 62, 102, 1], [30, 40, 63, 103, 0]], 96, 240, "note")
+    add("note_negative_start", [[-5, -3, 60, 100, 0], [7, 3, 61, 100, 1]], 96, 10, "note")
+    add("note_single_tick", [[5, 5, 60, 100, 0]], 96, 100, "note")
+    add("note_zero_bar", [[10, 20, 60, 100, 0]], 96, 0, "note")  # the note start never uses bar
     return cases
 
 
@@ -96,7 +103,16 @@ def clip_error_cases():
             kind = "empty"
         else:
             raise AssertionError(f"{name} 原版竟然没报错")
-        cases.append({"name": name, "notes": rows5(notes).tolist(), "ppq": ppq, "bar": bar, "error": kind})
+        cases.append({"name": name, "notes": rows5(notes).tolist(), "ppq": ppq, "bar": bar,
+                      "start": "bar", "error": kind})
+    # the note start: length is max_end - min_start (no bar padding); over u32 it errors too
+    try:
+        D.clip_data(rows5([[0, 1 << 33, 60, 100, 0]]), 96, 1, "note")
+    except struct.error:
+        cases.append({"name": "too_large_note", "notes": [[0, 1 << 33, 60, 100, 0]], "ppq": 96,
+                      "bar": 1, "start": "note", "error": "too_large"})
+    else:
+        raise AssertionError("too_large_note: upstream did not raise")
     return cases
 
 

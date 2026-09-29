@@ -14,4 +14,6 @@ mod clipboard;
 mod codec;
 
 pub use clipboard::{ClipboardGet, FORMAT, get_from_clipboard, put_on_clipboard};
-pub use codec::{Error, MAGIC, Note6, clip_data, item, read_notes, read_notes_max_key};
+pub use codec::{
+    DominoStart, Error, MAGIC, Note6, clip_data, item, read_notes, read_notes_max_key,
+};
