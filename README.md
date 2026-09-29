@@ -80,8 +80,14 @@ SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app   # frame-time HUD
 ## Build and run
 
 ```bash
-cargo run -p spiderweb-app --release
+cargo run --release          # from the repository root
 ```
+
+Tagged builds (`git tag v1.2.0 && git push origin v1.2.0`) are produced by
+`.github/workflows/release.yml` on native Windows, macOS and Linux runners and
+attached to the GitHub release; the workflow can also be started manually to
+download the packages as artifacts. The builds are **unsigned**: macOS shows a
+Gatekeeper warning and Windows SmartScreen one, both normal for unsigned apps.
 
 Requirements: a stable Rust toolchain. On Linux, `libxkbcommon-dev`,
 `libwayland-dev`, `libx11-dev`, `libasound2-dev` and `pkg-config`.
