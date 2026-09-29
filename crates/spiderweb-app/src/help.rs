@@ -590,12 +590,14 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
     let mut clips = std::mem::take(&mut app.help.clips);
 
     // Body must be at least this tall: egui windows shrink to content height, and without this they would be much shorter than upstream's 900x620
-    let body_h = (ctx.viewport_rect().height() * 0.72).clamp(280.0, 900.0);
+    // Keep a modest minimum so the window can be resized freely; the initial
+    // size comes from default_size below.
+    let body_h = 320.0;
     egui::Window::new(rust_i18n::t!("help.title", version = VERSION))
         .open(&mut open)
         .default_size([960.0, 760.0])
         .min_width(600.0)
-        .min_height(280.0)
+        .min_height(240.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(body_h);

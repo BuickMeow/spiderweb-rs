@@ -381,6 +381,8 @@ struct Inputs {
     pinch: f32,
     /// egui wheel zoom factor, ctrl/cmd + wheel (1.0 = none)
     zoom: f32,
+    /// Two-finger / touchscreen pan of the current gesture
+    pan: Vec2,
 }
 
 /// Converts pointer positions to roll-local coordinates (painting adds rect.min, hit testing works in local coordinates).
@@ -415,6 +417,10 @@ fn inputs(ui: &egui::Ui) -> Inputs {
         } else {
             i.zoom_delta()
         },
+        pan: i
+            .multi_touch()
+            .map(|t| t.translation_delta)
+            .unwrap_or(Vec2::ZERO),
     })
 }
 
@@ -434,7 +440,12 @@ pub fn roll_ui(app: &mut App, ui: &mut egui::Ui) {
     // A popup (context menu / dropdown) is open: the roll's input steps aside (upstream tk menus grab events)
     if !crate::roll_menu::is_popup_open(ui.ctx()) {
         let input = inputs(ui);
-        handle_input(app, &input, Rect::from_min_size(Pos2::ZERO, rect.size()));
+        handle_input(
+            app,
+            &input,
+            Rect::from_min_size(Pos2::ZERO, rect.size()),
+            response.contains_pointer(),
+        );
         if app.drag.is_none()
             && let Some(pos) = input.pos
             && pos.x >= app.view.kb_w
@@ -614,15 +625,17 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
 
 // ---------------------------------------------------------------- input
 
-fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
+fn handle_input(app: &mut App, input: &Inputs, rect: Rect, pointer_over: bool) {
     let (kb_w, ruler_h) = (app.view.kb_w, app.view.ruler_h);
     let pos_in_roll = move |p: Pos2| rect.contains(p) && p.x >= kb_w && p.y >= ruler_h;
-    if let Some(pos) = input.pos
+    if pointer_over
+        && let Some(pos) = input.pos
         && pos_in_roll(pos)
     {
         app.position = Some(position_text(app, pos));
     }
-    if input.primary_pressed
+    if pointer_over
+        && input.primary_pressed
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
@@ -646,13 +659,15 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
     {
         on_release(app, pos, input, false);
     }
-    if input.double
+    if pointer_over
+        && input.double
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
         on_double(app, pos, input.shift);
     }
-    if input.secondary_pressed
+    if pointer_over
+        && input.secondary_pressed
         && let Some(pos) = input.pos
         && rect.contains(pos)
     {
@@ -670,7 +685,8 @@ fn handle_input(app: &mut App, input: &Inputs, rect: Rect) {
     if input.secondary_double {
         app.toggle_select_tool();
     }
-    if input.middle_pressed
+    if pointer_over
+        && input.middle_pressed
         && let Some(pos) = input.pos
         && pos_in_roll(pos)
     {
@@ -1633,9 +1649,16 @@ fn zoom_both(view: &mut View, pos: Pos2, f: f64) {
 
 fn on_wheel(app: &mut App, pos: Pos2, input: &Inputs) {
     let v = &mut app.view;
+    // Two-finger / touchscreen pan (and pinch in the same gesture).
+    if input.pan != Vec2::ZERO {
+        v.t -= input.pan.x as f64 / v.sx;
+        v.top += input.pan.y as f64 / v.sy;
+    }
     // Touchpad pinch: zoom both axes around the pointer.
     if (input.pinch - 1.0).abs() > 1e-4 {
         zoom_both(v, pos, input.pinch as f64);
+    }
+    if input.pan != Vec2::ZERO || (input.pinch - 1.0).abs() > 1e-4 {
         v.clamp();
         return;
     }

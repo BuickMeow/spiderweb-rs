@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use eframe::egui;
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 
 use spiderweb_core::Pt;
 use spiderweb_core::engine;
@@ -295,6 +295,9 @@ struct Inputs {
     ctrl: bool,
     shift: bool,
     scroll_y: f32,
+    /// Touchpad pinch (1.0 = none) and two-finger pan
+    pinch: f32,
+    pan: Vec2,
 }
 
 fn read_input(ui: &egui::Ui) -> Inputs {
@@ -311,6 +314,11 @@ fn read_input(ui: &egui::Ui) -> Inputs {
         ctrl: i.modifiers.command || i.modifiers.ctrl,
         shift: i.modifiers.shift,
         scroll_y: i.smooth_scroll_delta.y,
+        pinch: i.multi_touch().map(|t| t.zoom_delta).unwrap_or(1.0),
+        pan: i
+            .multi_touch()
+            .map(|t| t.translation_delta)
+            .unwrap_or(Vec2::ZERO),
     })
 }
 
@@ -336,8 +344,11 @@ pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
     {
         return;
     }
-    let _ = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-    if !popup_open {
+    let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+    // A window (Help, tips, drawer…) over the pane takes the pointer; keep
+    // processing while one of our own drags is in progress.
+    let dragging = app.vel.pan.is_some() || app.vel.edit.is_some() || app.vel.curve.is_some();
+    if !popup_open && (response.contains_pointer() || dragging) {
         let input = read_input(ui);
         handle_input(app, &input, pane);
         set_cursor(app, &input, pane, ui.ctx());
@@ -790,6 +801,21 @@ fn commit(
 // ---------------------------------------------------------------- input dispatch
 
 fn handle_input(app: &mut App, input: &Inputs, pane: Pane) {
+    // Touchpad: pinch zooms the time axis around the pointer, two fingers pan it.
+    if let Some(p) = input.pos
+        && pane.rect.contains(p)
+    {
+        if (input.pinch - 1.0).abs() > 1e-4 {
+            let b = app.view.b_of(p.x);
+            app.view.sx = (app.view.sx * input.pinch as f64).clamp(0.05, 100000.0);
+            app.view.t = b - (p.x - app.view.kb_w) as f64 / app.view.sx;
+            app.view.clamp();
+        }
+        if input.pan.x != 0.0 {
+            app.view.t -= input.pan.x as f64 / app.view.sx;
+            app.view.clamp();
+        }
+    }
     let rect = pane.rect;
     if let Some(p) = input.pos
         && rect.contains(p)
