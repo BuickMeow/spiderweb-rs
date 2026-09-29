@@ -21,22 +21,19 @@ use spiderweb_core::shape::{
 };
 use spiderweb_core::smooth::{SMOOTH_DEFAULT, clean_level};
 use spiderweb_core::text::clean_text;
+use spiderweb_domino::DominoStart;
 
 use crate::compat::{
     SHAPE_DEFAULTS, ShapeDefaults, ShapeError, align_str, ends_str, fill_str, py_bool, py_float,
     py_int, py_str, shape_from_json, shape_to_json, short_num_f,
 };
 use crate::safefile;
+use crate::snap::clean_snap;
 
 /// 本程序版本（Python `files/about.VERSION`）。
 pub const VERSION: &str = "1.1.0";
 /// 工程文件格式版本（`project_data` 里写死的 2）。
 pub const PROJECT_VERSION: i64 = 2;
-/// 吸附选项（project.SNAPS）。
-pub const SNAPS: [&str; 13] = [
-    "Off", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128", "1/6", "1/12", "1/24",
-    "1/48",
-];
 /// 通道模式（engine.CHANNEL_MODES）。
 pub const CHANNEL_MODES: [&str; 3] = ["raw", "single", "auto"];
 /// 多通道时重叠的判定方式（engine.SPLITS）。
@@ -230,7 +227,7 @@ pub enum ProjectError {
 }
 
 /// Python `project_data` 里键的出现顺序。
-const PROJECT_KEYS: [&str; 18] = [
+const PROJECT_KEYS: [&str; 19] = [
     "version",
     "app_version",
     "ppq",
@@ -240,6 +237,7 @@ const PROJECT_KEYS: [&str; 18] = [
     "channel_mode",
     "channel_split",
     "keys",
+    "domino_start",
     "snap",
     "defaults",
     "custom_defaults",
@@ -270,6 +268,11 @@ pub struct Project {
     pub channel_split: ChannelSplit,
     /// 工程的按键范围：128（0-127）或 256（0-255）（1.2.0 的 `keys`；别的值一律 128）。
     pub keys: i64,
+    /// Where copying / pasting to Domino starts (1.2.0's `domino_start`; missing files get
+    /// `"note"`, the dropdown's initial value).
+    pub domino_start: DominoStart,
+    /// The snap text ([`crate::snap`]'s spelling; old values are migrated by [`clean_snap`]
+    /// when a file is read).
     pub snap: String,
     pub defaults: ShapeDefaults,
     pub custom_defaults: CustomDefaults,
@@ -293,6 +296,7 @@ impl Default for Project {
             channel_mode: ChannelMode::Single,
             channel_split: ChannelSplit::Key,
             keys: spiderweb_core::paths::KEYS[0],
+            domino_start: DominoStart::Note,
             snap: "1/16".to_string(),
             defaults: SHAPE_DEFAULTS,
             custom_defaults: CustomDefaults::default(),
@@ -377,10 +381,19 @@ impl Project {
             }
             _ => spiderweb_core::paths::KEYS[0],
         };
-        if let Some(s) = d.get("snap").and_then(Value::as_str)
-            && SNAPS.contains(&s)
+        // Upstream: `if "snap" in data: self.snap.set(clean_snap(data["snap"]))` (the old
+        // 1/64, 1/128 and Off migrate; unknown values fall back to the default 1/16)
+        if let Some(s) = d.get("snap").and_then(Value::as_str) {
+            p.snap = clean_snap(s);
+        }
+        // Upstream only moves the dropdown for a value it knows; missing / bad values keep
+        // the initial "note"
+        if let Some(ds) = d
+            .get("domino_start")
+            .and_then(Value::as_str)
+            .and_then(DominoStart::parse)
         {
-            p.snap = s.to_string();
+            p.domino_start = ds;
         }
         p.defaults = defaults_from_json(d.get("defaults"))?;
         if let Some(custom) = d.get("custom_defaults").and_then(Value::as_object) {
@@ -438,6 +451,10 @@ impl Project {
             Value::from(self.channel_split.as_str()),
         );
         d.insert("keys".into(), Value::from(self.keys));
+        d.insert(
+            "domino_start".into(),
+            Value::from(self.domino_start.as_str()),
+        );
         d.insert("snap".into(), Value::from(self.snap.clone()));
         d.insert(
             "defaults".into(),
@@ -529,21 +546,16 @@ fn defaults_from_json(v: Option<&Value>) -> Result<ShapeDefaults, ProjectError> 
     Ok(out)
 }
 
-/// `custom_defaults` 的 JSON（非默认的新键省略，见 [`Project::to_json`] 的注释）。
+/// The `custom_defaults` JSON (upstream `dict(self.custom_defaults, shape=...)`: every key
+/// is written).
 fn custom_defaults_json(cd: &CustomDefaults) -> Value {
     let mut o = Map::new();
     o.insert("fill".into(), Value::from(fill_str(cd.fill)));
     o.insert("gate".into(), Value::from(cd.gate));
     o.insert("align".into(), Value::from(align_str(cd.align)));
-    if cd.ends != Ends::Round {
-        o.insert("ends".into(), Value::from(ends_str(cd.ends)));
-    }
-    if cd.union {
-        o.insert("union".into(), Value::Bool(true));
-    }
-    if cd.apart {
-        o.insert("apart".into(), Value::Bool(true));
-    }
+    o.insert("ends".into(), Value::from(ends_str(cd.ends)));
+    o.insert("union".into(), Value::Bool(cd.union));
+    o.insert("apart".into(), Value::Bool(cd.apart));
     o.insert("shape".into(), Value::from(cd.shape.clone()));
     Value::Object(o)
 }
@@ -1068,13 +1080,14 @@ mod tests {
         assert_eq!(custom_defaults_from_json(&m).ends, Ends::Round);
     }
 
-    /// 写出去：默认的新键省略（1.2.0 读不到时用同样的默认值）。
+    /// Writing: every key comes out, like upstream `dict(self.custom_defaults, shape=...)`.
     #[test]
     fn custom_defaults_new_keys_write() {
         let mut cd = CustomDefaults::default();
         assert_eq!(
             custom_defaults_json(&cd),
-            json!({"fill": "empty", "gate": 0.0625, "align": "auto", "shape": "Circle"})
+            json!({"fill": "empty", "gate": 0.0625, "align": "auto", "ends": "round",
+                    "union": false, "apart": false, "shape": "Circle"})
         );
         cd.ends = Ends::Stretch;
         cd.union = true;
@@ -1083,5 +1096,38 @@ mod tests {
         assert_eq!(v["ends"], json!("stretch"));
         assert_eq!(v["union"], json!(true));
         assert_eq!(v["apart"], json!(true));
+    }
+
+    /// 1.2.0's snap text and domino_start: migrated / validated when read, saved as-is.
+    #[test]
+    fn snap_and_domino_start_round_trip() {
+        let p = Project::from_json(&json!({"snap": "1/64", "domino_start": "bar"}))
+            .expect("read project");
+        assert_eq!(p.snap, "c:/64/1");
+        assert_eq!(p.domino_start, DominoStart::Bar);
+        assert_eq!(p.to_json()["domino_start"], json!("bar"));
+        assert_eq!(p.to_json()["snap"], json!("c:/64/1"));
+        // missing / bad domino_start values keep the initial "note"
+        for data in [
+            json!({}),
+            json!({"domino_start": "nope"}),
+            json!({"domino_start": 5}),
+        ] {
+            let p = Project::from_json(&data).expect("read project");
+            assert_eq!(p.domino_start, DominoStart::Note);
+        }
+        // 1.1.0's Off / 1/128 migrate too
+        assert_eq!(
+            Project::from_json(&json!({"snap": "Off"}))
+                .expect("read project")
+                .snap,
+            "off"
+        );
+        assert_eq!(
+            Project::from_json(&json!({"snap": "1/128"}))
+                .expect("read project")
+                .snap,
+            "c:/128/1"
+        );
     }
 }

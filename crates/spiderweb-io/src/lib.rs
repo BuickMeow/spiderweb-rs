@@ -3,6 +3,7 @@
 //! 与 Python 原版逐模块对应：
 //! - [`compat`] 形状 ⇄ JSON（`engine.clean_shape` 与 `files.project.short_shape` 的移植）；
 //! - [`project`] 工程读写、autosave 与其备份的轮换语义（`files.project`）；
+//! - [`snap`] the snap choices (`files.snap`);
 //! - [`midi`] 标准 MIDI 文件（format 1）写出（`files.midi_out`）；
 //! - [`mathexpr`] 数字框里的数学表达式（`files.mathexpr`）；
 //! - [`safefile`] 临时文件 + rename 的原子写（`files.safefile`）。
@@ -16,3 +17,4 @@ pub mod mathexpr;
 pub mod midi;
 pub mod project;
 pub mod safefile;
+pub mod snap;

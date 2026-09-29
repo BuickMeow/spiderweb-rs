@@ -16,7 +16,8 @@ import tempfile
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(os.path.dirname(REPO), "Spiderweb-main", "scripts")
+# Upstream source dir: Spiderweb-main (the 1.1.0 reference copy) by default; SPIDERWEB_SRC points at another version (1.2.0)
+SCRIPTS = os.environ.get("SPIDERWEB_SRC") or os.path.join(os.path.dirname(REPO), "Spiderweb-main", "scripts")
 if not os.path.isdir(SCRIPTS):
     SCRIPTS = "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts"
 OUT_DIR = os.path.join(REPO, "crates", "spiderweb-io", "tests", "vectors")
@@ -25,7 +26,9 @@ if SCRIPTS not in sys.path:
 
 from files.mathexpr import calc, calc_int, fmt, formula  # noqa: E402
 from files.midi_out import write_midi  # noqa: E402
-from files.project import SNAPS, backup_path, project_json, short_num, short_env, short_shape  # noqa: E402
+from files.project import backup_path, project_json, short_num, short_env, short_shape  # noqa: E402
+from files.snap import (DEFAULT_SNAP, DOTS, SNAP_LIST, SNAPS, clean_snap, custom_parts,  # noqa: E402
+                        custom_snap, snap_beats, whole_notes)
 from notes import custom as C  # noqa: E402
 from notes import engine as E  # noqa: E402
 from notes import funnel as F  # noqa: E402
@@ -33,7 +36,12 @@ from notes import smooth as S  # noqa: E402
 from notes import text as T  # noqa: E402
 from notes import tumour as TU  # noqa: E402
 
-APP_VERSION = "1.1.0"  # files/about.VERSION
+APP_VERSION = "1.1.0"  # this port's version (Rust VERSION; upstream 1.2.0's about.VERSION is "1.2.0")
+
+
+def pending_tumour(tm):
+    """The port/tumour12 branch is porting rot / slant; drop these two keys until it lands."""
+    return {k: v for k, v in tm.items() if k not in ("rot", "slant")}
 
 
 def write(module, cases):
@@ -154,6 +162,8 @@ def compat_shapes():
     for i, sh in enumerate(cases):
         try:
             cleaned = E.clean_shape(sh)
+            if isinstance(cleaned, dict) and isinstance(cleaned.get("tumour"), dict):
+                cleaned = dict(cleaned, tumour=pending_tumour(cleaned["tumour"]))
             case = {"name": f"shape{i}", "input": tolist(sh), "clean": tolist(cleaned)}
             if cleaned is not None:
                 try:  # Python 不转换 vel0/vel1，坏值会原样留下；Rust 的 Shape 是 f64，只能报错
@@ -178,9 +188,12 @@ def expected_project(data):
     mode = mode if mode in E.CHANNEL_MODES else "single"
     split = data.get("channel_split")
     split = split if split in E.SPLITS else "key"
-    snap = data.get("snap") if data.get("snap") in SNAPS else "1/16"
+    # 1.2.0 snap: load_file runs clean_snap (old values migrate, bad ones fall back)
+    snap = clean_snap(data["snap"]) if isinstance(data.get("snap"), str) else DEFAULT_SNAP
     # 1.2.0 的 256 键设置（project_data 写 keys；load 时不是 256 一律 128）
     keys = 256 if data.get("keys") == 256 else 128
+    # 1.2.0 domino_start: only a known value moves the dropdown, else the initial "note"
+    domino_start = data["domino_start"] if data.get("domino_start") in ("note", "bar") else "note"
 
     custom_defaults = dict(C.CUSTOM_DEFAULTS)
     custom_shape = "Circle"
@@ -232,6 +245,7 @@ def expected_project(data):
         "channel_mode": mode,
         "channel_split": split,
         "keys": keys,
+        "domino_start": domino_start,
         "snap": snap,
         "defaults": defaults,
         "custom_defaults": dict(custom_defaults, shape=custom_shape),
@@ -273,7 +287,8 @@ def project_cases():
     d = {
         "version": 2, "app_version": "0.9.0",
         "ppq": "960", "bpm": "120", "beats": "4", "output": "out/spiderweb.mid",
-        "channel_mode": "auto", "channel_split": "time", "keys": 256, "snap": "1/32",
+        "channel_mode": "auto", "channel_split": "time", "keys": 256, "domino_start": "bar",
+        "snap": "1/32",
         "defaults": {"vel0": 100.5, "vel1": 30, "end_dot": True},
         "custom_defaults": {"fill": "spam", "gate": 0.3333333333333, "align": "aligned", "shape": "Circle"},
         "funnel_defaults": {"fill": "long", "gate0": 0.5, "gate1": 0.125, "change": "smooth",
@@ -288,7 +303,8 @@ def project_cases():
     projects.append(("full", d))
 
     d2 = dict(d)
-    d2.pop("defaults"), d2.pop("view"), d2.pop("keys")  # 1.1.0 的老工程：没有 keys
+    # a 1.1.0 project: no keys and no domino_start
+    d2.pop("defaults"), d2.pop("view"), d2.pop("keys"), d2.pop("domino_start")
     d2["auto_channels"] = True
     d2.pop("channel_mode")
     d2["snap"] = "nope"
@@ -309,6 +325,12 @@ def project_cases():
     d3["keys"] = "256"  # 字符串不算：仍然是 128
     projects.append(("partial", d3))
 
+    # an old 1.1.0 project: snap 1/64 / 1/128 / Off, and no domino_start (-> note)
+    d4 = dict(d)
+    d4["snap"] = "1/64"
+    d4["domino_start"] = "nope"
+    projects.append(("legacy", d4))
+
     cases = []
     for name, data in projects:
         try:
@@ -318,6 +340,46 @@ def project_cases():
             cases.append({"name": name, "saved": saved, "expected": tolist(expected)})
         except Exception as e:  # noqa: BLE001
             cases.append({"name": name, "saved": project_json(data), "error": type(e).__name__})
+    return cases
+
+
+# ---------------------------------------------------------------- snap
+
+def snap_cases():
+    """files/snap.py: parsing / spelling / lengths / steps / old-value migration."""
+    samples = [
+        "off", "bar", "1/1", "3/4", "1/3", "1/12", "1/16", "1/48",
+        "c:", "c:3/16/1", "c:/64/1", "c:./8/3", "c:../8/3", "c:5/16/1", "c:007/16/1",
+        "c: 5 /16/1", "c:1_0/16/1", "c:3/16/1/2", "c:3/16", "c:2/16/1", "c:101/16/1",
+        "c:0/16/1", "c:-1/16/1", "c:abc/16/1", "c:3.0/16/1", "c:3/0/1", "c:3/129/1",
+        "c:3/16/0", "c:3/16/101", "c:/16/1", "c://1", "c:3/1_6/1", "c:3/16/1 ",
+        "c:./64/1", "1/64", "Off", "1/128", "nope", "",
+    ]
+    cases = []
+    for snap in samples:
+        parts = custom_parts(snap)
+        w = whole_notes(snap)
+        cases.append({
+            "fn": "snap",
+            "snap": snap,
+            "parts": None if parts is None else list(parts),
+            "whole": None if w is None else {"num": w.numerator, "den": w.denominator},
+            "beats": snap_beats(snap, 4),
+            "clean": clean_snap(snap),
+        })
+    for count, note, div in [("", 16, 1), (".", 8, 3), ("..", 4, 2), ("5", 16, 1), ("100", 1, 1)]:
+        cases.append({"fn": "custom_snap", "count": count, "note": note, "div": div,
+                      "snap": custom_snap(count, note, div)})
+    for snap, beats in [("bar", 4), ("bar", 7), ("1/16", 4), ("1/3", 4), ("c:./8/3", 4), ("off", 4)]:
+        cases.append({"fn": "snap_beats", "snap": snap, "beats_per_bar": beats,
+                      "beats": snap_beats(snap, beats)})
+    cases.append({
+        "fn": "list",
+        "snaps": list(SNAPS),
+        "pictures": [None if what is None else list(what) for _, what in SNAP_LIST],
+        "default": DEFAULT_SNAP,
+        "dots": list(DOTS),
+    })
     return cases
 
 
@@ -483,6 +545,7 @@ def mathexpr_cases():
 def main():
     write("compat", compat_shapes())
     write("project", project_cases())
+    write("snap", snap_cases())
     write("midi", midi_cases())
     write("mathexpr", [mathexpr_cases()])
 

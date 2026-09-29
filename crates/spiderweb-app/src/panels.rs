@@ -9,12 +9,23 @@ use spiderweb_core::shape::{
 };
 use spiderweb_core::smooth::clean_level;
 use spiderweb_core::text::{self, TextChange};
+use spiderweb_domino::DominoStart;
 use spiderweb_io::project::{ChannelMode, ChannelSplit, FunnelDefaults};
 
 use crate::app::{App, Tool};
 use crate::roll_funnel;
 
-const SNAPS: [&str; 7] = ["Off", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"];
+/// The order of the Project -> Domino start dropdown (upstream `DOMINO_STARTS`).
+const DOMINO_STARTS: [DominoStart; 2] = [DominoStart::Note, DominoStart::Bar];
+
+/// The dropdown labels (the tr texts of upstream `DOMINO_STARTS`).
+fn domino_start_text(start: DominoStart) -> String {
+    match start {
+        DominoStart::Note => rust_i18n::t!("domino_clip.first_note_at_tick_0"),
+        DominoStart::Bar => rust_i18n::t!("domino_clip.from_the_bar_line"),
+    }
+    .to_string()
+}
 
 /// 字重选择（fonts.WEIGHTS）。
 const WEIGHTS: [(i32, &str); 9] = [
@@ -138,16 +149,7 @@ impl App {
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(rust_i18n::t!("toolbar.snap"));
-            egui::ComboBox::from_id_salt("snap")
-                .selected_text(self.snap.clone())
-                .width(70.0)
-                .show_ui(ui, |ui| {
-                    for s in SNAPS {
-                        if ui.selectable_label(self.snap == s, s).clicked() {
-                            self.snap = s.to_string();
-                        }
-                    }
-                });
+            crate::snap_picker::snap_picker_ui(self, ui);
             ui.checkbox(&mut self.show_lines, rust_i18n::t!("toolbar.show_lines"))
                 .changed();
             ui.checkbox(&mut self.show_notes, rust_i18n::t!("toolbar.show_notes"));
@@ -977,6 +979,30 @@ impl App {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.pvar.output).desired_width(180.0),
                         );
+                        ui.end_row();
+                        // 1.2.0's Domino start: where copying / pasting starts (upstream Project -> Domino start)
+                        ui.label(rust_i18n::t!("panel.project.domino_start"));
+                        let domino_before = self.domino_start;
+                        egui::ComboBox::from_id_salt("domino_start")
+                            .selected_text(domino_start_text(self.domino_start))
+                            .width(180.0)
+                            .show_ui(ui, |ui| {
+                                for start in DOMINO_STARTS {
+                                    ui.selectable_value(
+                                        &mut self.domino_start,
+                                        start,
+                                        domino_start_text(start),
+                                    );
+                                }
+                            })
+                            .response
+                            .on_hover_text(
+                                rust_i18n::t!("panel.project.domino_start_tip").to_string(),
+                            );
+                        // upstream `domino_box.bind(<<ComboboxSelected>>, schedule_autosave)`
+                        if self.domino_start != domino_before {
+                            self.schedule_autosave();
+                        }
                         ui.end_row();
                     });
                 if self.ppq >= 32767 {

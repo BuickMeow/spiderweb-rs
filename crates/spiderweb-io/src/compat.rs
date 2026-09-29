@@ -931,10 +931,8 @@ pub fn shape_to_json(sh: &Shape) -> Value {
             o.insert("fill".into(), Value::from(fill_str(sh.fill)));
             o.insert("gate".into(), num_value(sh.gate));
             o.insert("align".into(), Value::from(align_str(sh.align)));
-            // ends = drop 是旧形状的默认（1.2.0 `clean_shape` 里没有 ends 键就是 drop），省略不写
-            if sh.ends != Ends::Drop {
-                o.insert("ends".into(), Value::from(ends_str(sh.ends)));
-            }
+            // 1.2.0 `clean_shape` always writes ends (a shape without the key is drop)
+            o.insert("ends".into(), Value::from(ends_str(sh.ends)));
             if sh.union {
                 o.insert("union".into(), Value::Bool(true));
             }
@@ -1104,14 +1102,16 @@ mod tests {
         assert_eq!(shape_to_json(&again), out);
     }
 
-    /// 写出去：ends = drop 与关着的开关省略（1.2.0 读不到时同样是 drop / false）。
+    /// Writing: 1.2.0 `clean_shape` always writes ends (old shapes read back as drop);
+    /// switches that are off are left out.
     #[test]
     fn writes_new_custom_keys() {
         let mut sh = shape_from_json(&custom_json(serde_json::json!({})))
             .expect("能读")
             .expect("有效");
         let out = shape_to_json(&sh);
-        assert!(out.get("ends").is_none() && out.get("union").is_none());
+        assert_eq!(out["ends"], Value::from("drop"));
+        assert!(out.get("union").is_none() && out.get("apart").is_none());
         sh.ends = Ends::Min;
         sh.union = true;
         let out = shape_to_json(&sh);
