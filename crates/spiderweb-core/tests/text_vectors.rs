@@ -568,10 +568,16 @@ fn find_holes_on_o_smoke() {
     };
     let (contours, _) = T::layout(&tx, &font);
     if font.glyph('O').contours.len() == 2 {
-        assert_eq!(
-            T::find_holes(&contours),
-            vec![1],
-            "O's inner contour is a hole"
+        let holes = T::find_holes(&contours);
+        assert_eq!(holes.len(), 1, "O has exactly one hole");
+        // Contour order differs between system fonts, so identify the hole by
+        // area instead of by index: it is the inner (smaller) contour.
+        let abs_area = |i: usize| T::area(&T::flatten(&contours[i].pts, T::FLATTEN_TOL)).abs();
+        let hole = holes[0];
+        let outer = 1 - hole;
+        assert!(
+            abs_area(hole) < abs_area(outer),
+            "the hole is the inner contour (hole {hole}, outer {outer})"
         );
     }
     // an empty outline neither panics nor counts as a hole (the original Python crashes here)

@@ -783,3 +783,32 @@ fn opt_float(d: &Map<String, Value>, key: &str, default: f64) -> Option<f64> {
         Some(v) => py_float(v),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A closed square contour as a Bezier point list (one line segment per side).
+    fn square(cx: f64, cy: f64, r: f64) -> Contour {
+        let corners = [
+            [cx - r, cy - r],
+            [cx + r, cy - r],
+            [cx + r, cy + r],
+            [cx - r, cy + r],
+        ];
+        let mut pts = Vec::new();
+        for i in 0..4 {
+            pts.extend(crate::arc::line_bezier(corners[i], corners[(i + 1) % 4]));
+        }
+        Contour { glyph: 0, pts }
+    }
+
+    #[test]
+    fn find_holes_marks_the_inner_contour() {
+        let outer = square(0.0, 0.0, 4.0);
+        let inner = square(0.0, 0.0, 1.5);
+        assert_eq!(find_holes(&[outer.clone(), inner.clone()]), vec![1]);
+        // The contour order differs between system fonts; the result must not.
+        assert_eq!(find_holes(&[inner, outer]), vec![0]);
+    }
+}
