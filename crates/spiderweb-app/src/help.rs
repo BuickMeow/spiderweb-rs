@@ -522,6 +522,8 @@ pub struct HelpState {
     pub query: String,
     /// Clips of the topic being viewed (help.rs).
     pub clips: ClipCache,
+    /// About page banner texture; the bool is whether the full-size image was used.
+    pub banner: Option<(bool, egui::TextureHandle)>,
 }
 
 /// Opens the help window (upstream open_help): with topic None, jumps to the current tool's topic.
@@ -648,7 +650,14 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let cur = selected.clone();
-                            show_topic(ui, cur.as_deref(), &mut selected, &mut link, &mut clips);
+                            show_topic(
+                                ui,
+                                cur.as_deref(),
+                                &mut selected,
+                                &mut link,
+                                &mut clips,
+                                &mut app.help.banner,
+                            );
                         });
                 });
             });
@@ -686,12 +695,40 @@ pub fn help_ui(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Right side of the help window: a topic's title, body and See also (upstream HelpWindow.show).
+/// The About page banner (upstream about_banner): full size on high-DPI screens,
+/// the half-size picture otherwise; missing/broken image just shows nothing.
+fn about_banner_ui(ui: &mut egui::Ui, cache: &mut Option<(bool, egui::TextureHandle)>) {
+    let full = ui.ctx().pixels_per_point() >= 1.5;
+    if cache.as_ref().map(|(f, _)| *f != full).unwrap_or(true) {
+        let bytes: &[u8] = if full {
+            include_bytes!("../assets/spiderweb.png")
+        } else {
+            include_bytes!("../assets/spiderweb-half.png")
+        };
+        if let Ok(img) = image::load_from_memory(bytes) {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            let color =
+                egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw());
+            let tex = ui
+                .ctx()
+                .load_texture("about-banner", color, egui::TextureOptions::LINEAR);
+            *cache = Some((full, tex));
+        }
+    }
+    if let Some((_, tex)) = cache.as_ref() {
+        ui.add(egui::Image::new(tex));
+        ui.add_space(6.0);
+    }
+}
+
 fn show_topic(
     ui: &mut egui::Ui,
     id: Option<&str>,
     selected: &mut Option<String>,
     link: &mut Option<&'static str>,
     clips: &mut ClipCache,
+    banner: &mut Option<(bool, egui::TextureHandle)>,
 ) {
     let Some(t) = id.and_then(help_texts::by_id) else {
         clips.set_topic(None);
@@ -706,6 +743,9 @@ fn show_topic(
     ui.label(egui::RichText::new(t.section).small().weak());
     ui.label(egui::RichText::new(t.title).strong().size(18.0));
     ui.add_space(6.0);
+    if t.id == "about" {
+        about_banner_ui(ui, banner);
+    }
     // clips/<topic id>.gif (or .png) at the top, then the page with its [clip:...] markers in place;
     // a marker whose clip is missing is left out (upstream add_clip returning False).
     show_clip(ui, clips, t.id);
@@ -1036,5 +1076,19 @@ mod tests {
             assert!(frame.width() > 0 && frame.height() > 0, "{name}");
             assert!(player.delay > Duration::ZERO, "{name}: no delay");
         }
+    }
+
+    #[test]
+    fn about_banner_pngs_decode() {
+        let full = image::load_from_memory(include_bytes!("../assets/spiderweb.png"))
+            .expect("full banner decodes");
+        let half = image::load_from_memory(include_bytes!("../assets/spiderweb-half.png"))
+            .expect("half banner decodes");
+        assert!(full.width() > 0 && full.height() > 0);
+        assert!(half.width() > 0 && half.height() > 0);
+        assert!(
+            full.width() >= half.width(),
+            "full is at least as wide as half"
+        );
     }
 }
