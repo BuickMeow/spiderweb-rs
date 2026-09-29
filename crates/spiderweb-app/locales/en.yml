@@ -1,4 +1,4 @@
-# Spiderweb 英语文案：逐字取自原版 Python 源码（scripts/ 下），不要自创。
+# Spiderweb English strings: taken verbatim from the upstream Python sources (under scripts/); do not invent new ones.
 app:
   startup_failed: "Spiderweb couldn't start because of an error.\n\n%{e}\n\nPlease include errors.log when you report it."
   draw: "Draw: %{shape_label}"

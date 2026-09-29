@@ -1,13 +1,15 @@
-//! 形状 ⇄ JSON：Python 工程文件里的形状字典与 Rust [`Shape`] 的互转。
+//! Shape ⇄ JSON: conversion between the shape dicts in Python project files and Rust [`Shape`].
 //!
-//! - [`shape_from_json`] 对应 `notes/engine.clean_shape`：从文件里读出的形状字典 -> 有效形状，
-//!   不支持的种类返回 `Ok(None)`，Python 里会抛异常（整个工程读不开）的坏字段返回 `Err`。
-//! - [`shape_to_json`] 是逆转换，输出 Python `clean_shape` 会得到的形状字典（键的取舍与省略规则
-//!   相同：curve 的 `sharp` 空则省略、`sym` 没有则省略，折线笔画的 `free`/`smooth`/`k` 只在
-//!   free 时出现，等等）。
+//! - [`shape_from_json`] corresponds to `notes/engine.clean_shape`: shape dict read from a file
+//!   -> valid shape; unsupported kinds return `Ok(None)`, and bad fields that would make Python
+//!   raise (so the whole project fails to open) return `Err`.
+//! - [`shape_to_json`] is the reverse conversion, emitting the shape dict Python `clean_shape`
+//!   would produce (same key selection and omission rules: curve `sharp` is omitted when empty,
+//!   `sym` when absent, a poly stroke's `free`/`smooth`/`k` only appear when free, etc.).
 //!
-//! 与 Python 的差异（都写在对应函数上）：漏斗的老版本 `bends` 列表曲线用默认曲线代替
-//! （Python 会拟合），`funnel.rs` 也还没移植，所以这里只做加载所需的清洗。
+//! Differences from Python (all noted on the respective functions): the funnel's old-version
+//! `bends` list curve is replaced with the default curve (Python fits it), and `funnel.rs` is
+//! not ported yet, so only the cleanup needed for loading is done here.
 
 use serde_json::{Map, Value};
 
@@ -23,7 +25,7 @@ use spiderweb_core::text::clean_text;
 use spiderweb_core::tumour::clean_tumour;
 use spiderweb_core::{Pt, round_half_even};
 
-/// 新形状的默认速度 / 尾点（engine.SHAPE_DEFAULTS）。
+/// Default velocity / end dot for a new shape (engine.SHAPE_DEFAULTS).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeDefaults {
     pub vel0: f64,
@@ -37,21 +39,21 @@ impl Default for ShapeDefaults {
     }
 }
 
-/// SHAPE_DEFAULTS 的值。
+/// The values of SHAPE_DEFAULTS.
 pub const SHAPE_DEFAULTS: ShapeDefaults = ShapeDefaults {
     vel0: 127.0,
     vel1: 127.0,
     end_dot: false,
 };
 
-/// 形状种子的四种填充方式（custom.FILLS）。
+/// The four fill modes for a shape seed (custom.FILLS).
 pub const FILLS: [Fill; 4] = [Fill::Empty, Fill::Fill, Fill::Spam, Fill::OutlineSpam];
-/// 种子的 spam 起点（custom.ALIGNS）。
+/// The seed's spam start (custom.ALIGNS).
 pub const ALIGNS: [Align; 3] = [Align::Auto, Align::Aligned, Align::Centred];
-/// 能长肿瘤的形状种类（tumour.LINE_KINDS）。
+/// Shape kinds that can grow tumours (tumour.LINE_KINDS).
 pub const LINE_KINDS: [Kind; 5] = [Kind::Line, Kind::Poly, Kind::Free, Kind::Curve, Kind::Arc];
 
-/// 形状字典的坏字段；Python 里这些会让 `load_file` 失败。
+/// Bad fields in a shape dict; in Python these make `load_file` fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShapeError {
     #[error("形状不是字典")]
@@ -70,9 +72,9 @@ pub enum ShapeError {
     Notes,
 }
 
-// ---------------------------------------------------------------- Python 值转换
+// ---------------------------------------------------------------- Python value conversion
 
-/// Python `float(x)`：数字、布尔、数字字符串；别的失败。
+/// Python `float(x)`: numbers, booleans, numeric strings; anything else fails.
 pub fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
@@ -82,7 +84,7 @@ pub fn py_float(v: &Value) -> Option<f64> {
     }
 }
 
-/// Python `int(x)`：数字截断、布尔与整数字符串；别的失败。
+/// Python `int(x)`: numbers truncated, booleans and integer strings; anything else fails.
 pub fn py_int(v: &Value) -> Option<i64> {
     match v {
         Value::Number(n) => {
@@ -100,7 +102,7 @@ pub fn py_int(v: &Value) -> Option<i64> {
     }
 }
 
-/// Python 真值判断。
+/// Python truth test.
 pub fn py_bool(v: &Value) -> bool {
     match v {
         Value::Null => false,
@@ -112,7 +114,7 @@ pub fn py_bool(v: &Value) -> bool {
     }
 }
 
-/// Python `str(x)`（容器按 repr 的近似写法；形状里用到的都是标量）。
+/// Python `str(x)` (containers use an approximation of repr; shapes only ever use scalars).
 pub fn py_str(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -147,7 +149,7 @@ pub fn py_str(v: &Value) -> String {
     }
 }
 
-/// 数字（f64）-> JSON 数字；整数值写成整数（Python `short_num` 的 12 位有效数字版）。
+/// Number (f64) -> JSON number; integral values are written as integers (the 12-significant-digit version of Python `short_num`).
 pub fn short_num_f(x: f64, digits: u32) -> Value {
     if !x.is_finite() {
         return Value::from(x);
@@ -161,7 +163,7 @@ pub fn short_num_f(x: f64, digits: u32) -> Value {
     num_value(rounded)
 }
 
-/// f64 -> JSON：整数写成整数，否则写浮点（保持 -0.0）。
+/// f64 -> JSON: integers are written as integers, otherwise as floats (-0.0 is preserved).
 pub(crate) fn num_value(x: f64) -> Value {
     if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64 {
         if x == 0.0 && x.is_sign_negative() {
@@ -172,9 +174,9 @@ pub(crate) fn num_value(x: f64) -> Value {
     Value::from(x)
 }
 
-// ---------------------------------------------------------------- 读（clean_shape）
+// ---------------------------------------------------------------- read (clean_shape)
 
-/// 形状种类名 -> [`Kind`]。
+/// Shape kind name -> [`Kind`].
 pub fn kind_from_str(s: &str) -> Option<Kind> {
     Some(match s {
         "line" => Kind::Line,
@@ -213,7 +215,7 @@ fn fill_from_str(s: &str) -> Fill {
     }
 }
 
-/// fill -> Python 名。
+/// fill -> Python name.
 pub fn fill_str(f: Fill) -> &'static str {
     match f {
         Fill::Empty => "empty",
@@ -223,7 +225,7 @@ pub fn fill_str(f: Fill) -> &'static str {
     }
 }
 
-/// align -> Python 名。
+/// align -> Python name.
 pub fn align_str(a: Align) -> &'static str {
     match a {
         Align::Auto => "auto",
@@ -232,7 +234,7 @@ pub fn align_str(a: Align) -> &'static str {
     }
 }
 
-/// ends -> Python 名（custom.ENDS）。
+/// ends -> Python name (custom.ENDS).
 pub fn ends_str(e: Ends) -> &'static str {
     match e {
         Ends::Round => "round",
@@ -243,7 +245,7 @@ pub fn ends_str(e: Ends) -> &'static str {
     }
 }
 
-/// Python 名 -> ends；不认识的按旧形状的 drop（`clean_shape`）。
+/// Python name -> ends; unknown names become the old shapes' drop (`clean_shape`).
 pub fn ends_from_str(s: &str) -> Ends {
     match s {
         "round" => Ends::Round,
@@ -254,10 +256,11 @@ pub fn ends_from_str(s: &str) -> Ends {
     }
 }
 
-/// 从文件里读出的形状字典 -> 有效形状（`clean_shape`）。
+/// Shape dict read from a file -> valid shape (`clean_shape`).
 ///
-/// `Ok(None)` = Python 返回 None 的情况（种类不支持、点数不够、坏笔画被跳空……），
-/// `Err` = Python 会抛异常让整个工程读不开的情况（pts / vel_env / gate 坏掉）。
+/// `Ok(None)` = cases where Python returns None (unsupported kind, too few points, bad strokes
+/// skipped, ...), `Err` = cases where Python would raise and the whole project would fail to
+/// open (bad pts / vel_env / gate).
 pub fn shape_from_json(value: &Value) -> Result<Option<Shape>, ShapeError> {
     let sh = value.as_object().ok_or(ShapeError::NotObject)?;
     let Some(kind) = sh
@@ -354,7 +357,7 @@ fn field_vel(v: &Value) -> Result<f64, ShapeError> {
     py_float(v).ok_or(ShapeError::Vel)
 }
 
-/// `arc_k(sh)` 的 `k`（坏了回 1.0）。
+/// The `k` of `arc_k(sh)` (falls back to 1.0 when bad).
 fn arc_k_field(sh: &Map<String, Value>) -> f64 {
     arc_k(py_float(sh.get("k").unwrap_or(&Value::from(1.0))).unwrap_or(1.0))
 }
@@ -383,8 +386,8 @@ fn custom_shape(sh: &Map<String, Value>, mut out: Shape) -> Result<Option<Shape>
         Some("centred") => Align::Centred,
         _ => Align::Auto,
     };
-    // 旧形状没有 ends，读作 drop（它们的音符保持原样）；union / apart 只在正好是 true 时才有
-    // （Python `sh.get(k) is True`）
+    // Old shapes have no ends, read as drop (their notes stay as they are); union / apart only
+    // count when exactly true (Python `sh.get(k) is True`)
     out.ends = sh
         .get("ends")
         .and_then(Value::as_str)
@@ -453,11 +456,11 @@ fn shape_from_of(fr: &Map<String, Value>) -> Option<ShapeFrom> {
     })
 }
 
-/// 漏斗的设置与曲线（Python 的 try 包住整段：出错就整个形状无效）。
+/// A funnel's settings and curves (Python wraps the whole block in try: any error invalidates the whole shape).
 fn funnel_shape(sh: &Map<String, Value>, mut out: Shape) -> Option<Shape> {
     let starts_v = sh.get("starts");
     let mut pts = out.pts.clone();
-    // Python sh.get("starts") 在缺失与显式 null 时都是 None
+    // Python sh.get("starts") is None both when missing and when explicitly null
     let missing_starts = starts_v.is_none_or(|v| v.is_null());
     let starts_json = if pts.len() == 2 && missing_starts {
         let (new_pts, starts) = old_funnel(sh)?;
@@ -478,7 +481,7 @@ fn funnel_shape(sh: &Map<String, Value>, mut out: Shape) -> Option<Shape> {
     out.change = cfg.4;
     out.follow = cfg.5;
     out.wall = cfg.6;
-    // 没有 starts 键 = 空（原版 clean_starts(None) -> []）
+    // No starts key = empty (the original's clean_starts(None) -> [])
     out.starts = clean_starts(
         starts_json.as_ref().unwrap_or(&Value::Null),
         (out.pts.len() / 2 - 1) as i64,
@@ -486,7 +489,7 @@ fn funnel_shape(sh: &Map<String, Value>, mut out: Shape) -> Option<Shape> {
     Some(out)
 }
 
-/// `clean_funnel`：(fill, gate0, gate1, vary, change, follow, wall)；坏 gate 返回 None。
+/// `clean_funnel`: (fill, gate0, gate1, vary, change, follow, wall); a bad gate returns None.
 fn clean_funnel(
     sh: &Map<String, Value>,
 ) -> Option<(FunnelFill, f64, f64, bool, GateChange, GateFollow, WallMode)> {
@@ -516,7 +519,7 @@ fn clean_funnel(
     Some((fill, gate0, gate1, vary, change, follow, wall))
 }
 
-/// 漏斗第一版的 `[起点, 墙顶]` + sides -> 线 + 墙与起点（`old_funnel`）。
+/// The funnel's first version `[start, wall top]` + sides -> line + wall and starts (`old_funnel`).
 fn old_funnel(sh: &Map<String, Value>) -> Option<(Vec<Pt>, Value)> {
     let pts = sh.get("pts")?.as_array()?;
     if pts.len() != 2 {
@@ -563,11 +566,11 @@ fn clamp_bend(u: f64, f: f64) -> [f64; 2] {
     [u.clamp(0.01, 0.99), f.clamp(0.001, 0.999)]
 }
 
-/// 漏斗第一版的 bends 列表 -> 默认曲线（原版用最小二乘拟合，这里从简）。
-/// DEFAULT_CURVE（funnel.py）。
+/// The funnel's first-version bends list -> default curve (the original does a least-squares
+/// fit; this is simplified). DEFAULT_CURVE (funnel.py).
 const DEFAULT_CURVE: [[f64; 2]; 4] = [[0.0, 0.0], [0.7, 0.06], [0.94, 0.3], [1.0, 1.0]];
 
-/// `clean_starts`：起点列表 + 线数 -> 有效的起点。
+/// `clean_starts`: start list + line count -> valid starts.
 fn clean_starts(starts: &Value, lines: i64) -> Option<Vec<FunnelStart>> {
     let items = match starts {
         Value::Null => return Some(Vec::new()),
@@ -612,7 +615,7 @@ fn clean_starts(starts: &Value, lines: i64) -> Option<Vec<FunnelStart>> {
     Some(out)
 }
 
-/// `clean_curve`（funnel.py）：旧的 bends 列表用默认曲线代替。
+/// `clean_curve` (funnel.py): old bends lists are replaced with the default curve.
 fn clean_funnel_curve(c: &Value) -> Option<Option<FunnelCurve>> {
     if !py_bool(c) {
         return Some(None);
@@ -678,7 +681,7 @@ fn default_funnel_curve() -> FunnelCurve {
     }
 }
 
-// ---------------------------------------------------------------- 写（Shape -> 字典）
+// ---------------------------------------------------------------- write (Shape -> dict)
 
 fn pt_value(p: Pt) -> Value {
     Value::Array(vec![Value::from(p[0]), Value::from(p[1])])
@@ -740,7 +743,7 @@ fn stroke_value(st: &Stroke) -> Value {
     Value::Object(o)
 }
 
-/// [`Sym`] -> Python 名。
+/// [`Sym`] -> Python name.
 pub fn sym_str(s: Sym) -> &'static str {
     match s {
         Sym::Mirror => "mirror",
@@ -853,7 +856,7 @@ fn start_value(st: &FunnelStart) -> Value {
     })
 }
 
-/// 有效形状 -> Python `clean_shape` 会得到的形状字典。
+/// Valid shape -> the shape dict Python `clean_shape` would produce.
 pub fn shape_to_json(sh: &Shape) -> Value {
     let mut o = Map::new();
     o.insert("vel0".into(), num_value(sh.vel0));
@@ -1000,12 +1003,12 @@ pub fn shape_to_json(sh: &Shape) -> Value {
     Value::Object(o)
 }
 
-/// `round(x, 4)`（银行家舍入），`short_env` 用。
+/// `round(x, 4)` (banker's rounding), used by `short_env`.
 pub(crate) fn round4(x: f64) -> f64 {
     round_half_even(x * 1e4) / 1e4
 }
 
-/// 默认灵敏度的重导出（`smooth.SMOOTH_DEFAULT`）。
+/// Re-export of the default sensitivity (`smooth.SMOOTH_DEFAULT`).
 pub const FREE_SMOOTH_DEFAULT: i64 = SMOOTH_DEFAULT;
 
 #[cfg(test)]
@@ -1030,7 +1033,7 @@ mod tests {
         v
     }
 
-    /// 1.2.0 工程里的 ends / union / apart 能读进来。
+    /// ends / union / apart from 1.2.0 projects can be read.
     #[test]
     fn reads_new_custom_keys() {
         let sh = shape_from_json(&custom_json(serde_json::json!({
@@ -1043,7 +1046,7 @@ mod tests {
         assert!(sh.union && sh.apart);
     }
 
-    /// 旧形状没有这些键：ends 读作 drop，union / apart 关着（只有正好是 true 才算）。
+    /// Old shapes lack these keys: ends reads as drop, union / apart stay off (only exactly true counts).
     #[test]
     fn old_custom_keys_are_default() {
         let sh = shape_from_json(&custom_json(

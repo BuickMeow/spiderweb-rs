@@ -1,8 +1,9 @@
-"""bezier.py 的对照向量。
+"""Differential vectors for bezier.py.
 
-所有输入的浮点数先量化到 15 位有效数字再交给 Python 原版计算：
-这样 serde_json 的默认浮点解析（无 float_roundtrip 特性）也能精确还原，
-从而保证 Rust 与原版在同一批 double 上运算。输出保持原版算出的全精度。
+Every input float is first quantised to 15 significant digits before being handed to the Python
+original: that way serde_json's default float parsing (without the float_roundtrip feature) can
+reproduce it exactly, guaranteeing Rust and the original operate on the same doubles. The output
+keeps the full precision the original computes.
 """
 
 import copy
@@ -13,7 +14,7 @@ import sys
 
 from vec_common import write
 
-# 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
+# when run in the worktree, vec_common cannot derive the original script dir; add a fallback path
 _SCRIPTS = (os.environ.get("SPIDERWEB_SCRIPTS") or os.environ.get("SPIDERWEB_SRC")
             or "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
@@ -22,7 +23,7 @@ if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
 from notes import bezier as B
 
 
-# 基础曲线：3 个锚点（7 点）、4 个锚点（10 点）、5 个锚点（13 点）
+# base curves: 3 anchors (7 points), 4 anchors (10 points), 5 anchors (13 points)
 C1 = [[0.0, 60.0], [1.0, 61.0], [2.0, 61.0], [3.0, 60.0], [4.0, 59.0], [5.0, 59.0], [6.0, 60.0]]
 C2 = [[0.0, 60.0], [1.5, 63.0], [3.0, 60.0], [4.5, 57.0], [6.0, 60.0], [7.5, 63.0],
       [9.0, 60.0], [10.5, 57.0], [12.0, 60.0], [13.5, 63.0]]
@@ -50,7 +51,7 @@ def rjson(v):
 
 
 def serde_parse(x):
-    """复刻 serde_json（未开 float_roundtrip）的浮点解析，用于自检。"""
+    """Replicate serde_json's float parsing (float_roundtrip off) for self-checks."""
     tok = repr(x)
     neg = tok.startswith("-")
     if neg:
@@ -130,7 +131,7 @@ def screen(sx, sy):
     return to_screen, from_screen
 
 
-# ---- 带闭包 / 会改参数的包装函数
+# ---- wrapper functions with closures / that mutate their arguments
 
 def sym_axis_call(pts, sc, exact):
     to_screen, _ = screen(*sc)
@@ -199,7 +200,7 @@ def shift_marks_call(c, after, d):
 def gen():
     cases = []
 
-    # ---- 基本函数
+    # ---- basic functions
     for pts in (C1, C2, [[3.0, 4.0]], []):
         add(cases, "anchor_count", [pts], B.anchor_count)
     for p0, p1, p2, p3, t in (
@@ -226,7 +227,7 @@ def gen():
     for i in range(12):
         add(cases, "handle_anchor", [i], B.handle_anchor)
 
-    # ---- symmetric：mirror axis 0/1/None、turn、source 0/1、sharp、不合法输入
+    # ---- symmetric: mirror axis 0/1/None, turn, source 0/1, sharp, invalid input
     sym_cases = [
         (C1, [], "mirror", None, 0),
         (C1, [], "mirror", 0, 0),
@@ -244,13 +245,13 @@ def gen():
         (FIVE, [], "mirror", None, 0),
         (FIVE, [1, 2, 3], "turn", None, 0),
         (FIVE, [1, 3], "mirror", None, 1),
-        (CLOSED, [], "mirror", None, 0),   # 首尾重合：det=0 -> 不变
-        (C2, [], "mirror", None, 0),       # (n-1)%6 != 0 -> 不变
+        (CLOSED, [], "mirror", None, 0),   # first and last coincide: det=0 -> unchanged
+        (C2, [], "mirror", None, 0),       # (n-1)%6 != 0 -> unchanged
     ]
     for p, sh, mode, axis, source in sym_cases:
         add(cases, "symmetric", [p, sh, mode, axis, source], B.symmetric)
 
-    # ---- make_symmetric：偶数段先切中间
+    # ---- make_symmetric: an even segment count first splits the middle
     mk_sym = [
         (C2, [], "mirror", None, 0),
         (C2, [0, 3], "mirror", 1, 0),
@@ -261,7 +262,7 @@ def gen():
     for p, sh, mode, axis, source in mk_sym:
         add(cases, "make_symmetric", [p, sh, mode, axis, source], B.make_symmetric)
 
-    # ---- set_sharp：输入的曲线也进 args（先深拷贝再改）
+    # ---- set_sharp: the input curve is part of args too (deep-copied before mutating)
     for pts, initial, new_sharp in (
         (C1, [3], [5, 2, 2, 0]),
         (C1, [3], []),
@@ -310,7 +311,7 @@ def gen():
     ):
         add(cases, "keep_symmetric", [mkcurve(pts, sharp, sym), i, sc, exact], keep_symmetric_call)
 
-    # ---- drag_point：锚点 / 手柄 / alt / 对称 / exact / 屏幕比例
+    # ---- drag_point: anchor / handle / alt / symmetry / exact / screen scale
     drag = [
         (C1, [], None, 3, [3.5, 62.0], False, [1.0, 1.0], False),
         (C1, [], None, 3, [3.5, 62.0], True, [1.0, 1.0], False),
@@ -333,7 +334,7 @@ def gen():
     for pts, sharp, sym, i, new, alt, sc, exact in drag:
         add(cases, "drag_point", [mkcurve(pts, sharp, sym), i, new, alt, sc, exact], drag_point_call)
 
-    # ---- add_anchor：t=0/1、不同段、对称曲线一对、同一段两次
+    # ---- add_anchor: t=0/1, different segments, a symmetric curve pair, the same segment twice
     adda = [
         (C1, [], None, 0, 0.5, [1.5, 60.5], False),
         (C1, [], None, 1, 0.25, [4.0, 62.0], False),
@@ -344,7 +345,7 @@ def gen():
         (S3, [], "mirror", 1, 0.5, [4.5, 61.0], False),
         (S3, [], "mirror", 0, 0.25, [1.0, 61.5], False),
         (S3, [], "mirror", 0, 0.5, [1.5, 61.0], True),
-        (C2, [], "mirror", 1, 0.5, [4.0, 61.0], False),   # 4 锚点、3 段：同一段切两次
+        (C2, [], "mirror", 1, 0.5, [4.0, 61.0], False),   # 4 anchors, 3 segments: the same segment is split twice
     ]
     for pts, sharp, sym, seg, t, new, exact in adda:
         add(cases, "add_anchor", [mkcurve(pts, sharp, sym), seg, t, new, [1.0, 1.0], exact],
@@ -403,7 +404,7 @@ def gen():
                  (C1, [[0.0, 60.0], [1.0, 60.0], [2.0, 60.0], [3.0, 60.0]])):
         add(cases, "difference", [a, b], B.difference)
 
-    # ---- fit：直线 / 两点 / 全同 / 圆采样 / 随机折线
+    # ---- fit: straight line / two points / all identical / circle samples / random polylines
     line_pts = [[i * 1.0, 60.0 + i * 0.5] for i in range(11)]
     add(cases, "fit", [line_pts, 0.003], B.fit)
     add(cases, "fit", [[[0.0, 60.0], [4.0, 64.0]], 0.003], B.fit)
@@ -427,7 +428,7 @@ def gen():
             y += rnd.uniform(-4.0, 4.0)
             pts.append([round(t, 4), round(y, 4)])
         if k % 3 == 1:
-            pts[n // 2] = list(pts[n // 2 - 1])  # 重复点
+            pts[n // 2] = list(pts[n // 2 - 1])  # duplicate point
         if k % 3 == 2:
             y += rnd.uniform(-4.0, 4.0)
             pts.append([round(t + 0.25, 4), round(y, 4)])

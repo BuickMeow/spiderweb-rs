@@ -1,4 +1,4 @@
-//! 播放：Windows/macOS 系统 MIDI 输出（midir），对应 Python files/playback.py。
+//! Playback: system MIDI output on Windows/macOS (midir), corresponding to Python files/playback.py.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -9,7 +9,7 @@ use midir::{MidiOutput, MidiOutputConnection};
 
 pub const DEFAULT_DEVICE: &str = "Microsoft GS Wavetable Synth";
 
-/// 系统上的 MIDI 输出设备名。
+/// Names of the system's MIDI output devices.
 pub fn devices() -> Vec<String> {
     match MidiOutput::new("spiderweb-probe") {
         Ok(out) => out
@@ -21,9 +21,10 @@ pub fn devices() -> Vec<String> {
     }
 }
 
-/// 把音符行整理成播放事件 `(tick, is_on, channel, key, velocity)`：只留窗口里的，
-/// 高于 127 的键跳过（256 键模式：合成器只有 128 个键，playback.Player.start），
-/// 同一 tick 上 note-off 在前（先关后开）。
+/// Turns note rows into playback events `(tick, is_on, channel, key, velocity)`: only those
+/// inside the window, keys above 127 are skipped (256-key mode: the synth only has 128 keys,
+/// playback.Player.start), and note-off comes before note-on at the same tick (off first,
+/// then on).
 pub fn build_events(
     notes: &[[i64; 6]],
     ppq: f64,
@@ -52,13 +53,13 @@ pub fn build_events(
     events
 }
 
-/// 一个播放器：后台线程按时间发送音符，支持暂停/停止与位置查询。
+/// A player: a background thread sends notes on schedule; supports pause/stop and position queries.
 pub struct Player {
     conn: Option<MidiOutputConnection>,
     thread: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
-    position: Arc<AtomicI64>, // 当前 tick
+    position: Arc<AtomicI64>, // current tick
     device: String,
 }
 
@@ -80,7 +81,7 @@ impl Player {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// 打开（或换到）设备；已经打开同一个就什么都不做。Err 是给状态栏的消息。
+    /// Opens (or switches to) a device; does nothing if the same one is already open. Err is the status-bar message.
     pub fn open(&mut self, name: &str) -> Result<(), String> {
         if self.conn.is_some() && self.device == name {
             return Ok(());
@@ -109,7 +110,7 @@ impl Player {
         self.device.clear();
     }
 
-    /// 立刻发一个音符（右拖试听）。>127 的键（256 键模式）发不出去：跳过（原版 MidiOut.note）。
+    /// Sends one note immediately (right-drag preview). Keys >127 (256-key mode) cannot be sent: skipped (upstream MidiOut.note).
     pub fn note(&mut self, ch: u8, key: i64, vel: u8) {
         if key > 127 {
             return;
@@ -119,7 +120,7 @@ impl Player {
         }
     }
 
-    /// 从 from_beat 开始播到 stop_beat（ticks 转 us 排队；bpm 为每拍的分钟数）。
+    /// Plays from from_beat to stop_beat (ticks queued as us; bpm is minutes per beat).
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &mut self,
@@ -174,7 +175,7 @@ impl Player {
                 }
                 position.store(tick, Ordering::SeqCst);
             }
-            // 收尾：所有通道 all notes off
+            // Wrap up: all notes off on every channel
             for ch in 0..16u8 {
                 let _ = conn.send(&[0xb0 | ch, 123, 0]);
             }
@@ -192,7 +193,7 @@ impl Player {
         self.stop = Arc::new(AtomicBool::new(false));
     }
 
-    /// 播放位置（beat）。
+    /// Playback position (beats).
     pub fn position(&self, ppq: i64) -> f64 {
         self.position.load(Ordering::SeqCst) as f64 / ppq.max(1) as f64
     }
@@ -204,7 +205,7 @@ mod tests {
 
     #[test]
     fn events_skip_keys_above_127() {
-        // 256 键模式：>127 的键不发声（合成器只有 128 键），<=127 的照常
+        // 256-key mode: keys >127 make no sound (the synth has only 128 keys), <=127 behave normally
         let notes = [
             [0, 960, 200, 100, 0, 0],
             [0, 960, 126, 90, 0, 0],
@@ -225,7 +226,7 @@ mod tests {
 
     #[test]
     fn events_stay_inside_the_window() {
-        // 窗口（0.5..1.5 拍）里开始的音符发声；之后的不发
+        // Notes starting inside the window (0.5..1.5 beats) sound; later ones don't
         let notes = [
             [0, 480, 60, 100, 0, 0],
             [960, 1440, 62, 90, 0, 0],
@@ -234,6 +235,9 @@ mod tests {
         let events = build_events(&notes, 960.0, 0.5, 1.5);
         assert!(events.contains(&(960, true, 0, 62, 90)));
         assert!(events.contains(&(1440, false, 0, 62, 0)));
-        assert!(events.iter().all(|e| e.3 != 64), "窗口后的音符不该发声");
+        assert!(
+            events.iter().all(|e| e.3 != 64),
+            "notes after the window must not sound"
+        );
     }
 }

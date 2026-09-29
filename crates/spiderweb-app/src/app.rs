@@ -1,5 +1,6 @@
-//! 主窗口状态：工具栏、侧栏、形状编辑、撤销、自动保存、播放与文件操作。
-//! 钢琴卷帘的绘制与交互在 roll.rs，侧栏在 panels.rs。
+//! Main window state: toolbar, side panel, shape editing, undo, autosave, playback and file
+//! operations. The piano roll's painting and interaction are in roll.rs, the side panel in
+//! panels.rs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -28,13 +29,13 @@ use crate::roll_velocity::VelocityState;
 use crate::snap_picker::CustomSnapWindow;
 use crate::text_dialog::FontDialog;
 
-/// 程序版本（原版 files/about.py 的 VERSION；帮助窗口标题与 about 文案用）。
+/// Program version (VERSION of upstream files/about.py; used by the help window title and the about text).
 pub const VERSION: &str = "1.2.0";
 
-/// 每个形状的音符与（粘贴音符的）track 列。
+/// Notes per shape and the track column (for pasted notes).
 type NotesAndTracks = (Vec<[i64; 4]>, Option<Vec<i64>>);
 
-/// 工具（原版 TOOLS + SHAPE_TOOLS）。
+/// Tools (upstream TOOLS + SHAPE_TOOLS).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
@@ -84,7 +85,7 @@ impl Tool {
         }
     }
 
-    /// 界面上的工具名（按钮 / 提示；形状名等数据仍用 [`Tool::label`]）。
+    /// Tool name shown in the UI (buttons / tips; data like shape names still uses [`Tool::label`]).
     pub fn ui_label(self) -> String {
         match self {
             Tool::Select => rust_i18n::t!("tool.select"),
@@ -125,15 +126,15 @@ impl Tool {
     }
 }
 
-/// 选中的漏斗里高亮的一个 part（原版 app.parts 的元素）：
-/// 一条线，或一条曲线（起点号, 墙端）。
+/// A highlighted part of the selected funnel (an element of upstream app.parts):
+/// a line, or a curve (start number, wall end).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PartId {
     Line(usize),
     Curve(usize, usize),
 }
 
-/// 工程文本框（原版 pvar）。
+/// Project text fields (upstream pvar).
 #[derive(Clone, Debug)]
 pub struct Pvar {
     pub ppq: String,
@@ -142,7 +143,7 @@ pub struct Pvar {
     pub output: String,
 }
 
-/// 确认"这一步会生成很多音符"用的待确认状态。
+/// Pending state for confirming "this step will generate a lot of notes".
 pub struct PendingBig {
     pub shapes: Vec<Shape>,
     pub total: i64,
@@ -153,20 +154,20 @@ pub struct App {
     pub sels: BTreeSet<usize>,
     pub sel: Option<usize>,
     pub draft: Option<Shape>,
-    /// 正在画的方 / 圆 / 三角是哪个工具（原版 draft["draw"]）
+    /// Which tool the square / circle / triangle being drawn uses (upstream draft["draw"])
     pub draft_draw: Option<Tool>,
-    /// 选中的自定义形状被拾取的笔画号（原版 app.stroke）
+    /// Picked stroke number of the selected custom shape (upstream app.stroke)
     pub stroke: Option<usize>,
     pub drag: Option<Drag>,
     pub follow: Option<Drag>,
     pub arc_bend: bool,
-    /// 右键按下时已处理（曲线删点 / 收手柄）：松开时不再取消选择。
+    /// Already handled on right press (curve point deletion / handle retraction): don't deselect on release.
     pub right_done: bool,
-    /// 右拖试听的现场（原版 self._scrub）：还没拖够 4px 时 tick 为 None。
+    /// Right-drag preview state (upstream self._scrub): tick is None until the drag exceeds 4px.
     pub right_drag: Option<RightDrag>,
-    /// 右拖试听正在响的 (通道, 音高) -> 最新音符起点（原版 self._scrub_held）。
+    /// Sounding (channel, pitch) -> latest note start during right-drag preview (upstream self._scrub_held).
     pub scrub_held: BTreeMap<(u8, i64), i64>,
-    /// 打开着的右键菜单（原版 roll_menu.show_menu）。
+    /// Open context menu (upstream roll_menu.show_menu).
     pub shape_menu: Option<MenuState>,
     pub tool: Tool,
     pub draw_tool: Tool,
@@ -182,7 +183,7 @@ pub struct App {
     pub channel_split: ChannelSplit,
     /// Where copying / pasting to Domino starts (1.2.0's Project -> Domino start).
     pub domino_start: DominoStart,
-    /// 工程的按键范围：128 或 256（原版 app.keys；0 .. keys - 1）
+    /// The project's key range: 128 or 256 (upstream app.keys; 0 .. keys - 1)
     pub keys: i64,
     pub ppq: i64,
     pub beats: i64,
@@ -191,13 +192,13 @@ pub struct App {
     pub defaults: Shape,
     pub custom_defaults: CustomDefaults,
     pub funnel_defaults: FunnelDefaults,
-    /// 选中漏斗里高亮的线与曲线（原版 app.parts）。
+    /// Highlighted lines and curves of the selected funnel (upstream app.parts).
     pub parts: BTreeSet<PartId>,
-    /// 高亮的 part 里点中的那个（联动的曲线换个颜色）。
+    /// The clicked one among the highlighted parts (linked curves change color).
     pub part_main: Option<PartId>,
-    /// 漏斗面板的 gate 文本框（tick）。
+    /// Gate text boxes of the funnel panel (ticks).
     pub funnel_text: [String; 2],
-    /// 漏斗面板的公式输入框。
+    /// Formula input box of the funnel panel.
     pub funnel_formula: String,
     pub free_smooth: i64,
     pub text_defaults: TextSettings,
@@ -218,7 +219,7 @@ pub struct App {
     /// The History list is undocked (its own window) (upstream app.history_undocked).
     pub history_undocked: bool,
     pub view: View,
-    /// 力度面板状态（原版 app.vel_tool + VelocityPane 的现场）
+    /// Velocity panel state (upstream app.vel_tool + the VelocityPane state)
     pub vel: VelocityState,
     pub status: String,
     pub position: Option<String>,
@@ -228,7 +229,7 @@ pub struct App {
     pub dirty: bool,
     pub last_autosave: Instant,
     pub pending_big: Option<PendingBig>,
-    /// Delete all 的确认框（原版 messagebox.askyesno）：待确认的形状数。
+    /// Delete all confirmation (upstream messagebox.askyesno): number of shapes awaiting confirmation.
     pub pending_delete_all: Option<usize>,
     /// "Turn into live shape" warning when something is lost (convert_ui.rs).
     pub pending_turn_live: Option<crate::convert_ui::PendingTurnLive>,
@@ -236,35 +237,35 @@ pub struct App {
     pub loaded: bool,
     pub panel_sel: Option<usize>,
     pub vel_text: [String; 2],
-    /// SPIDERWEB_PERF=1：显示帧时间 HUD 并打印加载 / 重算耗时
+    /// SPIDERWEB_PERF=1: show the frame-time HUD and print load / recompute timings
     pub perf: bool,
-    /// 帧时间指数平均（ms）
+    /// Exponential average frame time (ms)
     pub frame_ms: f32,
-    /// 正在输入的文本（原版 roll.typing）
+    /// Text being typed (upstream roll.typing)
     pub typing: Option<Typing>,
-    /// 文本剪切板的内容，等有 ctx 的时候写进系统剪贴板
+    /// Contents of the text clipboard, written to the system clipboard once a ctx is available
     pub text_clipboard: Option<String>,
-    /// 字体选择窗口
+    /// Font picker dialog
     pub font_dialog: Option<FontDialog>,
-    /// 已安装的字体族名（第一次用到时读一次）
+    /// Installed font family names (read once on first use)
     pub font_families: Vec<String>,
-    /// 自定义形状面板的 gate 文本框（ticks）
+    /// Gate text box of the custom shape panel (ticks)
     pub custom_gate_text: String,
     /// The tumour window (tumour_window.rs) is open.
     pub tumour_window_open: bool,
     /// The open graph window (only one at a time).
     pub graph_window: Option<crate::tumour_window::GraphWindow>,
-    /// 首次使用的 tip（help.rs）
+    /// First-use tips (help.rs)
     pub tips: Tips,
-    /// 帮助窗口状态（help.rs）
+    /// Help window state (help.rs)
     pub help: HelpState,
-    /// 抽屉窗口（原版 app.drawer）
+    /// Shape drawer window (upstream app.drawer)
     pub drawer: Option<Drawer>,
-    /// 图形库目录（可执行文件旁的 shapes/，原版 drawer.LIBRARY）
+    /// Shape library directory (shapes/ next to the executable; upstream drawer.LIBRARY)
     pub library_dir: PathBuf,
-    /// 自定义 wgpu 实例化音符渲染器（没有 wgpu render state 时为 None，走 painter 回退）
+    /// Custom wgpu instanced note renderer (None without a wgpu render state, falling back to painter)
     pub note_gpu: Option<crate::note_gpu::NoteGpu>,
-    /// 音符 / 选择的修订号：变化时 note_gpu 才重建 instance buffer
+    /// Note / selection revision: note_gpu rebuilds the instance buffer only when it changes
     pub notes_revision: u64,
 }
 
@@ -279,7 +280,7 @@ impl App {
         let output = base.join("spiderweb.mid").to_string_lossy().into_owned();
         crate::errors::install(base.clone());
         let library_dir = base.join("shapes");
-        // eframe 用 wgpu 后端时拿到渲染状态，建立音符 GPU 渲染器
+        // With the wgpu backend, eframe gives us a render state; build the note GPU renderer
         let note_gpu = cc
             .wgpu_render_state
             .as_ref()
@@ -389,7 +390,7 @@ impl App {
         app
     }
 
-    // ------------------------------------------------------------ 工程
+    // ------------------------------------------------------------ project
 
     pub fn scale(&self) -> f32 {
         1.0
@@ -400,7 +401,7 @@ impl App {
             .map_err(|e| format!("{e:?}"))
     }
 
-    /// PPQ 变化后重新求值（pvar 文本不合法时保持原值）。
+    /// Re-evaluates after PPQ changes (keeps the old values when the pvar text is invalid).
     pub fn on_project_change(&mut self) {
         if let Ok((ppq, bpm, beats)) = self.read_project() {
             self.ppq = ppq;
@@ -410,7 +411,7 @@ impl App {
         }
     }
 
-    /// 面板里换了 Keys（128 / 256）：卷帘跟着变，音符按新范围重算（原版 on_project_change）。
+    /// Keys changed in the panel (128 / 256): the roll follows, notes are recomputed for the new range (upstream on_project_change).
     pub fn on_keys_change(&mut self) {
         self.view.keys = self.keys;
         self.view.clamp();
@@ -524,7 +525,7 @@ impl App {
         self.last_autosave = Instant::now();
     }
 
-    /// 保存工程到指定路径。
+    /// Saves the project to a chosen path.
     pub fn save_project_as(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Spiderweb project", &["json"])
@@ -537,7 +538,7 @@ impl App {
         }
     }
 
-    /// 打开工程文件。
+    /// Opens a project file.
     pub fn open_project(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Spiderweb project", &["json"])
@@ -586,7 +587,7 @@ impl App {
                     String::new()
                 };
                 if self.rendered.iter().any(|n| n[2] > 127) {
-                    // 256 键：>127 的键原样写进文件，很多 MIDI 程序读不了（project.it_has_keys_above_127_256）
+                    // 256 keys: keys >127 are written to the file as-is, which many MIDI programs cannot read (project.it_has_keys_above_127_256)
                     note += rust_i18n::t!("status.keys_above_127").as_ref();
                 }
                 self.status = rust_i18n::t!(
@@ -604,7 +605,7 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------ 音符
+    // ------------------------------------------------------------ notes
 
     pub fn notes_tracks(&self, sh: &Shape) -> NotesAndTracks {
         engine::shape_notes_tracks(sh, self.ppq as f64, self.keys)
@@ -647,7 +648,7 @@ impl App {
             .unwrap_or_else(|| sh.kind.as_str().to_string())
     }
 
-    /// 重新计算全部音符并刷新界面（原版 shapes_changed）。
+    /// Recomputes all notes and refreshes the UI (upstream shapes_changed).
     pub fn shapes_changed(&mut self) {
         let t0 = Instant::now();
         let got: Vec<NotesAndTracks> = self.shapes.iter().map(|sh| self.notes_tracks(sh)).collect();
@@ -699,7 +700,7 @@ impl App {
             }
         }
         self.shape_channels = chans;
-        // 音符变了：note_gpu 下一帧重建 instance buffer
+        // Notes changed: note_gpu rebuilds the instance buffer next frame
         self.notes_revision = self.notes_revision.wrapping_add(1);
         self.schedule_autosave();
         if self.perf {
@@ -723,7 +724,7 @@ impl App {
         .unwrap_or_else(|| self.notes_of(sh).len() as i64)
     }
 
-    // ------------------------------------------------------------ 选择 / 编辑
+    // ------------------------------------------------------------ selection / editing
 
     pub fn selected(&self) -> Option<&Shape> {
         self.sel.and_then(|i| self.shapes.get(i))
@@ -758,7 +759,7 @@ impl App {
     pub fn select_many(&mut self, indices: BTreeSet<usize>, primary: Option<usize>) {
         self.sels = indices;
         self.sel = primary;
-        // 选到了别的形状（或打字时选了东西）：这次输入结束（原版 select_many）
+        // Another shape was selected (or something was selected while typing): this typing session ends (upstream select_many)
         if let Some(ty) = &self.typing {
             let keep = match ty.i {
                 Some(i) => self.sels.contains(&i),
@@ -772,11 +773,11 @@ impl App {
         self.edit_key = None;
         self.parts.clear();
         self.part_main = None;
-        // 选择变了：选中音符要换 layer 颜色，note_gpu 下一帧重建 instance buffer
+        // Selection changed: selected notes need a different layer color, so note_gpu rebuilds the instance buffer next frame
         self.notes_revision = self.notes_revision.wrapping_add(1);
     }
 
-    /// 拾取选中自定义形状的笔画 k（None = 取消拾取）（原版 set_stroke）。
+    /// Picks stroke k of the selected custom shape (None = unpick) (upstream set_stroke).
     pub fn set_stroke(&mut self, k: Option<usize>) {
         self.stroke = k;
     }
@@ -809,7 +810,7 @@ impl App {
         self.shapes_changed();
     }
 
-    /// Delete 键：选中自定义形状的一条笔画时删笔画，否则删形状（原版 on_key 的 delete）。
+    /// Delete key: with a stroke of the selected custom shape picked, delete the stroke; otherwise delete the shape (upstream on_key's delete).
     pub fn delete_pressed(&mut self) {
         if self.sels.len() == 1
             && let (Some(i), Some(k)) = (self.sel, self.stroke)
@@ -820,7 +821,7 @@ impl App {
         self.delete_selected();
     }
 
-    /// Delete all：先弹原版的确认框（Ctrl+Z 能撤销）。
+    /// Delete all: pops the upstream confirmation first (undoable with Ctrl+Z).
     pub fn delete_all(&mut self) {
         if self.shapes.is_empty() {
             return;
@@ -828,7 +829,7 @@ impl App {
         self.pending_delete_all = Some(self.shapes.len());
     }
 
-    /// 确认后真正清空（原版 delete_all 的确认部分之后）。
+    /// Actually clears everything after confirmation (the part of upstream delete_all after the confirmation).
     fn do_delete_all(&mut self) {
         self.cancel_draft();
         self.push_undo(&rust_i18n::t!("panel.shapes.delete_all"));
@@ -997,7 +998,7 @@ impl App {
         self.add_copies(&shapes, at - start, &rust_i18n::t!("app.paste"));
     }
 
-    // ------------------------------------------------------------ Domino 剪贴板
+    // ------------------------------------------------------------ Domino clipboard
 
     pub fn copy_to_domino(&mut self) {
         let mut notes: Vec<[i64; 6]> = if self.sels.is_empty() {
@@ -1009,8 +1010,9 @@ impl App {
                 .copied()
                 .collect()
         };
-        // 原版是 128 键工程：Domino 只有 128 个键，>127 的不复制（project.copy_to_domino）。
-        // 256 键工程（Domino 256k 版同样用这个剪贴板格式）时全部复制。
+        // Upstream projects have 128 keys: Domino only has 128, so >127 is not copied
+        // (project.copy_to_domino). With 256-key projects (the Domino 256k version uses the same
+        // clipboard format) everything is copied.
         let max_key = if self.keys >= 256 { 255 } else { 127 };
         let high = notes.iter().filter(|n| n[2] > max_key).count();
         notes.retain(|n| n[2] <= max_key);
@@ -1136,7 +1138,7 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------ 撤销
+    // ------------------------------------------------------------ undo
 
     pub fn snapshot(&self) -> String {
         let arr: Vec<serde_json::Value> = self.shapes.iter().map(shape_to_json).collect();
@@ -1225,7 +1227,7 @@ impl crate::history::HistoryHost for App {
 }
 
 impl App {
-    // ------------------------------------------------------------ 吸附
+    // ------------------------------------------------------------ snapping
 
     /// The snap step in beats (quarter notes), None when snapping is off (upstream `snap_beats`).
     pub fn snap_beats(&self) -> Option<f64> {
@@ -1233,12 +1235,12 @@ impl App {
     }
 
     /// The snap step in ticks (1 with snapping off, upstream `App.snap_ticks`).
-    #[allow(dead_code)] // 数字框步进待移植
+    #[allow(dead_code)] // number box stepping yet to be ported
     pub fn snap_ticks(&self) -> i64 {
         spiderweb_io::snap::snap_ticks(&self.snap, self.beats as f64, self.ppq)
     }
 
-    // ------------------------------------------------------------ 播放
+    // ------------------------------------------------------------ playback
 
     pub fn toggle_play(&mut self) {
         if self.player.running() {
@@ -1277,8 +1279,9 @@ impl App {
         self.schedule_autosave();
     }
 
-    /// 右拖试听：把鼠标下（tick `t_to`）与刚扫过的音符发声（原版 app.scrub）。
-    /// false = MIDI 打不开，右拖作废、状态栏写错误。
+    /// Right-drag preview: sounds the notes under the mouse (tick `t_to`) and those just swept
+    /// (upstream app.scrub). false = MIDI could not be opened: the right-drag is abandoned and
+    /// the error goes to the status bar.
     pub fn scrub(&mut self, t_from: f64, t_to: f64) -> bool {
         let device = self.midi_device.clone();
         if let Err(e) = self.player.open(&device) {
@@ -1310,16 +1313,16 @@ impl App {
         true
     }
 
-    /// 右拖松开：全部 note off（原版 app.scrub_end）。
+    /// Right release: all notes off (upstream app.scrub_end).
     pub fn scrub_end(&mut self) {
         for ((ch, p), _) in std::mem::take(&mut self.scrub_held) {
             self.player.note(ch, p, 0);
         }
     }
 
-    // ------------------------------------------------------------ 工具
+    // ------------------------------------------------------------ tools
 
-    /// 双击右键：Select <-> 上次的绘图工具（原版 toggle_select_tool）。
+    /// Double right-click: Select <-> the last drawing tool (upstream toggle_select_tool).
     pub fn toggle_select_tool(&mut self) {
         self.tool = if self.tool == Tool::Select {
             self.draw_tool
@@ -1338,7 +1341,7 @@ impl App {
         self.arc_bend = false;
     }
 
-    /// 提交草稿：Live 绘制 / 方框进自定义形状（原版 commit_draft -> live_commit）。
+    /// Commits the draft: Live drawing / boxes become custom shapes (upstream commit_draft -> live_commit).
     pub fn commit_draft(&mut self) {
         if let Some(sh) = self.draft.take()
             && !crate::roll_live::live_commit(self, &sh)
@@ -1349,12 +1352,12 @@ impl App {
         self.arc_bend = false;
     }
 
-    #[allow(dead_code)] // 拖动后补算待移植
+    #[allow(dead_code)] // post-drag recompute yet to be ported
     pub fn catch_up_notes(&mut self) {
         self.shapes_changed();
     }
 
-    /// 提交大形状前确认（原版 confirm_big）。true = 直接提交。
+    /// Confirmation before committing a big shape (upstream confirm_big). true = commit directly.
     pub fn confirm_big_draft(&mut self) -> bool {
         let Some(d) = self.draft.clone() else {
             return true;
@@ -1375,7 +1378,7 @@ impl App {
     // ------------------------------------------------------------ eframe
 
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        // 抽屉有键盘焦点：按键归抽屉（原版 in_drawer），卷帘快捷键让路
+        // The drawer has keyboard focus: keys go to the drawer (upstream in_drawer) and the roll's shortcuts step aside
         if self.drawer.as_ref().is_some_and(|d| d.focus) {
             return;
         }
@@ -1384,11 +1387,11 @@ impl App {
         if self.help.open {
             return;
         }
-        // 正在打字：按键都归文本（原版 on_key 的 typing 优先级），快捷键让路
+        // Typing in progress: keys go to the text (the typing priority of upstream on_key) and shortcuts step aside
         if self.typing.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
-        // 右键菜单开着：Esc / 点击由菜单自己处理，快捷键让路
+        // The context menu is open: Esc / clicks are handled by the menu itself and shortcuts step aside
         if self.shape_menu.is_some() {
             return;
         }
@@ -1450,7 +1453,7 @@ impl App {
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Escape)) {
                 if self.help.open {
-                    self.help.open = false; // Esc 先关帮助窗口（原版 HelpWindow 的 Escape）
+                    self.help.open = false; // Esc closes the help window first (upstream HelpWindow's Escape)
                 } else if self.tips.popup.is_some() {
                     self.tips.got_it(); // Esc = Got it
                 } else {
@@ -1462,7 +1465,7 @@ impl App {
                 }
             }
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Delete)) {
-                // 高亮的漏斗线与曲线优先（原版 delete_parts）
+                // Highlighted funnel lines and curves take priority (upstream delete_parts)
                 if !self.delete_funnel_parts() {
                     self.delete_pressed();
                 }
@@ -1476,7 +1479,7 @@ impl App {
             if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F1)) {
                 crate::help::open_help(self, None);
             }
-            // 工具热键
+            // Tool hotkeys
             for tool in Tool::ALL {
                 let key = match tool.hotkey() {
                     "v" => Key::V,
@@ -1500,7 +1503,7 @@ impl App {
                     if self.tool != tool {
                         self.tool = tool;
                         self.cancel_draft();
-                        // 换工具时弹这个工具的 tip（看过的不会再弹）
+                        // Pop this tool's tip when switching tools (seen ones don't pop again)
                         self.tips.show(crate::help::tool_topic(tool));
                     }
                 }
@@ -1511,7 +1514,7 @@ impl App {
     pub fn update_playing(&mut self, ctx: &egui::Context) {
         if self.player.running() {
             self.playhead = self.player.position(self.ppq.max(1));
-            // 播放线接近右边缘时翻页
+            // Page over when the play line nears the right edge
             let x = self.view.x_of(self.playhead);
             if x > self.view.w - 6.0 * self.scale() {
                 self.view.t = self.playhead;
@@ -1579,9 +1582,10 @@ pub fn fmt_int(n: i64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
-/// 右拖扫过 tick `t_from..t_to` 时该响的音符（原版 app.scrub 的 `now`）：
-/// 每个 (通道, 音高) 只留起点最新的那个，值 = (起点 tick, 力度)。
-/// 命中条件同原版：起点落在扫过的区间里，或正被扫过（`s <= t_to < e`）。
+/// Notes that should sound as a right-drag sweeps ticks `t_from..t_to` (upstream app.scrub's `now`):
+/// only the one with the latest start is kept per (channel, pitch), value = (start tick, velocity).
+/// Same hit condition as upstream: the start falls inside the swept range, or the note is being
+/// swept (`s <= t_to < e`).
 pub fn scrub_hits(rendered: &[[i64; 6]], t_from: f64, t_to: f64) -> BTreeMap<(u8, i64), (i64, u8)> {
     let lo = t_from.min(t_to);
     let hi = t_from.max(t_to);
@@ -1605,11 +1609,11 @@ pub fn scrub_hits(rendered: &[[i64; 6]], t_from: f64, t_to: f64) -> BTreeMap<(u8
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // panic 等错误写进 errors.log 后，在状态栏提示一次（errors.rs）
+        // Once a panic or other error is written to errors.log, show it once in the status bar (errors.rs)
         if let Some(msg) = crate::errors::take_pending() {
             self.status = msg;
         }
-        // 文字输入优先：Event::Text / 编辑键先给正在输入的文本，剩下的才轮到快捷键
+        // Text input takes priority: Event::Text / edit keys go to the text being typed first, shortcuts get the rest
         crate::roll_text::text_keyboard(self, &ctx);
         self.handle_shortcuts(&ctx);
         self.update_playing(&ctx);
@@ -1645,10 +1649,10 @@ impl eframe::App for App {
             });
 
         crate::text_dialog::font_dialog_ui(self, &ctx);
-        // 肿瘤设置窗口与图形窗口（tumour_window.rs）
+        // Tumour settings window and graph window (tumour_window.rs)
         crate::tumour_window::tumour_window_ui(self, &ctx);
         crate::snap_picker::custom_snap_window_ui(self, &ctx);
-        // 帮助窗口与首次使用 tip（help.rs）
+        // Help window and first-use tips (help.rs)
         crate::help::help_ui(self, &ctx);
         crate::help::tips_ui(self, &ctx);
         // the History panel's own window, when it's undocked (history.rs)
@@ -1713,7 +1717,7 @@ impl eframe::App for App {
         }
 
         if self.perf {
-            let dt = ctx.input(|i| i.stable_dt); // 上一帧耗时
+            let dt = ctx.input(|i| i.stable_dt); // time taken by the last frame
             self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
             egui::Area::new(egui::Id::new("perf_hud"))
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
@@ -1747,7 +1751,7 @@ impl eframe::App for App {
     }
 }
 
-/// 一个渲染音符行 (start, end, pitch, velocity, slot, owner)。
+/// A rendered note row (start, end, pitch, velocity, slot, owner).
 #[cfg(test)]
 fn test_note(s: i64, e: i64, p: i64, v: i64, slot: i64) -> [i64; 6] {
     [s, e, p, v, slot, 0]
@@ -1771,9 +1775,9 @@ mod tests {
     #[test]
     fn scrub_hits_takes_notes_under_and_swept() {
         let rendered = vec![
-            test_note(0, 100, 60, 64, 0),   // 扫之前就结束了
-            test_note(0, 400, 61, 70, 0),   // 还在响（第二个条件）
-            test_note(200, 300, 62, 80, 0), // 起点在扫过的区间里
+            test_note(0, 100, 60, 64, 0),   // ended before the sweep
+            test_note(0, 400, 61, 70, 0),   // still sounding (the second condition)
+            test_note(200, 300, 62, 80, 0), // start inside the swept range
         ];
         let got = scrub_hits(&rendered, 150.0, 250.0);
         assert_eq!(got.get(&(0, 61)), Some(&(0, 70)));
@@ -1785,8 +1789,8 @@ mod tests {
     fn scrub_hits_keeps_latest_start_per_key() {
         let rendered = vec![
             test_note(200, 300, 62, 80, 0),
-            test_note(220, 260, 62, 90, 0), // 同键更晚：背靠背连击响最新的
-            test_note(100, 400, 62, 50, 9), // slot 9 = 鼓通道后的通道 10，另一路
+            test_note(220, 260, 62, 90, 0), // later on the same key: a back-to-back repeat sounds the latest
+            test_note(100, 400, 62, 50, 9), // slot 9 = channel 10 after the drum channel, a different route
         ];
         let got = scrub_hits(&rendered, 150.0, 250.0);
         assert_eq!(got.get(&(0, 62)), Some(&(220, 90)));
@@ -1801,7 +1805,7 @@ mod tests {
         let left = scrub_hits(&rendered, 350.0, 150.0);
         assert_eq!(right.get(&(0, 61)), Some(&(300, 64)));
         assert_eq!(left.get(&(0, 61)), Some(&(300, 64)));
-        // 区间不相交就不响
+        // Notes whose ranges don't overlap make no sound
         let missed = scrub_hits(&rendered, 500.0, 600.0);
         assert!(missed.is_empty());
     }

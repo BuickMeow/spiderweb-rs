@@ -1,14 +1,18 @@
-//! 工程文件、autosave 与 autosave 备份（Python `files/project.py` 的移植）。
+//! Project files, autosave and autosave backups (port of Python `files/project.py`).
 //!
-//! - [`Project`]：一个工程的全部设置与形状；[`Project::from_json`] / [`Project::to_json`]
-//!   对应 `ProjectFiles.load_file` / `project_data`，[`Project::load`] / [`Project::write`]
-//!   走 [`safefile`] 的原子写。
-//! - [`project_json`] / [`Project::to_project_json`]：Python 那种“每个设置一行、每个形状一行”
-//!   的 JSON 版式（`short_shape`：float 去掉噪声位、`vel_env` 的速度取 4 位小数等）。
-//! - [`load_autosave`] / [`backup_path`]：autosave 打不开时改名留档、回退到上次启动时的备份。
+//! - [`Project`]: all settings and shapes of one project; [`Project::from_json`] /
+//!   [`Project::to_json`] correspond to `ProjectFiles.load_file` / `project_data`, and
+//!   [`Project::load`] / [`Project::write`] go through [`safefile`]'s atomic write.
+//! - [`project_json`] / [`Project::to_project_json`]: Python's "one line per setting, one
+//!   line per shape" JSON layout (`short_shape`: floats lose noisy digits, `vel_env`
+//!   velocities are rounded to 4 decimals, etc.).
+//! - [`load_autosave`] / [`backup_path`]: when autosave cannot be opened, rename it for the
+//!   record and fall back to the backup from the last launch.
 //!
-//! 与原版的差异：字符串 / 数值的 `str()` 边界（容器、下划线数字）只做近似；autosave 的
-//! 时间戳由调用方传入（`stamp`），这样不依赖本地时间与时区，测试也确定。
+//! Differences from the original: `str()` edges for strings / numbers (containers, numbers
+//! with underscores) are only approximated; the autosave timestamp is passed in by the
+//! caller (`stamp`), so there is no dependency on local time or timezone and tests are
+//! deterministic.
 
 use std::fs;
 use std::io;
@@ -30,16 +34,16 @@ use crate::compat::{
 use crate::safefile;
 use crate::snap::clean_snap;
 
-/// 本程序版本（Python `files/about.VERSION`）。
+/// This program's version (Python `files/about.VERSION`).
 pub const VERSION: &str = "1.1.0";
-/// 工程文件格式版本（`project_data` 里写死的 2）。
+/// Project file format version (hardcoded 2 in `project_data`).
 pub const PROJECT_VERSION: i64 = 2;
-/// 通道模式（engine.CHANNEL_MODES）。
+/// Channel modes (engine.CHANNEL_MODES).
 pub const CHANNEL_MODES: [&str; 3] = ["raw", "single", "auto"];
-/// 多通道时重叠的判定方式（engine.SPLITS）。
+/// How overlaps are decided with multiple channels (engine.SPLITS).
 pub const SPLITS: [&str; 2] = ["key", "time"];
 
-/// 通道模式。
+/// Channel mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChannelMode {
     Raw,
@@ -58,7 +62,7 @@ impl ChannelMode {
     }
 }
 
-/// 重叠按什么算（按 key 还是按时间）。
+/// What an overlap is counted by (key or time).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChannelSplit {
     #[default]
@@ -75,7 +79,7 @@ impl ChannelSplit {
     }
 }
 
-/// 新自定义形状的默认设置（custom.CUSTOM_DEFAULTS + 库里选的图形）。
+/// Default settings for a new custom shape (custom.CUSTOM_DEFAULTS + the figure picked from the library).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomDefaults {
     pub fill: Fill,
@@ -101,7 +105,7 @@ impl Default for CustomDefaults {
     }
 }
 
-/// 新漏斗的默认设置（funnel.FUNNEL_DEFAULTS）。
+/// Default settings for a new funnel (funnel.FUNNEL_DEFAULTS).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FunnelDefaults {
     pub fill: FunnelFill,
@@ -127,7 +131,7 @@ impl Default for FunnelDefaults {
     }
 }
 
-/// 卷轴的缩放与滚动位置（pianoroll.view_state）。
+/// Zoom and scroll position of the roll (pianoroll.view_state).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewState {
     pub t: f64,
@@ -137,7 +141,7 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    /// `pianoroll.set_view`：四个数都能转成 float 才有效。
+    /// `pianoroll.set_view`: valid only if all four numbers convert to float.
     pub fn from_json(v: &Value) -> Option<Self> {
         let d = v.as_object()?;
         Some(Self {
@@ -153,7 +157,7 @@ impl ViewState {
     }
 }
 
-/// autosave 里记下的窗口状态（`write_json(window=True)` 的 “window”）。
+/// Window state recorded in autosave (the "window" of `write_json(window=True)`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WindowState {
     pub geometry: String,
@@ -162,7 +166,7 @@ pub struct WindowState {
     pub velocity_height: Option<f64>,
     pub midi_device: String,
     pub live: bool,
-    /// tips 等其余键（原样保留）。
+    /// Remaining keys such as tips (kept as-is).
     pub rest: Map<String, Value>,
 }
 
@@ -209,7 +213,7 @@ impl WindowState {
     }
 }
 
-/// 工程文件的读取错误；Python 里 `load_file` 出错返回 False。
+/// Project file read error; in Python `load_file` returns False on error.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
     #[error("工程文件读不开: {0}")]
@@ -226,7 +230,7 @@ pub enum ProjectError {
     Shape(#[from] ShapeError),
 }
 
-/// Python `project_data` 里键的出现顺序。
+/// Key order in Python `project_data`.
 const PROJECT_KEYS: [&str; 19] = [
     "version",
     "app_version",
@@ -249,24 +253,24 @@ const PROJECT_KEYS: [&str; 19] = [
     "playhead",
 ];
 
-/// 一个工程（Python App 的工程相关状态）。
+/// One project (the project-related state of the Python App).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
-    /// 工程文件格式版本（写 2）。
+    /// Project file format version (written as 2).
     pub version: i64,
-    /// 保存它的 Spiderweb 版本。
+    /// The Spiderweb version that saved it.
     pub app_version: String,
-    /// PPQ 文本框（数字或表达式，用 [`Project::read_project`] 求值）。
+    /// PPQ text field (number or expression, evaluated by [`Project::read_project`]).
     pub ppq: String,
-    /// BPM 文本框。
+    /// BPM text field.
     pub bpm: String,
-    /// 每小节拍数文本框。
+    /// Beats-per-bar text field.
     pub beats: String,
-    /// MIDI 输出路径。
+    /// MIDI output path.
     pub output: String,
     pub channel_mode: ChannelMode,
     pub channel_split: ChannelSplit,
-    /// 工程的按键范围：128（0-127）或 256（0-255）（1.2.0 的 `keys`；别的值一律 128）。
+    /// The project's key range: 128 (0-127) or 256 (0-255) (1.2.0's `keys`; any other value is 128).
     pub keys: i64,
     /// Where copying / pasting to Domino starts (1.2.0's `domino_start`; missing files get
     /// `"note"`, the dropdown's initial value).
@@ -310,7 +314,7 @@ impl Default for Project {
     }
 }
 
-/// `read_project`：PPQ / BPM / 拍数求值；错误消息与原版一致。
+/// `read_project`: evaluate PPQ / BPM / beats; error messages match the original.
 pub fn read_project(
     ppq: &str,
     bpm: &str,
@@ -335,12 +339,12 @@ pub fn read_project(
 }
 
 impl Project {
-    /// 求值 PPQ / BPM / 拍数（`read_project`）。
+    /// Evaluate PPQ / BPM / beats (`read_project`).
     pub fn read_project(&self) -> Result<(i64, f64, i64), crate::mathexpr::MathError> {
         read_project(&self.ppq, &self.bpm, &self.beats)
     }
 
-    /// 对应 `load_file` 的数据部分（窗口 / 撤销栈等 UI 状态不在 io 层）。
+    /// Corresponds to the data part of `load_file` (UI state such as window / undo stack is not in the io layer).
     pub fn from_json(data: &Value) -> Result<Self, ProjectError> {
         let d = data.as_object().ok_or(ProjectError::NotObject)?;
         let mut p = Self::default();
@@ -374,7 +378,7 @@ impl Project {
             Some("time") => ChannelSplit::Time,
             _ => ChannelSplit::Key,
         };
-        // 原版：self.keys_var.set(str(KEYS[1] if data.get("keys") == KEYS[1] else KEYS[0]))
+        // Original: self.keys_var.set(str(KEYS[1] if data.get("keys") == KEYS[1] else KEYS[0]))
         p.keys = match d.get("keys") {
             Some(Value::Number(n)) if n.as_f64() == Some(spiderweb_core::paths::KEYS[1] as f64) => {
                 spiderweb_core::paths::KEYS[1]
@@ -433,7 +437,7 @@ impl Project {
         Ok(p)
     }
 
-    /// 对应 `project_data` 的字典。
+    /// The dictionary corresponding to `project_data`.
     pub fn to_json(&self) -> Value {
         let mut d = Map::new();
         d.insert("version".into(), Value::from(PROJECT_VERSION));
@@ -466,8 +470,9 @@ impl Project {
         );
         d.insert(
             "custom_defaults".into(),
-            // 新键只在不是默认值时写（1.2.0 读不到 ends / union / apart 时用 round / false / false，
-            // 省掉默认值也能被 1.2.0 读对，旧版本的工程文件也不多出键）
+            // New keys are only written when not at their defaults (1.2.0 uses round / false /
+            // false when it cannot read ends / union / apart, so omitting defaults is still
+            // read correctly by 1.2.0, and older project files gain no extra keys)
             custom_defaults_json(&self.custom_defaults),
         );
         d.insert(
@@ -499,7 +504,7 @@ impl Project {
         Value::Object(d)
     }
 
-    /// Python `project_json(data)` 的版式：每个设置一行、每个形状一行；`window` 附在最后。
+    /// Python `project_json(data)`'s layout: one line per setting, one line per shape; `window` is appended at the end.
     pub fn to_project_json_with_window(&self, window: Option<&WindowState>) -> String {
         let data = self.to_json();
         let mut extra: Vec<(String, Value)> = Vec::new();
@@ -509,17 +514,17 @@ impl Project {
         project_json_extra(&data, &extra)
     }
 
-    /// [`Project::to_project_json_with_window`] 不带窗口。
+    /// [`Project::to_project_json_with_window`] without the window.
     pub fn to_project_json(&self) -> String {
         self.to_project_json_with_window(None)
     }
 
-    /// 原子地保存（Python `write_json`）。
+    /// Save atomically (Python `write_json`).
     pub fn write(&self, path: &Path, window: Option<&WindowState>) -> io::Result<()> {
         safefile::write_text(path, &self.to_project_json_with_window(window))
     }
 
-    /// 读一个工程文件（Python `load_file` 的文件部分）。
+    /// Read one project file (the file part of Python `load_file`).
     pub fn load(path: &Path) -> Result<Self, ProjectError> {
         let text = fs::read_to_string(path)?;
         let data: Value = serde_json::from_str(&text)?;
@@ -533,7 +538,7 @@ fn defaults_from_json(v: Option<&Value>) -> Result<ShapeDefaults, ProjectError> 
     };
     let d = v.as_object().ok_or(ProjectError::Defaults)?;
     let mut out = SHAPE_DEFAULTS;
-    // 原版是 type(SHAPE_DEFAULTS[k])(v)：SHAPE_DEFAULTS 里 vel0 / vel1 是 int，会截断
+    // The original does type(SHAPE_DEFAULTS[k])(v): vel0 / vel1 in SHAPE_DEFAULTS are ints, so they truncate
     if let Some(v) = d.get("vel0") {
         out.vel0 = py_int(v).ok_or(ProjectError::Defaults)? as f64;
     }
@@ -575,7 +580,7 @@ fn custom_defaults_from_json(d: &Map<String, Value>) -> CustomDefaults {
         Some("centred") => out.align = Align::Centred,
         _ => {}
     }
-    // 原版：`if custom.get("ends") in ENDS`——不认识的值保留旧默认（round）
+    // Original: `if custom.get("ends") in ENDS` — unknown values keep the old default (round)
     out.ends = match d.get("ends").and_then(Value::as_str) {
         Some("round") => Ends::Round,
         Some("keep") => Ends::Keep,
@@ -584,7 +589,7 @@ fn custom_defaults_from_json(d: &Map<String, Value>) -> CustomDefaults {
         Some("stretch") => Ends::Stretch,
         _ => out.ends,
     };
-    // bool(custom.get(key))：缺省 / 0 / 空串都算 false
+    // bool(custom.get(key)): missing / 0 / empty string all count as false
     out.union = d.get("union").is_some_and(py_bool);
     out.apart = d.get("apart").is_some_and(py_bool);
     if let Some(gate) = d.get("gate").and_then(py_float) {
@@ -598,7 +603,7 @@ fn custom_defaults_from_json(d: &Map<String, Value>) -> CustomDefaults {
     out
 }
 
-/// `clean_funnel` 的默认值路径；坏 gate 返回 None（原版 try 后保留旧默认）。
+/// The defaults path of `clean_funnel`; a bad gate returns None (the original keeps the old defaults after the try).
 fn funnel_defaults_from_json(d: &Map<String, Value>) -> Option<FunnelDefaults> {
     let mut out = FunnelDefaults::default();
     out.fill = match d.get("fill").and_then(Value::as_str) {
@@ -633,7 +638,7 @@ fn funnel_defaults_from_json(d: &Map<String, Value>) -> Option<FunnelDefaults> {
     Some(out)
 }
 
-/// text_defaults 只保存 TEXT_DEFAULTS 的那几个键。
+/// text_defaults saves only those keys of TEXT_DEFAULTS.
 fn text_defaults_json(tx: &TextSettings) -> Value {
     serde_json::json!({
         "font": tx.font,
@@ -653,9 +658,9 @@ fn text_defaults_json(tx: &TextSettings) -> Value {
     })
 }
 
-// ---------------------------------------------------------------- Python 风格 JSON
+// ---------------------------------------------------------------- Python-style JSON
 
-/// Python `json.dumps` 兼容的序列化（ensure_ascii、", " / ": " 分隔、float 用 repr）。
+/// Python `json.dumps`-compatible serialisation (ensure_ascii, ", " / ": " separators, floats via repr).
 pub fn dumps(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
@@ -683,7 +688,7 @@ pub fn dumps(v: &Value) -> String {
     }
 }
 
-/// Python `repr(float)`（JSON 里的数字；inf / nan 写 Infinity / NaN）。
+/// Python `repr(float)` (numbers in JSON; inf / nan are written as Infinity / NaN).
 pub fn python_float_repr(x: f64) -> String {
     if x.is_nan() {
         return "NaN".to_string();
@@ -912,7 +917,7 @@ fn short_text(v: &Value) -> Value {
     Value::Object(o)
 }
 
-/// Python `short_shape`：形状字典里该舍入的数字舍入（12 位有效数字）。
+/// Python `short_shape`: round the numbers in a shape dict that should be rounded (12 significant digits).
 pub fn short_shape_value(sh: &Value) -> Value {
     let Some(d) = sh.as_object() else {
         return sh.clone();
@@ -964,12 +969,12 @@ fn shorten_obj(m: &Map<String, Value>, digits: u32) -> Value {
     )
 }
 
-/// Python `project_json(data)`（`data` 是工程字典；顺序由字典自身决定，serde_json 默认按键排序）。
+/// Python `project_json(data)` (`data` is the project dict; order is decided by the dict itself, serde_json sorts by key by default).
 pub fn project_json(data: &Value) -> String {
     project_json_extra(data, &[])
 }
 
-/// [`project_json`] 加上 Python `write_json` 在末尾补的 `window`。
+/// [`project_json`] plus the `window` Python `write_json` appends at the end.
 pub fn project_json_extra(data: &Value, extra: &[(String, Value)]) -> String {
     let Some(d) = data.as_object() else {
         return "{}\n".to_string();
@@ -1010,7 +1015,7 @@ pub fn project_json_extra(data: &Value, extra: &[(String, Value)]) -> String {
 
 // ---------------------------------------------------------------- autosave
 
-/// autosave.json -> autosave-backup.json（普通工程文件，Open project 也能开）。
+/// autosave.json -> autosave-backup.json (a normal project file, Open project can open it too).
 pub fn backup_path(autosave: &Path) -> PathBuf {
     let name = autosave
         .file_name()
@@ -1028,23 +1033,24 @@ pub fn backup_path(autosave: &Path) -> PathBuf {
     }
 }
 
-/// `load_autosave` 的结果。
+/// Result of `load_autosave`.
 #[derive(Debug)]
 pub enum AutosaveOutcome {
-    /// 没有 autosave 文件。
+    /// No autosave file.
     Missing,
-    /// autosave 正常打开（并已复制成备份）。
+    /// autosave opened normally (and was copied to the backup).
     Opened(Box<Project>),
-    /// autosave 打不开：改名为 `renamed_to`（失败为 None），回退到备份（没有为 None）。
+    /// autosave could not be opened: renamed to `renamed_to` (None on failure), falls back to the backup (None if absent).
     Damaged {
         renamed_to: Option<PathBuf>,
         backup: Option<Box<Project>>,
     },
 }
 
-/// 启动时打开 autosave（Python `load_autosave`）：能开就把它复制成备份；打不开就改名留档，
-/// 再试备份。`stamp` 是时间戳文本（原版 `time.strftime("autosave-broken-%Y%m%d-%H%M%S")`），
-/// 由调用方提供，重名时依次加 `-2`、`-3`……
+/// Open autosave at startup (Python `load_autosave`): if it opens, copy it to the backup;
+/// if not, rename it for the record and try the backup. `stamp` is the timestamp text (the
+/// original's `time.strftime("autosave-broken-%Y%m%d-%H%M%S")`), supplied by the caller;
+/// on name collisions `-2`, `-3`, ... are appended in turn.
 pub fn load_autosave(autosave: &Path, stamp: &str) -> AutosaveOutcome {
     if !autosave.exists() {
         return AutosaveOutcome::Missing;
@@ -1076,7 +1082,7 @@ pub fn load_autosave(autosave: &Path, stamp: &str) -> AutosaveOutcome {
     AutosaveOutcome::Damaged { renamed_to, backup }
 }
 
-/// `restore_window` 的窗口读取：先读 autosave，读不开（OSError / JSON 坏）才读备份。
+/// Window reading of `restore_window`: read autosave first, and only read the backup when it cannot be opened (OSError / bad JSON).
 pub fn read_autosave_window(autosave: &Path) -> Option<WindowState> {
     if let Some(win) = read_window_file(autosave) {
         return win;
@@ -1084,7 +1090,7 @@ pub fn read_autosave_window(autosave: &Path) -> Option<WindowState> {
     read_window_file(&backup_path(autosave)).flatten()
 }
 
-/// Some(win) = 文件读开（win 可能是 None，表示没有 window 键）；None = 读不开。
+/// Some(win) = the file opened (win may be None, meaning there is no window key); None = could not be opened.
 fn read_window_file(path: &Path) -> Option<Option<WindowState>> {
     let text = fs::read_to_string(path).ok()?;
     let data: Value = serde_json::from_str(&text).ok()?;
@@ -1097,7 +1103,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 1.2.0 工程 custom_defaults 的新键读得进来（ends 不认识时保留 round；开关按 bool()）。
+    /// 1.2.0 project custom_defaults new keys can be read (unknown ends keeps round; switches follow bool()).
     #[test]
     fn custom_defaults_new_keys_read() {
         let d = json!({"fill": "spam", "gate": 60, "align": "centred", "ends": "keep",

@@ -1,4 +1,5 @@
-//! MidiPortalSequence 编解码（对应原版 `item` / `clip_data` / `read_notes` 及其辅助函数）。
+//! MidiPortalSequence encode/decode (corresponds to the original `item` / `clip_data` /
+//! `read_notes` and their helpers).
 
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
@@ -6,16 +7,16 @@ use flate2::write::ZlibEncoder;
 use std::fmt;
 use std::io::{Read, Write};
 
-/// 剪贴板数据开头的魔数。
+/// Magic number at the start of clipboard data.
 pub const MAGIC: &[u8] = b"PortalSequenceData";
 
-// 原版里从真实 Domino 复制结果抄下来的固定片段，必须逐字节一致。
+// Fixed fragments transcribed from real Domino copy results in the original; must match byte for byte.
 const SONG_START: &[u8] = &[
-    // 1000（空）、1001 = 版权文本（空）
+    // 1000 (empty), 1001 = copyright text (empty)
     0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xe9, 0x03, 0x00, 0x00, 0x00, 0x00,
 ];
 const SONG_REST: &[u8] = &[
-    // 1002 = PPQ 之后的部分
+    // 1002 = the part after PPQ
     0xef, 0x03, 0x04, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0xf1, 0x03, 0x04, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0xf4, 0x03, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0xf5, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf6, 0x03, 0x04, 0x00,
@@ -53,11 +54,12 @@ const SONG_TAIL: &[u8] = &[
     0x00, 0x00, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
 ];
 
-/// 一条 NOTE 记录的字节数（原版 `NOTE.itemsize`）。
+/// Size of one NOTE record in bytes (the original's `NOTE.itemsize`).
 const NOTE_REC: usize = 40;
 
-/// 一条输入音符：`[起点 tick, 结束 tick, 音高, 力度, 通道 slot, ...]`，只有前 5 列参与编码
-/// （多余的列是给调用方用的，原版同样忽略）。
+/// One input note: `[start tick, end tick, pitch, velocity, channel slot, ...]`; only the
+/// first 5 columns take part in encoding (extra columns are for the caller; the original
+/// ignores them too).
 pub type Note6 = [i64; 6];
 
 /// Where copying / pasting starts (the saved values of upstream `DOMINO_STARTS`).
@@ -91,18 +93,18 @@ impl DominoStart {
     }
 }
 
-/// `clip_data` / `read_notes` 的错误。
+/// Errors of `clip_data` / `read_notes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    /// 没有音符可复制（原版对空数组取 min 会报错）。
+    /// No notes to copy (the original's min on an empty array raises).
     Empty,
-    /// `bar <= 0`（原版会除零）。
+    /// `bar <= 0` (the original divides by zero).
     BadBar,
-    /// 长度 / 数据大小超出 u32（原版 `struct.pack` 会抛错）。
+    /// Length / data size exceeds u32 (the original's `struct.pack` raises).
     TooLarge,
-    /// 不是 Domino 的剪贴板数据（魔数不对或太短）。
+    /// Not Domino clipboard data (bad magic or too short).
     NotDomino,
-    /// zlib 数据损坏。
+    /// Corrupted zlib data.
     Damaged,
 }
 
@@ -120,7 +122,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// `[tag u16][length u32][body]`，小端（原版 `item`）。
+/// `[tag u16][length u32][body]`, little-endian (the original's `item`).
 pub fn item(tag: u16, body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(6 + body.len());
     out.extend_from_slice(&tag.to_le_bytes());
@@ -186,14 +188,14 @@ pub fn clip_data(
     data.extend_from_slice(SONG_REST);
     for slot in slots {
         let mut mine: Vec<&Note6> = notes.iter().filter(|n| n[4] == slot).collect();
-        // 原版 np.lexsort((key, tick))：先按起点，再按音高，且是稳定排序。
+        // The original's np.lexsort((key, tick)): by start first, then pitch, and stable.
         mine.sort_by_key(|n| (n[0], n[2]));
         let mut body = Vec::with_capacity(
             TRACK_HEAD.len() + mine.len() * NOTE_REC + end.len() + TRACK_TAIL.len(),
         );
         body.extend_from_slice(TRACK_HEAD);
         for n in mine {
-            // numpy 的赋值会按 C 语义截断（模 2^32 / 2^8），这里用 as 复刻。
+            // numpy assignment truncates with C semantics (mod 2^32 / 2^8); `as` replicates that here.
             let tick = ((n[0] as i128) - first) as u32;
             let key = n[2] as u8;
             let vel = n[3] as u8;
@@ -214,25 +216,27 @@ pub fn clip_data(
     Ok(out)
 }
 
-/// 原版 `read_notes`：剪贴板字节 -> `(行, ppq)`（只保留 0..=127 的键，同原版）。
+/// The original `read_notes`: clipboard bytes -> `(rows, ppq)` (only keys 0..=127 are kept,
+/// as in the original).
 ///
-/// 行的布局是 `(tick, gate, key, velocity, track)`，tick 从复制起点算，track 从 0 数；
-/// 只取音符（控制器等其它项跳过），gate 至少 1，velocity 夹到 `1..=127`。没有音符时
-/// 返回空行。`raw` 不是 Domino 数据或 zlib 损坏时返回错误。
+/// A row is `(tick, gate, key, velocity, track)`, tick measured from the copy start and track
+/// counted from 0; only notes are taken (other items such as controllers are skipped), gate is
+/// at least 1 and velocity is clamped to `1..=127`. No notes gives empty rows. When `raw` is
+/// not Domino data or the zlib data is corrupt, an error is returned.
 pub fn read_notes(raw: &[u8]) -> Result<(Vec<[i64; 5]>, Option<u16>), Error> {
     read_notes_max_key(raw, 127)
 }
 
-/// 同 [`read_notes`]，但键的上限可调：Domino 256k 版用 `max_key = 255`，
-/// 音符 item 里的 key 本来就是 u8，格式本身不限制。
+/// Like [`read_notes`], but with an adjustable key ceiling: the Domino 256k version uses
+/// `max_key = 255`; the key in a note item is already a u8, so the format itself has no limit.
 pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Option<u16>), Error> {
     if !raw.starts_with(MAGIC) || raw.len() < MAGIC.len() + 4 {
         return Err(Error::NotDomino);
     }
     let data = zlib_decompress(&raw[MAGIC.len() + 4..])?;
 
-    // 原版的 runs 按解析顺序记（轨道顺序，轨内分块顺序），odd 单独攒着最后拼在所有
-    // 常规布局音符之后；这里保持一致。
+    // The original records runs in parse order (track order, chunk order within a track) and
+    // collects odd separately, appending it after all regular-layout notes; this matches that.
     let mut runs: Vec<(&[u8], i64)> = Vec::new();
     let mut odd: Vec<[i64; 5]> = Vec::new();
     let mut ppq = None;
@@ -251,7 +255,7 @@ pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Op
             let t = le16(body, i);
             let n = le32(body, i + 2) as usize;
             if t == 2001 && n == NOTE_REC - 6 {
-                // 常规布局：连续多条一起收。
+                // Regular layout: gather consecutive records together.
                 let (got, next) = note_run(body, i);
                 i = next;
                 let any = got.iter().any(|r| !r.is_empty());
@@ -266,7 +270,7 @@ pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Op
                 break;
             }
             if t == 2001 {
-                // 其它布局的音符；不是音符的项（控制器、设置）跳过。
+                // Notes in another layout; non-note items (controllers, settings) are skipped.
                 if let Some(row) = parse_odd_note(&body[i + 6..i + 6 + n], track) {
                     odd.push(row);
                 }
@@ -296,7 +300,7 @@ pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Op
     Ok((rows, ppq))
 }
 
-/// 原版 `items`：从 data 的 i 处逐个取 `(tag, body)`，项放不下就停。
+/// The original `items`: take `(tag, body)` one by one from position i in data, stopping when an item doesn't fit.
 fn items(data: &[u8]) -> Items<'_> {
     Items { data, i: 0 }
 }
@@ -324,8 +328,8 @@ impl<'a> Iterator for Items<'a> {
     }
 }
 
-/// 原版 `note_run`：从 body 的 i 处起，连续按 NOTE 布局写下的音符（至少第一条是）。
-/// 返回每段音符的字节切片和新的位置。
+/// The original `note_run`: consecutive notes written in the NOTE layout starting at position
+/// i in body (at least the first one is). Returns the byte slices of each run and the new position.
 fn note_run(body: &[u8], mut i: usize) -> (Vec<&[u8]>, usize) {
     let mut got: Vec<&[u8]> = Vec::new();
     let mut n = 64usize;
@@ -339,12 +343,12 @@ fn note_run(body: &[u8], mut i: usize) -> (Vec<&[u8]>, usize) {
         if run < count {
             break;
         }
-        n *= 2; // 一块块地长大：音符之间夹了东西会提前停下
+        n *= 2; // grow in chunks: something between notes makes it stop early
     }
     (got, i)
 }
 
-/// NOTE 记录各字段的标志位是否都符合常规布局（原版 note_run 里那串比较）。
+/// Whether the flags of every NOTE record field match the regular layout (the comparisons in the original's note_run).
 fn is_usual_note(r: &[u8]) -> bool {
     le16(r, 0) == 2001
         && le32(r, 2) == NOTE_REC as u32 - 6
@@ -358,8 +362,9 @@ fn is_usual_note(r: &[u8]) -> bool {
         && le32(r, 32) == 4
 }
 
-/// 一条“其它布局”的 2001 音符项：内部按 tag 找字段，缺 2002 时力度按 100 算
-/// （原版 `f.get(2002, b"")[:1] or bytes([100])`）。三个必需字段大小不对就不算音符。
+/// One "other layout" 2001 note item: fields are found by tag inside; a missing 2002 means
+/// velocity 100 (the original's `f.get(2002, b"")[:1] or bytes([100])`). If the three required
+/// fields have the wrong sizes, it is not a note.
 fn parse_odd_note(body: &[u8], track: i64) -> Option<[i64; 5]> {
     let mut tick = None;
     let mut key = None;
@@ -390,7 +395,7 @@ fn parse_odd_note(body: &[u8], track: i64) -> Option<[i64; 5]> {
     ])
 }
 
-/// 一条 NOTE 记录（40 字节）写入按常规布局编码的音符项。
+/// Write one NOTE record (40 bytes) as a note item encoded in the regular layout.
 fn push_note(out: &mut Vec<u8>, tick: u32, key: u8, vel: u8, gate: u32) {
     out.extend_from_slice(&2001u16.to_le_bytes());
     out.extend_from_slice(&(NOTE_REC as u32 - 6).to_le_bytes());

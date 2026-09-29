@@ -1,11 +1,12 @@
-"""custom.py 的对照向量。
+"""Differential vectors for custom.py.
 
-Python 原版（notes/custom.py）直接跑，输出写到
-crates/spiderweb-core/tests/vectors/custom.json，Rust 测试逐用例对照。
-打包音符（pack_notes）因为压缩实现不同，向量给出 Python 的文本，
-Rust 侧验证两边解出的行完全一致（zlib 流本身互通）。
+The Python original (notes/custom.py) is run directly and the output goes to
+crates/spiderweb-core/tests/vectors/custom.json for the Rust tests to compare case by case.
+For packed notes (pack_notes) the compression differs, so the vector gives Python's text and
+the Rust side checks that both sides decode the same rows (the zlib streams interoperate).
 
-用 1.2.0 的源码生成（ends / union / apart / fill_plan / chop 等新语义）：
+Generated with the 1.2.0 sources (new semantics such as ends / union / apart / fill_plan /
+chop):
     SPIDERWEB_SRC=/path/to/Spiderweb-1.2.0/scripts python3 tools/gen_custom_vectors.py
 """
 
@@ -35,7 +36,7 @@ def tolist(x):
     return x
 
 
-# ---------------------------------------------------------------- 构造小工具
+# ---------------------------------------------------------------- construction helpers
 
 def poly(pts, free=False, smooth=0, k=1.0):
     d = {"kind": "poly", "pts": [[float(u), float(v)] for u, v in pts]}
@@ -115,7 +116,7 @@ def gen():
     add("stroke_points", [poly(SQUARE)], C.stroke_points(poly(SQUARE)))
     add("stroke_points", [poly([[0.0, 0.0], [1.0, 1.0], [0.5, 0.2]])],
         C.stroke_points(poly([[0.0, 0.0], [1.0, 1.0], [0.5, 0.2]])))
-    # 自由笔画：smooth 0 保持原样，> 0 画整齐
+    # free strokes: smooth 0 stays as drawn, > 0 tidies it up
     add("stroke_points", [poly([[0.0, 0.0], [0.1, 0.04], [0.2, 0.0], [0.3, 0.03], [0.4, 0.0], [0.5, 0.0]],
                                free=True, smooth=0, k=1.0)],
         C.stroke_points(poly([[0.0, 0.0], [0.1, 0.04], [0.2, 0.0], [0.3, 0.03], [0.4, 0.0], [0.5, 0.0]],
@@ -128,14 +129,14 @@ def gen():
                                free=True, smooth=35, k=2.0)],
         C.stroke_points(poly([[0.0, 0.0], [0.1, 0.2], [0.2, 0.1], [0.3, 0.3], [0.4, 0.2], [0.5, 0.5]],
                              free=True, smooth=35, k=2.0)))
-    # 曲线：一段 / 两段
+    # curves: one segment / two segments
     add("stroke_points", [curve([[0.0, 0.0], [0.2, 0.4], [0.8, 0.4], [1.0, 0.0]])],
         C.stroke_points(curve([[0.0, 0.0], [0.2, 0.4], [0.8, 0.4], [1.0, 0.0]])))
     add("stroke_points", [curve([[0.0, 0.0], [0.2, 0.4], [0.8, 0.4], [1.0, 0.0],
                                  [0.8, -0.4], [0.2, -0.4], [0.0, 0.0]])],
         C.stroke_points(curve([[0.0, 0.0], [0.2, 0.4], [0.8, 0.4], [1.0, 0.0],
                                [0.8, -0.4], [0.2, -0.4], [0.0, 0.0]])))
-    # 弧：k = 1 半圆、k = 2 椭圆弧、共线（直线）、整圆
+    # arcs: k = 1 half circle, k = 2 elliptical arc, collinear (straight line), full circle
     add("stroke_points", [arc([[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]], k=1.0)],
         C.stroke_points(arc([[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]], k=1.0)))
     add("stroke_points", [arc([[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]], k=2.0)],
@@ -144,7 +145,7 @@ def gen():
         C.stroke_points(arc([[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]], k=1.0)))
     add("stroke_points", [arc([[0.5, 0.0], [0.5, 1.0], [0.5, 0.0]], k=1.0)],
         C.stroke_points(arc([[0.5, 0.0], [0.5, 1.0], [0.5, 0.0]], k=1.0)))
-    # 椭圆
+    # ellipse
     add("stroke_points", [ell([0.0, 0.0, 1.0, 1.0])], C.stroke_points(ell([0.0, 0.0, 1.0, 1.0])))
     add("stroke_points", [ell([0.2, -0.1, 0.8, 0.9])], C.stroke_points(ell([0.2, -0.1, 0.8, 0.9])))
     add("stroke_points", [ell([0.0, 0.5, 1.0, 0.5])], C.stroke_points(ell([0.0, 0.5, 1.0, 0.5])))
@@ -301,7 +302,7 @@ def gen():
         C.fill_plan(shape([poly([[0.0, 0.0], [0.5, 0.5]]), poly([[0.5, 0.5], [0.5, 1.0], [1.0, 1.0]])])))
     add("fill_plan", [shape(near_touch, pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])],
         C.fill_plan(shape(near_touch, pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]])))
-    # 闭合不了的一个开放段（不是扁的）：从终点直线连回起点
+    # one open segment that cannot close (and is not flat): a straight line from the end back to the start
     open_curve = [poly(SQUARE), poly([[0.2, 0.2], [0.5, 0.8], [0.8, 0.2]])]
     add("fill_plan", [shape(open_curve)], C.fill_plan(shape(open_curve)))
     add("gap_lines", [shape([gap_shape])], C.gap_lines(shape([gap_shape])))
@@ -329,14 +330,14 @@ def gen():
         C.custom_strokes(shape([poly(SQUARE), ell([0.2, 0.2, 0.8, 0.8])])))
     add("custom_strokes", [shape([poly(SQUARE)], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])],
         C.custom_strokes(shape([poly(SQUARE)], pts=[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]])))
-    # 斜切 / 旋转过的框
+    # sheared / rotated boxes
     add("custom_strokes", [shape([poly([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])],
                                  pts=[[0.0, 60.0], [2.0, 62.0], [1.0, 65.0]])],
         C.custom_strokes(shape([poly([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])],
                                pts=[[0.0, 60.0], [2.0, 62.0], [1.0, 65.0]])))
     add("custom_strokes", [shape([ell([0.0, 0.0, 1.0, 1.0])], pts=[[1.0, 62.0], [1.0, 60.0], [3.0, 62.0]])],
         C.custom_strokes(shape([ell([0.0, 0.0, 1.0, 1.0])], pts=[[1.0, 62.0], [1.0, 60.0], [3.0, 62.0]])))
-    # 文本形状：走 text_polys（不放大）
+    # text shapes: go through text_polys (no growth)
     tx = {"threshold": 50.0, "grow": 0.0, "k": 1.0, "holes": []}
     add("custom_strokes", [shape([curve([[0.0, 0.0], [0.3, 0.5], [0.7, 0.5], [1.0, 0.0]])], text=tx)],
         C.custom_strokes(shape([curve([[0.0, 0.0], [0.3, 0.5], [0.7, 0.5], [1.0, 0.0]])], text=tx)))
@@ -458,7 +459,7 @@ def gen():
         add_case(base, arc([[0.2, 0.2], [0.5, 0.8], [0.8, 0.2]], k=1.0)))
     empty = shape([])
     add("add_stroke", [empty, poly([[1.0, 2.0], [3.0, 4.0]])], add_case(empty, poly([[1.0, 2.0], [3.0, 4.0]])))
-    # at：插到别的笔画前面 / 排到最后
+    # at: insert before another stroke / append at the end
     add("add_stroke", [base, poly([[1.0, 0.0], [1.5, 1.0]]), 0],
         add_case(base, poly([[1.0, 0.0], [1.5, 1.0]]), 0))
     add("add_stroke", [base, poly([[0.5, 0.0], [1.0, 0.5]]), 1],
@@ -488,7 +489,7 @@ def gen():
         C.outline_notes(shape([poly([[0.0, 0.0], [1.0, 2.0]], free=True, smooth=50, k=1.0)]), 960.0))
     add("outline_notes", [shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]]), 960.0],
         C.outline_notes(shape([poly(SQUARE)], pts=[[0.0, 60.0], [2.0, 60.0], [0.0, 62.0]]), 960.0))
-    # only：只要这些编号的笔画
+    # only: take just these stroke indices
     many = shape([poly([[0.0, 0.0], [1.0, 0.0]]), poly([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]),
                   ell([0.2, 0.2, 0.8, 0.8])])
     add("outline_notes_only", [many, 960.0, [0]], C.outline_notes(many, 960.0, only=[0]))
@@ -538,11 +539,11 @@ def gen():
             add("row_spans", [polys, float(q)], C.row_spans(polys, q))
     add("row_spans", [[], 60.0], C.row_spans([], 60.0))
     add("row_spans", [[[[0.0, 60.0], [2.0, 60.0]]], 60.0], C.row_spans([[[0.0, 60.0], [2.0, 60.0]]], 60.0))
-    # 多行、边界刚好在行上
+    # multiple rows, boundaries exactly on a row
     edge = [[0.0, 59.5], [2.0, 59.5], [2.0, 61.5], [0.0, 61.5], [0.0, 59.5]]
     for q in [59, 60, 61, 62]:
         add("row_spans", [[edge], float(q)], C.row_spans([edge], q))
-    # 随机多边形
+    # random polygons
     for _ in range(4):
         n = rnd.randint(3, 7)
         p = [[rnd.uniform(-1, 3), rnd.uniform(57, 66)] for _ in range(n)]
@@ -569,18 +570,18 @@ def gen():
             sh = shape([poly(SQUARE)], align=align, ends=ends)
             add("chop", [sh, chop_rows, 60], C.chop(sh, np.array(chop_rows, np.int64), 60))
             add("chop_count", [sh, chop_rows, 60], C.chop_count(sh, chop_rows, 60))
-    # 没有 ends 键的旧形状按 drop 读
+    # old shapes without an ends key read as drop
     add("chop", [shape([poly(SQUARE)]), chop_rows, 60],
         C.chop(shape([poly(SQUARE)]), np.array(chop_rows, np.int64), 60))
-    # 空表
+    # empty table
     add("chop", [shape([poly(SQUARE)]), [], 60], C.chop(shape([poly(SQUARE)]), np.zeros((0, 3), np.int64), 60))
     add("chop_count", [shape([poly(SQUARE)]), [], 60], C.chop_count(shape([poly(SQUARE)]), [], 60))
-    # 极小的段：round 至少一个；drop / min / keep / stretch 的零头
+    # very small segments: round keeps at least one; the leftovers of drop / min / keep / stretch
     tiny = [[0, 5, 60], [0, 8, 61], [0, 12, 62], [0, 14, 63], [0, 15, 64], [0, 16, 65], [5, 23, 66]]
     for ends in ["round", "drop", "min", "keep", "stretch"]:
         sh = shape([poly(SQUARE)], ends=ends)
         add("chop", [sh, tiny, 16], C.chop(sh, np.array(tiny, np.int64), 16))
-    # aligned / centred 下 16 ticks 门限的零头
+    # 16-tick threshold leftovers under aligned / centred
     for align in ["aligned", "centred"]:
         for ends in ["round", "keep", "drop", "min", "stretch"]:
             sh = shape([poly(SQUARE)], align=align, ends=ends)
@@ -595,7 +596,7 @@ def gen():
         C.outline_spam(shape([poly([[0.0, 0.0], [3.0, 4.0]])], gate=0.5), 480.0))
     add("outline_spam", [shape([poly([[0.0, 0.0], [0.01, 0.2]])], gate=0.5), 480.0],
         C.outline_spam(shape([poly([[0.0, 0.0], [0.01, 0.2]])], gate=0.5), 480.0))
-    # 扁的开放段保留自己的轮廓音符
+    # flat open segments keep their own outline notes
     flat_shape = shape([poly(SQUARE), poly([[0.0, 0.5], [1.0, 0.5]])])
     add("flat_notes", [flat_shape, 960.0], C.flat_notes(flat_shape, 960.0))
     add("flat_notes", [shape([poly(SQUARE)]), 960.0], C.flat_notes(shape([poly(SQUARE)]), 960.0))
@@ -626,7 +627,7 @@ def gen():
     ns_rows = [[0, 240, 60, 100, 0], [240, 480, 62, 110, 1], [480, 720, 64, 90, 0]]
     ns = C.notes_shape(np.array(ns_rows, np.int64), 960.0, "Pasted notes")
     add("custom_note_count", [ns, 960.0], C.custom_note_count(ns, 960.0))
-    # apart 的 Fill / Spam 不数（生成出来再数）
+    # Fill / Spam with apart are not counted (generate them first, then count)
     add("custom_note_count", [shape([poly(SQUARE)], fill="fill", apart=True), 960.0],
         C.custom_note_count(shape([poly(SQUARE)], fill="fill", apart=True), 960.0))
     add("custom_note_count", [shape([poly(SQUARE)], fill="spam", apart=True), 960.0],
@@ -687,7 +688,7 @@ def gen():
     add("on_edge", [[]], C.on_edge(np.zeros((0, 3), np.int64)))
     add("edge_parts", [mk_notes], C.edge_parts(np.array(mk_notes, np.int64)))
     add("edge_parts", [[]], C.edge_parts(np.zeros((0, 3), np.int64)))
-    # apart 的 edge_parts / cut_out 用真实形状的长音符
+    # edge_parts / cut_out with apart use the long notes of a real shape
     for s in [sh_union, dict(sh_union, fill="fill"), dict(sh_union, apart=True)]:
         spans = np.asarray(C.inside_spans(s, 960.0), np.int64).reshape(-1, 3)[:, [1, 2, 0]]
         add("edge_parts", [spans], C.edge_parts(spans))
@@ -699,7 +700,7 @@ def gen():
     add("pack_notes", [[[10, 20, 30, 40, 50]]], C.pack_notes(np.array([[10, 20, 30, 40, 50]], np.int64)))
     add("pack_notes", [[]], C.pack_notes(np.zeros((0, 5), np.int64)))
     add("unpack_notes", [C.pack_notes(np.array(rows5, np.int64))], C.unpack_notes(C.pack_notes(np.array(rows5, np.int64))))
-    # 旧格式（没有 track 列）
+    # legacy format (no track column)
     import base64
     import zlib
     legacy = base64.b64encode(zlib.compress(np.asarray([[0, 120, 60, 100], [240, 360, 64, 90]], "<i4").tobytes(), 1)).decode("ascii")
@@ -733,7 +734,7 @@ def gen():
         ns = C.notes_shape(np.array(rows, np.int64), 960.0, name)
         add("notes_shape", [rows, 960.0, name], ns)
         add("block_notes", [ns, 960.0], C.block_notes(ns, 960.0))
-    # 移动 / 拉伸 / 翻转 / 旋转的粘贴音符框
+    # pasted-note boxes moved / stretched / flipped / rotated
     pasted = C.notes_shape(np.array(rows5, np.int64), 960.0, "Pasted notes")
     for pts in [[[2.0, 60.0], [4.0, 60.0], [2.0, 64.0]],
                 [[0.0, 60.0], [4.0, 60.0], [0.0, 64.0]],
@@ -742,7 +743,7 @@ def gen():
         sh = copy.deepcopy(pasted)
         sh["pts"] = pts
         add("block_notes", [sh, 960.0], C.block_notes(sh, 960.0))
-    # 空框（不转）里的 block_notes
+    # block_notes in an empty box (no transform)
     sh_empty = copy.deepcopy(pasted)
     sh_empty["pts"] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
     add("block_notes", [sh_empty, 480.0], C.block_notes(sh_empty, 480.0))

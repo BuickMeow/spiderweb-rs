@@ -1,8 +1,9 @@
-//! 选中自定义形状的盒子（原版 roll/roll_custom.py）：角点缩放、边中缩放、盒外旋转、斜切。
+//! The box around a selected custom shape (upstream roll/roll_custom.py): corner resize,
+//! edge resize, rotate outside the box, skew.
 //!
-//! 都在屏幕单位里算（拍 * sx、音高 * sy），所以转动在屏幕上看着是对的。
-//! 命中 [`custom_hit`]、鼠标形状 [`custom_cursor`]、拖动换算 [`resize_custom`] / [`skew_custom`] /
-//! [`turn_custom`] 与盒子绘制 [`paint_custom_box`]。
+//! All computed in screen units (beat * sx, pitch * sy), so rotations look right on screen.
+//! Hit testing [`custom_hit`], cursor shapes [`custom_cursor`], drag conversion [`resize_custom`] /
+//! [`skew_custom`] / [`turn_custom`] and box painting [`paint_custom_box`].
 
 use eframe::egui;
 use egui::{Color32, CursorIcon, Pos2, Rect, Vec2};
@@ -12,25 +13,25 @@ use spiderweb_core::shape::{Kind, Shape};
 
 use crate::app::{App, Tool};
 
-/// 盒子的蓝（roll_custom.draw_custom_box）。
+/// Box blue (roll_custom.draw_custom_box).
 const BOX_COLOR: Color32 = Color32::from_rgb(0x00, 0x50, 0xd0);
 
-/// 命中盒子的哪一部分（roll_custom.custom_hit）。
+/// Which part of the box was hit (roll_custom.custom_hit).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CustomHit {
-    /// 角点方块（0-3，绕一圈）
+    /// Corner square (0-3, going around)
     Corner(usize),
-    /// 边中（0 下、1 右、2 上、3 左，按画的方向）
+    /// Edge midpoint (0 bottom, 1 right, 2 top, 3 left, in drawing order)
     Side(usize),
-    /// 边中外面一点：斜切
+    /// A bit outside an edge midpoint: skew
     Skew(usize),
-    /// 角点外面一点：旋转
+    /// A bit outside a corner: rotate
     Turn(usize),
-    /// 盒子里面
+    /// Inside the box
     Inside,
 }
 
-/// 自定义形状盒子的四个角（拍 / 音高，绕一圈）：u0v0, u1v0, u1v1, u0v1。
+/// The four corners of a custom shape's box (beat / pitch, going around): u0v0, u1v0, u1v1, u0v1.
 pub fn custom_corners(sh: &Shape) -> Option<[Pt; 4]> {
     let (a, b, c) = (*sh.pts.first()?, *sh.pts.get(1)?, *sh.pts.get(2)?);
     Some([
@@ -41,7 +42,7 @@ pub fn custom_corners(sh: &Shape) -> Option<[Pt; 4]> {
     ])
 }
 
-/// 屏幕点是否在（可以斜的）盒子里面（roll_custom.inside_box）。
+/// Whether a screen point is inside the (possibly skewed) box (roll_custom.inside_box).
 fn inside_box(corners: &[Pos2; 4], x: f32, y: f32) -> bool {
     let (ax, ay) = (corners[0].x, corners[0].y);
     let (ux, uy) = (corners[1].x - ax, corners[1].y - ay);
@@ -55,14 +56,14 @@ fn inside_box(corners: &[Pos2; 4], x: f32, y: f32) -> bool {
     (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)
 }
 
-/// 盒子四个角的屏幕位置。
+/// Screen positions of the box's four corners.
 fn screen_corners(app: &App, sh: &Shape) -> Option<[Pos2; 4]> {
     let c = custom_corners(sh)?;
     Some(c.map(|p| Pos2::new(app.view.x_of(p[0]), app.view.y_of(p[1]))))
 }
 
-/// 屏幕命中：角点 / 边中 / 斜切 / 旋转 / 盒内（roll_custom.custom_hit）。
-/// 只有 Select 与 Custom shape 工具有，且没在画草稿时。
+/// Screen hit test: corner / edge midpoint / skew / rotate / inside the box (roll_custom.custom_hit).
+/// Only available with the Select and Custom shape tools and while no draft is being drawn.
 pub fn custom_hit(app: &App, pos: Pos2) -> Option<CustomHit> {
     let i = app.sel?;
     let sh = app.shapes.get(i)?;
@@ -117,7 +118,7 @@ pub fn custom_hit(app: &App, pos: Pos2) -> Option<CustomHit> {
     inside.then_some(CustomHit::Inside)
 }
 
-/// 屏幕方向 (dx, dy) 最接近的双箭头（roll_custom.arrow_cursor）：- / | \。
+/// Double arrow closest to the screen direction (dx, dy) (roll_custom.arrow_cursor): - / | \.
 fn arrow_cursor(dx: f32, dy: f32) -> CursorIcon {
     let a = (-dy as f64).atan2(dx as f64).to_degrees().rem_euclid(180.0);
     let idx = ((a + 22.5) / 45.0) as usize % 4;
@@ -129,7 +130,7 @@ fn arrow_cursor(dx: f32, dy: f32) -> CursorIcon {
     ][idx]
 }
 
-/// 盒子命中时的鼠标形状（roll_custom.custom_cursor）。
+/// Cursor shape when the box is hit (roll_custom.custom_cursor).
 pub fn custom_cursor(app: &App, hit: Option<CustomHit>) -> CursorIcon {
     let Some(hit) = hit else {
         return match app.tool {
@@ -159,7 +160,7 @@ pub fn custom_cursor(app: &App, hit: Option<CustomHit>) -> CursorIcon {
             };
             match hit {
                 CustomHit::Corner(_) => {
-                    // 角点两个边的方向平均，朝外（盒子很长时也是对角）
+                    // Average the directions of a corner's two edges, pointing outward (still diagonal when the box is very long)
                     let (mut dx, mut dy) = (0.0_f32, 0.0_f32);
                     for n in [c[(k + 3) % 4], c[(k + 1) % 4]] {
                         let ll = ((c[k].x - n.x).powi(2) + (c[k].y - n.y).powi(2))
@@ -175,7 +176,7 @@ pub fn custom_cursor(app: &App, hit: Option<CustomHit>) -> CursorIcon {
                     arrow_cursor(b.x - a.x, b.y - a.y)
                 }
                 _ => {
-                    // 边沿相邻两边移动
+                    // An edge moves along its two neighbouring edges
                     let (a, b) = (c[(k + 1) % 4], c[(k + 2) % 4]);
                     arrow_cursor(b.x - a.x, b.y - a.y)
                 }
@@ -184,7 +185,7 @@ pub fn custom_cursor(app: &App, hit: Option<CustomHit>) -> CursorIcon {
     }
 }
 
-/// 盒子的边顺着时间与音高（没转动 / 斜切），角点可以放在网格上（roll_custom.grid_aligned）。
+/// The box's edges run along time and pitch (not rotated / skewed), so corners can sit on the grid (roll_custom.grid_aligned).
 pub fn grid_aligned(orig: &[Pt]) -> bool {
     let (Some(a), Some(b), Some(c)) = (orig.first(), orig.get(1), orig.get(2)) else {
         return false;
@@ -193,7 +194,7 @@ pub fn grid_aligned(orig: &[Pt]) -> bool {
     flat(b[0] - a[0], b[1] - a[1]) && flat(c[0] - a[0], c[1] - a[1])
 }
 
-/// 鼠标自 start 走了多少（拍 / key）：没有 Shift 时按整网格步 / 整 key（roll_custom.drag_steps 的纯逻辑）。
+/// How far the mouse moved from start (beats / keys): without Shift, snapped to whole grid steps / whole keys (pure logic of roll_custom.drag_steps).
 pub fn drag_steps_xy(start: Pt, pt: Pt, sb: Option<f64>, shift: bool) -> (f64, f64) {
     let mut db = pt[0] - start[0];
     let mut dp = pt[1] - start[1];
@@ -206,14 +207,14 @@ pub fn drag_steps_xy(start: Pt, pt: Pt, sb: Option<f64>, shift: bool) -> (f64, f
     (db, dp)
 }
 
-/// 鼠标自 start 走了多少（拍 / key），吸附（roll_custom.drag_steps）。
+/// How far the mouse moved from start (beats / keys), snapped (roll_custom.drag_steps).
 pub fn drag_steps(app: &App, start: Pt, pos: Pos2, shift: bool) -> (f64, f64) {
     let pt = crate::roll::event_pt(app, pos, false, shift);
     drag_steps_xy(start, pt, app.snap_beats(), shift)
 }
 
-/// 被拖的角点 / 边中要去哪（拍 / 音高）：网格对齐的盒子吸到网格上；
-/// 转动 / 斜切过的按鼠标整步移动（roll_custom.resize_point）。
+/// Where the dragged corner / edge midpoint goes (beat / pitch): grid-aligned boxes snap to
+/// the grid; rotated / skewed ones move in whole mouse steps (roll_custom.resize_point).
 pub fn resize_point(
     app: &App,
     orig: &[Pt],
@@ -244,7 +245,7 @@ pub fn resize_point(
     [b + db, p + dp]
 }
 
-/// 锁住哪一维（对应 Python _resize 的 lock 字符串）。
+/// Which dimension is locked (matches the lock string of Python _resize).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResizeLock {
     U,
@@ -252,7 +253,7 @@ enum ResizeLock {
     None,
 }
 
-/// 盒子角点 k / 边 k 拖到 pt 后，重新算框的三个点（roll_custom._resize 的纯逻辑，屏幕单位）。
+/// After dragging box corner k / edge k to pt, recompute the box's three points (pure logic of roll_custom._resize, screen units).
 pub fn resize_custom_xy(
     orig: &[Pt],
     k: usize,
@@ -330,7 +331,7 @@ pub fn resize_custom_xy(
     ]
 }
 
-/// 角点 k 拖到 pt 后的框（roll_custom.resize_custom）。`side`：k 是边中点，只动那一边。
+/// The box after dragging corner k to pt (roll_custom.resize_custom). With `side`: k is an edge midpoint and only that edge moves.
 pub fn resize_custom(
     app: &App,
     orig: &[Pt],
@@ -342,7 +343,7 @@ pub fn resize_custom(
     resize_custom_xy(orig, k, pt, keep_shape, side, app.view.sx, app.view.sy)
 }
 
-/// 边 k（0 下、1 右、2 上、3 左）沿自己滑动 (db, dp) 后框的三个点（roll_custom.skew_custom 的纯逻辑）。
+/// The box's three points after edge k (0 bottom, 1 right, 2 top, 3 left) slides along itself by (db, dp) (pure logic of roll_custom.skew_custom).
 pub fn skew_custom_xy(orig: &[Pt], k: usize, db: f64, dp: f64, sx: f64, sy: f64) -> Vec<Pt> {
     let Some(c) = custom_corners(&Shape {
         pts: orig.to_vec(),
@@ -378,12 +379,12 @@ pub fn skew_custom_xy(orig: &[Pt], k: usize, db: f64, dp: f64, sx: f64, sy: f64)
         .collect()
 }
 
-/// 边 k 沿自己滑动 (db, dp)（roll_custom.skew_custom）。
+/// Edge k slides along itself by (db, dp) (roll_custom.skew_custom).
 pub fn skew_custom(app: &App, orig: &[Pt], k: usize, db: f64, dp: f64) -> Vec<Pt> {
     skew_custom_xy(orig, k, db, dp, app.view.sx, app.view.sy)
 }
 
-/// 框的三个点绕盒子中间转 angle（弧度，屏幕上顺时针）（roll_custom.turn_custom 的纯逻辑）。
+/// The box's three points rotated by angle (radians, clockwise on screen) around the box center (pure logic of roll_custom.turn_custom).
 pub fn turn_custom_xy(orig: &[Pt], angle: f64, sx: f64, sy: f64) -> Vec<Pt> {
     if custom_corners(&Shape {
         pts: orig.to_vec(),
@@ -413,12 +414,12 @@ pub fn turn_custom_xy(orig: &[Pt], angle: f64, sx: f64, sy: f64) -> Vec<Pt> {
         .collect()
 }
 
-/// 框的三个点绕盒子中间转 angle（roll_custom.turn_custom）。
+/// The box's three points rotated by angle around the box center (roll_custom.turn_custom).
 pub fn turn_custom(app: &App, orig: &[Pt], angle: f64) -> Vec<Pt> {
     turn_custom_xy(orig, angle, app.view.sx, app.view.sy)
 }
 
-/// 鼠标绕盒子中间的角度（屏幕上顺时针）（roll_custom.screen_angle）。
+/// Angle of the mouse around the box center (clockwise on screen) (roll_custom.screen_angle).
 pub fn screen_angle(app: &App, sh_pts: &[Pt], pos: Pos2) -> f64 {
     let (Some(b1), Some(b2)) = (sh_pts.get(1), sh_pts.get(2)) else {
         return 0.0;
@@ -428,7 +429,7 @@ pub fn screen_angle(app: &App, sh_pts: &[Pt], pos: Pos2) -> f64 {
     (pos.y as f64 - cy).atan2(pos.x as f64 - cx)
 }
 
-/// 选中自定义形状的盒子：虚线轮廓、边中缩放方块、角点缩放方块（roll_custom.draw_custom_box）。
+/// Box of the selected custom shape: dashed outline, edge-midpoint resize squares, corner resize squares (roll_custom.draw_custom_box).
 pub fn paint_custom_box(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     let Some(corners) = screen_corners(app, sh) else {
         return;
@@ -472,7 +473,7 @@ pub fn paint_custom_box(app: &App, painter: &egui::Painter, rect: Rect, sh: &Sha
 mod tests {
     use super::*;
 
-    /// 1x1 的正方形框（拍 / 音高）。
+    /// A 1x1 square box (beat / pitch).
     fn square() -> Vec<Pt> {
         vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
     }
@@ -483,7 +484,7 @@ mod tests {
             pts: square(),
             ..Shape::default()
         }) else {
-            panic!("框应有三个点");
+            panic!("a box should have three points");
         };
         assert_eq!(c, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
     }
@@ -491,24 +492,24 @@ mod tests {
     #[test]
     fn grid_aligned_only_for_flat_boxes() {
         assert!(grid_aligned(&square()));
-        // 转过的盒子：u 不再沿时间
+        // A rotated box: u no longer runs along time
         let r = std::f64::consts::FRAC_1_SQRT_2;
         assert!(!grid_aligned(&[[0.0, 0.0], [r, r], [-r, r]]));
     }
 
     #[test]
     fn drag_steps_snap_to_grid_and_keys() {
-        // 吸附 1/4 拍：db 取整到 0.25，dp 取整到 key
+        // Snap to 1/4 beat: db rounds to 0.25, dp rounds to whole keys
         assert_eq!(
             drag_steps_xy([0.0, 0.0], [0.4, 2.6], Some(0.25), false),
             (0.5, 3.0)
         );
-        // Shift：自由
+        // Shift: free
         assert_eq!(
             drag_steps_xy([0.0, 0.0], [0.4, 2.6], Some(0.25), true),
             (0.4, 2.6)
         );
-        // 没有吸附：自由
+        // No snapping: free
         assert_eq!(
             drag_steps_xy([0.0, 0.0], [0.4, 2.6], None, false),
             (0.4, 2.6)
@@ -517,7 +518,7 @@ mod tests {
 
     #[test]
     fn skew_bottom_side_moves_bottom_two_points() {
-        // 边 0（下）沿 +x 滑 0.5 拍（屏幕单位与拍相同）
+        // Edge 0 (bottom) slides +0.5 beats along +x (screen units equal beats)
         let got = skew_custom_xy(&square(), 0, 0.5, 0.0, 1.0, 1.0);
         assert_eq!(got, vec![[0.5, 0.0], [1.5, 0.0], [0.0, 1.0]]);
     }
@@ -530,8 +531,8 @@ mod tests {
 
     #[test]
     fn skew_uses_screen_direction() {
-        // 每拍 10px、每 key 5px：鼠标移 (5px, 10px) = (0.5 拍, 2 key)
-        // 边 0 在屏幕上长 10px，鼠标位移在它上面的投影是 5px = 0.5 个边
+        // 10px per beat, 5px per key: the mouse moves (5px, 10px) = (0.5 beats, 2 keys)
+        // Edge 0 is 10px long on screen, and the projection of the mouse delta onto it is 5px = half the edge
         let got = skew_custom_xy(&square(), 0, 0.5, 2.0, 10.0, 5.0);
         assert_eq!(got, vec![[0.5, 0.0], [1.5, 0.0], [0.0, 1.0]]);
     }
@@ -545,24 +546,24 @@ mod tests {
 
     #[test]
     fn resize_corner_opposite_stays() {
-        // 角 (u1,v0)（k=1）拖到 (3, -2)：对角 (u0,v1) = pts[2] 不动
+        // Corner (u1,v0) (k=1) dragged to (3, -2): the opposite corner (u0,v1) = pts[2] stays put
         let got = resize_custom_xy(&square(), 1, [3.0, -2.0], false, false, 1.0, 1.0);
         assert_eq!(got[2], [0.0, 1.0]);
-        // 新框：p0 = (0,-2)，u 到 (3,-2)，v 到 (0,1)
+        // New box: p0 = (0,-2), u to (3,-2), v to (0,1)
         assert_eq!(got[0], [0.0, -2.0]);
         assert_eq!(got[1], [3.0, -2.0]);
     }
 
     #[test]
     fn resize_side_locks_the_other_size() {
-        // 右边 k=1 拖到 3 拍：左边（u 尺寸）不动
+        // Right edge k=1 dragged to 3 beats: the left side (the u size) stays put
         let got = resize_custom_xy(&square(), 1, [3.0, 0.0], false, true, 1.0, 1.0);
         assert_eq!(got, vec![[0.0, 0.0], [3.0, 0.0], [0.0, 1.0]]);
     }
 
     #[test]
     fn turn_quarter_around_box_middle() {
-        // 绕 (0.5, 0.5) 转 +90°：p1(1,0) -> (0,0)、p0(0,0) -> (0,1)、p2(0,1) -> (1,1)
+        // +90° around (0.5, 0.5): p1(1,0) -> (0,0), p0(0,0) -> (0,1), p2(0,1) -> (1,1)
         let got = turn_custom_xy(&square(), std::f64::consts::FRAC_PI_2, 1.0, 1.0);
         let eps = 1e-12;
         let close = |a: Pt, b: Pt| (a[0] - b[0]).abs() < eps && (a[1] - b[1]).abs() < eps;

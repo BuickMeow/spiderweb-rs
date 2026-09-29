@@ -1,11 +1,14 @@
-//! 自定义 wgpu 实例化音符渲染器：卷帘音符从 egui painter 换成一次 instanced draw。
+//! Custom wgpu instanced note renderer: piano-roll notes move from the egui painter to one
+//! instanced draw.
 //!
-//! - 每实例 16 字节：`start`（tick）| `end`（tick）| `meta` | `pad`，
-//!   `meta = key | vel << 8 | slot << 16 | layer << 24`（layer 1 = 选中形状的音符）。
-//! - 坐标变换全在顶点着色器（见 `note_gpu.wgsl`）：平移 / 缩放只改 uniform，
-//!   只有音符或选择变化（`App::notes_revision`）才重新打包 instance buffer。
-//! - 普通音符在前、选中音符在后，分两段 draw call，保证选中画在上层。
-//! - 回退：没有 wgpu render state（`App::note_gpu == None`）时仍用 painter 路径。
+//! - 16 bytes per instance: `start` (tick) | `end` (tick) | `meta` | `pad`,
+//!   `meta = key | vel << 8 | slot << 16 | layer << 24` (layer 1 = notes of selected shapes).
+//! - All coordinate transform happens in the vertex shader (see `note_gpu.wgsl`): pan / zoom
+//!   only touch uniforms, and the instance buffer is only repacked when notes or selection
+//!   change (`App::notes_revision`).
+//! - Normal notes come first and selected notes after, in two draw calls, so the selection
+//!   is drawn on top.
+//! - Fallback: without a wgpu render state (`App::note_gpu == None`) the painter path is still used.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,10 +18,10 @@ use egui::{PaintCallback, PaintCallbackInfo, Pos2, Rect, Rgba};
 
 use crate::roll::{SELECTED_COLOR, SLOT_COLORS, View};
 
-/// 16 组线性色：15 个槽位色 + 选中色。
+/// 16 linear color sets: 15 slot colors + selection color.
 type Palette = [[f32; 4]; 16];
 
-/// 一个实例 16 字节，对应 wgsl 顶点入口的 `@location(0)`。
+/// One instance is 16 bytes, corresponding to `@location(0)` of the wgsl vertex entry point.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct NoteInstance {
@@ -29,7 +32,7 @@ pub struct NoteInstance {
 }
 
 impl NoteInstance {
-    /// 把渲染音符行 `(start, end, pitch, velocity, slot, owner)` 打成一个实例。
+    /// Packs a rendered note row `(start, end, pitch, velocity, slot, owner)` into one instance.
     pub fn pack(n: &[i64; 6], layer: u32) -> Self {
         let start = n[0].max(0) as u32;
         let end = n[1].max(0) as u32;
@@ -44,7 +47,7 @@ impl NoteInstance {
         }
     }
 
-    /// 测试用：meta 各字段的访问器（生产代码只写不读）。
+    /// Test-only: accessors for the meta fields (production code only writes them).
     #[cfg(test)]
     pub fn key(&self) -> u32 {
         self.meta & 0xff
@@ -66,15 +69,15 @@ impl NoteInstance {
     }
 }
 
-/// 打包结果：普通层（layer 0）在前、选中层（layer 1）在后。
+/// Packing result: the normal layer (layer 0) comes first, the selected layer (layer 1) after.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PackedInstances {
     pub instances: Vec<NoteInstance>,
-    /// 前 `normal_count` 个是普通音符，其后是选中音符（两次 draw call 的分界）。
+    /// The first `normal_count` are normal notes, the rest are selected notes (the split between the two draw calls).
     pub normal_count: usize,
 }
 
-/// 把全部渲染音符打包成实例（不做可见性 cull）。
+/// Packs all rendered notes into instances (no visibility cull).
 pub fn pack_instances(rendered: &[[i64; 6]], sels: &BTreeSet<usize>) -> PackedInstances {
     let mut normal: Vec<NoteInstance> = Vec::with_capacity(rendered.len());
     let mut selected: Vec<NoteInstance> = Vec::new();
@@ -97,26 +100,26 @@ pub fn pack_instances(rendered: &[[i64; 6]], sels: &BTreeSet<usize>) -> PackedIn
     }
 }
 
-/// 每帧 uniform，布局必须与 `note_gpu.wgsl` 的 `Globals` 一致（std140 规则）。
+/// Per-frame uniform; the layout must match `Globals` in `note_gpu.wgsl` (std140 rules).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Globals {
-    /// 画布左上角（逻辑点，屏幕坐标）
+    /// Canvas top-left (logical points, screen coordinates)
     pub canvas_min: [f32; 2],
-    /// 物理像素 / 逻辑点（prepare 里按 ScreenDescriptor 覆盖）
+    /// Physical pixels per logical point (overwritten in prepare from the ScreenDescriptor)
     pub ppp: f32,
     pub kb_w: f32,
-    /// 视图左边缘 tick
+    /// Tick at the left edge of the view
     pub origin_tick: u32,
     pub _pad0: u32,
-    /// 每 tick 的逻辑点数 = sx / ppq
+    /// Logical points per tick = sx / ppq
     pub px_per_tick: f32,
     pub top: f32,
     pub sy: f32,
     pub ruler_h: f32,
-    /// 屏幕尺寸（物理像素，prepare 里按 ScreenDescriptor 覆盖）
+    /// Screen size (physical pixels, overwritten in prepare from the ScreenDescriptor)
     pub screen_px: [f32; 2],
-    /// 目标格式是否 sRGB（prepare 里按 RenderState::target_format 覆盖）
+    /// Whether the target format is sRGB (overwritten in prepare from RenderState::target_format)
     pub srgb: u32,
     pub _pad1: u32,
     pub _pad2: [u32; 2],
@@ -124,7 +127,7 @@ pub struct Globals {
     pub outline: Palette,
 }
 
-/// 按当前视图生成 uniform；`ppp / screen_px / srgb` 先留占位，prepare 再填。
+/// Builds the uniform for the current view; `ppp / screen_px / srgb` are placeholders here and filled in by prepare.
 pub fn globals_for(view: &View, ppq: i64, canvas_min: Pos2) -> Globals {
     let ppq_f = ppq.max(1) as f64;
     let (fill, outline) = palette();
@@ -147,7 +150,7 @@ pub fn globals_for(view: &View, ppq: i64, canvas_min: Pos2) -> Globals {
     }
 }
 
-/// 调色板转成 egui 线性色（15 个槽位 + 选中色）。
+/// Converts the palette to egui linear colors (15 slots + selection color).
 fn palette() -> (Palette, Palette) {
     let mut fill = [[0.0f32; 4]; 16];
     let mut outline = [[0.0f32; 4]; 16];
@@ -160,23 +163,23 @@ fn palette() -> (Palette, Palette) {
     (fill, outline)
 }
 
-/// 内部状态：wgpu 资源 + CPU 侧待上传的实例。
+/// Internal state: wgpu resources + CPU-side instances waiting to be uploaded.
 struct Inner {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     globals_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
-    /// vertex_buffer 当前容量（字节）
+    /// Current capacity of vertex_buffer (bytes)
     vertex_bytes: usize,
     cpu: Vec<NoteInstance>,
     normal_count: usize,
-    /// true = CPU 实例变了，prepare 时重传（可能先扩容）
+    /// true = CPU instances changed; re-upload in prepare (possibly growing the buffer first)
     pending_upload: bool,
-    /// 最近一次同步的 App::notes_revision
+    /// App::notes_revision of the last sync
     last_revision: u64,
 }
 
-/// 音符 GPU 渲染器：`Arc<RenderState>` + 内部可变状态（pipeline / buffers / CPU 实例）。
+/// Note GPU renderer: `Arc<RenderState>` + interior mutable state (pipeline / buffers / CPU instances).
 pub struct NoteGpu {
     pub render_state: Arc<RenderState>,
     inner: Arc<Mutex<Inner>>,
@@ -230,7 +233,7 @@ impl NoteGpu {
                 conservative: false,
             },
             depth_stencil: None,
-            // eframe 默认关闭 MSAA（NativeOptions::multisampling = 0），所以 sample count = 1
+            // eframe disables MSAA by default (NativeOptions::multisampling = 0), so sample count = 1
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -286,7 +289,7 @@ impl NoteGpu {
         }
     }
 
-    /// revision 变了才重新打包 CPU instances（不重传 GPU；上传交给 prepare）。
+    /// Repacks the CPU instances only when revision changed (no GPU upload here; prepare does the upload).
     pub fn sync(&self, rendered: &[[i64; 6]], sels: &BTreeSet<usize>, revision: u64) {
         let mut inner = self.lock();
         if inner.last_revision == revision {
@@ -299,7 +302,7 @@ impl NoteGpu {
         inner.last_revision = revision;
     }
 
-    /// 生成这一帧的绘制回调；uniform 数值在这里算好，prepare 只负责写 buffer。
+    /// Builds this frame's paint callback; the uniform values are computed here and prepare only writes the buffer.
     pub fn callback(&self, globals: Globals, rect: Rect) -> PaintCallback {
         egui_wgpu::Callback::new_paint_callback(
             rect,
@@ -316,7 +319,7 @@ impl NoteGpu {
     }
 }
 
-/// 每帧注册的绘制回调（egui 在 render pass 中间调用）。
+/// Paint callback registered each frame (egui calls it in the middle of the render pass).
 struct NoteCallback {
     render_state: Arc<RenderState>,
     gpu: Arc<Mutex<Inner>>,
@@ -351,7 +354,7 @@ impl CallbackTrait for NoteCallback {
             }
             inner.pending_upload = false;
         }
-        // 每帧只写 uniform（平移 / 缩放不动 instance buffer）
+        // Only the uniform is written every frame (pan / zoom leave the instance buffer alone)
         let mut g = self.globals;
         g.ppp = screen_descriptor.pixels_per_point;
         g.screen_px = [
@@ -377,15 +380,16 @@ impl CallbackTrait for NoteCallback {
         if clip.width_px <= 0 || clip.height_px <= 0 {
             return;
         }
-        // 不画出卷帘区域（逻辑点 × ppp 的 scissor）
+        // Don't draw outside the roll area (scissor in logical points × ppp)
         render_pass.set_scissor_rect(
             clip.left_px as u32,
             clip.top_px as u32,
             clip.width_px as u32,
             clip.height_px as u32,
         );
-        // egui 会把默认 viewport 设成 callback rect；顶点着色器按整屏算 NDC，
-        // 这里显式恢复整屏 viewport，坐标才对得上。
+        // egui sets the default viewport to the callback rect, but the vertex shader computes
+        // NDC for the whole screen, so restore the full-screen viewport explicitly for the
+        // coordinates to line up.
         render_pass.set_viewport(
             0.0,
             0.0,
@@ -399,7 +403,7 @@ impl CallbackTrait for NoteCallback {
         render_pass.set_vertex_buffer(0, inner.vertex_buffer.slice(..));
         let normal = (inner.normal_count as u32).min(inner.cpu.len() as u32);
         let total = inner.cpu.len() as u32;
-        // 两段 draw call：先普通音符，再选中音符（不依赖单次 draw 的图元顺序）
+        // Two draw calls: normal notes first, selected notes after (not relying on primitive order within one draw)
         if normal > 0 {
             render_pass.draw(0..4, 0..normal);
         }
@@ -413,13 +417,13 @@ impl CallbackTrait for NoteCallback {
 mod tests {
     use super::*;
 
-    /// 顶点着色器 x 计算的 CPU 镜像（u32 环绕减法 + 按补码读 i32）。
+    /// CPU mirror of the vertex shader's x computation (wrapping u32 subtraction + two's-complement i32 read).
     fn shader_x_px(g: &Globals, tick: i64, ppp: f32) -> f32 {
         let dt = (tick as u32).wrapping_sub(g.origin_tick) as i32 as f32;
         ((g.canvas_min[0] + g.kb_w + dt * g.px_per_tick) * ppp).round()
     }
 
-    /// 顶点着色器 y 计算的 CPU 镜像（上 / 下边界，至少 1 物理像素）。
+    /// CPU mirror of the vertex shader's y computation (top / bottom edges, at least 1 physical pixel).
     fn shader_y_px(g: &Globals, key: i64, ppp: f32) -> (f32, f32) {
         let key = key as f32;
         let y0 = ((g.canvas_min[1] + g.ruler_h + (g.top - key - 0.5) * g.sy) * ppp).round();
@@ -438,7 +442,7 @@ mod tests {
         assert_eq!(inst.slot(), 2); // 17 % 15
         assert_eq!(inst.layer(), 1);
         assert_eq!(inst._pad, 0);
-        // 负 tick、越界音高 / 力度、负 slot 都夹进合法范围（256 键：key 到 255）
+        // Negative ticks, out-of-range pitch / velocity and negative slots are clamped into range (256 keys: key up to 255)
         let weird = NoteInstance::pack(&[-5, -1, 200, 300, -16, 0], 0);
         assert_eq!(weird.start, 0);
         assert_eq!(weird.end, 0);
@@ -485,13 +489,13 @@ mod tests {
         assert_eq!(g.px_per_tick, 40.0 / 480.0);
         assert_eq!(g.top, 96.25);
         assert_eq!(g.sy, 7.0);
-        // 调色板：egui 线性色，前 15 个是槽位色、第 16 个是选中色
+        // Palette: egui linear colors, the first 15 are slot colors and the 16th the selection color
         assert_eq!(g.fill[0], Rgba::from(SLOT_COLORS[0].0).to_array());
         assert_eq!(g.fill[14], Rgba::from(SLOT_COLORS[14].0).to_array());
         assert_eq!(g.outline[0], Rgba::from(SLOT_COLORS[0].1).to_array());
         assert_eq!(g.fill[15], Rgba::from(SELECTED_COLOR.0).to_array());
         assert_eq!(g.outline[15], Rgba::from(SELECTED_COLOR.1).to_array());
-        // std140 布局（与 naga 校验过的 wgsl 一致）
+        // std140 layout (matching the naga-validated wgsl)
         assert_eq!(std::mem::size_of::<Globals>(), 576);
         assert_eq!(std::mem::offset_of!(Globals, screen_px), 40);
         assert_eq!(std::mem::offset_of!(Globals, _pad2), 56);
@@ -509,20 +513,20 @@ mod tests {
         let g = globals_for(&view, 960, Pos2::new(120.0, 40.0));
         assert_eq!(g.origin_tick, 960_000_000);
 
-        // 视图左边缘：x = canvas_min.x + kb_w
+        // Left edge of the view: x = canvas_min.x + kb_w
         let edge = shader_x_px(&g, 960_000_000, 1.0);
         assert_eq!(edge, 120.0 + view.kb_w);
-        // 左边缘之前半拍（480 tick）：精确落在 edge - 30
+        // Half a beat (480 ticks) before the left edge: lands exactly on edge - 30
         let before = shader_x_px(&g, 960_000_000 - 480, 1.0);
         assert_eq!(before, edge - 30.0);
-        // 直接用 f32 相减会丢精度（960_000_000 附近 ulp = 64 tick）
+        // Subtracting directly in f32 loses precision (ulp near 960_000_000 is 64 ticks)
         let naive = ((960_000_000i64 - 480) as f32 - 960_000_000.0f32) * g.px_per_tick;
         assert!(naive < -31.0, "naive = {naive}");
-        // 右边缘之后一拍
+        // One beat after the right edge
         let after = shader_x_px(&g, 960_000_000 + 960, 1.0);
         assert_eq!(after, edge + 60.0);
 
-        // y：round 到整物理像素、至少 1 像素；ppp 缩放参与
+        // y: round to whole physical pixels, at least 1 pixel; the ppp scale takes part
         let (y0, y1) = shader_y_px(&g, 60, 1.0);
         assert_eq!(
             y0,

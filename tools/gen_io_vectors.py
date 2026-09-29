@@ -1,8 +1,9 @@
-"""spiderweb-io 的对照向量：形状 JSON / 工程文件 / MIDI / 数学表达式。
+"""Differential vectors for spiderweb-io: shape JSON / project files / MIDI / math expressions.
 
-Python 原版（files/ 与 notes/engine.clean_shape 等）直接跑，输出写到
-crates/spiderweb-io/tests/vectors/<module>.json，Rust 测试逐用例对照。
-MIDI 向量给出 Python write_midi 的完整文件 hex，要求逐字节一致。
+The Python originals (files/ and notes/engine.clean_shape etc.) are run directly and the output
+goes to crates/spiderweb-io/tests/vectors/<module>.json for the Rust tests to compare case by
+case. The MIDI vectors give the full file hex from Python write_midi and require byte-identical
+output.
 """
 
 import copy
@@ -63,7 +64,7 @@ def tolist(x):
     return x
 
 
-# ---------------------------------------------------------------- 形状
+# ---------------------------------------------------------------- shapes
 
 def shape(kind, pts, **extra):
     d = {"kind": kind, "pts": [[float(b), float(p)] for b, p in pts]}
@@ -99,14 +100,14 @@ def compat_shapes():
     cases.append(shape("free", [(0, 0), (1, 1), (2, 0.5)]) )
     cases.append(shape("arc", [(0, 60), (2, 70), (4, 62)], k=2.5))
     cases.append(shape("arc", [(0, 60), (2, 70), (4, 62)]))
-    cases.append(shape("arc", [(0, 60), (2, 70)]) )  # 点数不对 -> None
+    cases.append(shape("arc", [(0, 60), (2, 70)]) )  # wrong point count -> None
     cases.append(shape("curve", [(0, 0), (1, 0), (2, 1), (3, 1), (4, 0.5), (5, 0.5), (6, 0.25)],
                        sharp=[1, 2, 2, 5], sym="mirror"))
     cases.append(shape("curve", [(0, 0), (1, 0), (2, 1), (3, 1)]))
-    cases.append(shape("curve", [(0, 0), (1, 0), (2, 1), (3, 1), (4, 2)]))  # 5 点 -> 截到 4
+    cases.append(shape("curve", [(0, 0), (1, 0), (2, 1), (3, 1), (4, 2)]))  # 5 points -> truncated to 4
     cases.append(shape("curve", [(0, 0), (1, 0), (2, 1)], sharp=[1], sym="turn"))
     cases.append(shape("curve", [(0, 0), (1, 0), (2, 1), (3, 1), (4, 0.5), (5, 0.5), (6, 0.25)],
-                       sharp=[0, 1, 9], sym="turn"))  # last=2 偶数, sharp 只留 1
+                       sharp=[0, 1, 9], sym="turn"))  # last=2 is even, sharp keeps only 1
     custom = shape("custom", [(0, 0), (1, 0), (0, 1)],
                    strokes=[poly_stroke([(0.1, 0.1), (0.9, 0.1), (0.9, 0.9)], free=True, smooth=33.3, k=1.5),
                             curve_stroke([(0, 0), (0.3, 0.1), (0.6, 0.1), (1, 1), (1.2, 1.1), (1.5, 1.2), (2, 2)],
@@ -140,8 +141,8 @@ def compat_shapes():
                        starts=[{"line": 1, "at": 2.0, "ends": [None, None]},
                                {"line": 0, "at": 0.5, "ends": [None, None]}],
                        fill="spam", vary=False))
-    cases.append(shape("funnel", [(0, 60), (4, 60), (4, 72), (4, 52)]))  # 没有 starts
-    cases.append(shape("funnel", [(0, 60), (4, 60), (4, 72)]))  # 点数不是偶数 -> None
+    cases.append(shape("funnel", [(0, 60), (4, 60), (4, 72), (4, 52)]))  # no starts
+    cases.append(shape("funnel", [(0, 60), (4, 60), (4, 72)]))  # point count is not even -> None
     cases.append(shape("blob", [(0, 0), (1, 1)]))
     cases.append(shape("line", [(0, 0), (1, 1)], vel0="abc"))
     cases.append({"kind": "line", "pts": [[0, 0], [1]]})
@@ -159,20 +160,20 @@ def compat_shapes():
             cleaned = E.clean_shape(sh)
             case = {"name": f"shape{i}", "input": tolist(sh), "clean": tolist(cleaned)}
             if cleaned is not None:
-                try:  # Python 不转换 vel0/vel1，坏值会原样留下；Rust 的 Shape 是 f64，只能报错
+                try:  # Python does not convert vel0/vel1 and leaves bad values as they are; Rust's Shape uses f64, so it can only error
                     float(cleaned["vel0"]), float(cleaned["vel1"])
                 except (TypeError, ValueError):
                     case["non_numeric_vel"] = True
             out.append(case)
-        except Exception as e:  # noqa: BLE001 - Python 里这类坏字段让 load_file 失败
+        except Exception as e:  # noqa: BLE001 - in Python such bad fields make load_file fail
             out.append({"name": f"shape{i}", "input": tolist(sh), "error": type(e).__name__})
     return out
 
 
-# ---------------------------------------------------------------- 工程
+# ---------------------------------------------------------------- project
 
 def expected_project(data):
-    """load_file 之后 project_data 会写出的数据（去掉 UI 部分）。"""
+    """The data project_data writes after load_file (without the UI parts)."""
     shapes = [s for s in (E.clean_shape(sh) for sh in data.get("shapes", [])) if s]
     defaults = dict(E.SHAPE_DEFAULTS)
     defaults.update({k: type(E.SHAPE_DEFAULTS[k])(v)
@@ -183,7 +184,7 @@ def expected_project(data):
     split = split if split in E.SPLITS else "key"
     # 1.2.0 snap: load_file runs clean_snap (old values migrate, bad ones fall back)
     snap = clean_snap(data["snap"]) if isinstance(data.get("snap"), str) else DEFAULT_SNAP
-    # 1.2.0 的 256 键设置（project_data 写 keys；load 时不是 256 一律 128）
+    # 1.2.0's 256-key setting (project_data writes keys; on load anything other than 256 is 128)
     keys = 256 if data.get("keys") == 256 else 128
     # 1.2.0 domino_start: only a known value moves the dropdown, else the initial "note"
     domino_start = data["domino_start"] if data.get("domino_start") in ("note", "bar") else "note"
@@ -315,7 +316,7 @@ def project_cases():
     d3["free_smooth"] = "50"
     d3["playhead"] = -5
     d3["view"] = {"t": 1}
-    d3["keys"] = "256"  # 字符串不算：仍然是 128
+    d3["keys"] = "256"  # a string does not count: it stays 128
     projects.append(("partial", d3))
 
     # an old 1.1.0 project: snap 1/64 / 1/128 / Off, and no domino_start (-> note)
@@ -426,7 +427,7 @@ def midi_cases():
         ("slots", 960, 120.0, 4,
          [[0, 100, 40, 10, 0, 0], [10, 110, 41, 20, 14, 1], [20, 120, 42, 30, 29, 2]]),
         ("weird", 3840, 95.5, 7, [[0, 1, 0, 0, 0, 0], [7, 8, 127, 127, 0, 0]]),
-        # 256 键：>127 的 key 原样写进 key 字节（1.2.0 write_midi 不检查；200 == 0xC8）
+        # 256 keys: a key >127 is written into the key byte as-is (1.2.0 write_midi does not check; 200 == 0xC8)
         ("high_keys", 960, 120.0, 4, [[0, 480, 200, 100, 0, 0], [0, 480, 128, 90, 0, 0]]),
     ]
     for name, ppq, bpm, beats, notes in midi_data:
@@ -493,20 +494,20 @@ def mathexpr_cases():
         "2**3**2", "-2**2", "2**-1", "1e3", "1E-3", ".5", "1.", "1.e3", "0x10", "0o17", "0b101",
         "1__0", "1_", "1x2", "True + True", "None", "1 if 2 else 3", "sin(0)", "2 3", "", "x",
         "1 +", "--3", "+4", "1_0.5", "1e+2", "1e", "1..2", "0x", "0xZ", "  42  ", "2***3", "~3",
-        # float // 和 % 走 CPython 的 divmod 算法（(x/y).floor() 会差 1）
+        # float // and % use CPython's divmod algorithm ((x/y).floor() is off by 1)
         "(2.//1E-3)", "(127//0.1)", "-(2./(-(127//1E-3)%0.1))", "((1%1.e2)%10)",
     ]
     random.seed(20240928)
     exprs = list(fixed)
     ops = ["+", "-", "*", "/", "//", "%", "**"]
-    big = 1 << 63  # 超过 i64 / JSON 数字精度的整数不再对照
+    big = 1 << 63  # integers beyond i64 / JSON number precision are no longer compared
     tries = 0
     while len(exprs) < len(fixed) + 200 and tries < 20000:
         tries += 1
         a, b, c = (random.choice([0, 1, 2, 3, 7, 10, 64, 127]) for _ in range(3))
         op1, op2 = random.choice(ops), random.choice(ops)
         expr = f"({a}{op1}{b}){op2}{c}"
-        try:  # 超出 i128 的整数在 Rust 侧退化成浮点，不作为对照
+        try:  # integers beyond i128 fall back to floats on the Rust side, so they are not compared
             v = calc(expr)
             if isinstance(v, int) and abs(v) >= big:
                 continue

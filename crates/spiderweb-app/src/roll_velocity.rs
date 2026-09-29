@@ -1,7 +1,10 @@
-//! 力度面板（原版 window/velocity.py）：卷帘下方的力度条，每个音符在起点一根竖条、门限长一道横帽。
+//! Velocity panel (upstream window/velocity.py): the velocity bars below the roll, one
+//! vertical bar per note at its start, with a cap when the note is long enough.
 //!
-//! 在面板上拖动画线（Linear / Curve / Pencil）改速度包络；选中形状时只改它的音符（其它淡显），
-//! 没选中时拖动覆盖到的每个音符都改。与卷帘共享 x 轴（`App::view` 的 t / sx / kb_w），滚动缩放各自独立。
+//! Dragging (Linear / Curve / Pencil) on the panel edits the velocity envelope; with shapes
+//! selected only their notes change (others fade), with nothing selected every note the drag
+//! covers changes. It shares the x axis with the roll (t / sx / kb_w of `App::view`), while
+//! scrolling and zooming are independent.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -18,19 +21,19 @@ use spiderweb_core::shape::Shape;
 use crate::app::App;
 use crate::roll;
 
-/// 左侧刻度（原版 LEVELS）。
+/// Left-hand scale (upstream LEVELS).
 const LEVELS: [i64; 5] = [127, 96, 64, 32, 0];
-/// 曲线取的点数（原版 CURVE_STEPS）。
+/// Number of points sampled along a curve (upstream CURVE_STEPS).
 const CURVE_STEPS: usize = 48;
-/// 画线的红色。
+/// Red of the drawn line.
 const RED: Color32 = Color32::from_rgb(0xd0, 0x00, 0x00);
 
-/// 图层里的固定编号：淡显槽、正常槽、选中形状、正在画的形状（原版 NORMAL / SELECTED / DRAFT）。
+/// Fixed layer indices: faded slots, normal slots, selected shapes, the shape being drawn (upstream NORMAL / SELECTED / DRAFT).
 const NORMAL: usize = roll::SLOT_COLORS.len();
 const SELECTED: usize = 2 * roll::SLOT_COLORS.len();
 const DRAFT: usize = 2 * roll::SLOT_COLORS.len() + 1;
 
-/// 力度面板的工具（原版 app.vel_tool：line / curve / pencil）。
+/// Velocity panel tools (upstream app.vel_tool: line / curve / pencil).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum VelTool {
     #[default]
@@ -39,14 +42,14 @@ enum VelTool {
     Pencil,
 }
 
-/// 拖动的种类：画新的线 / 曲线 / 铅笔，或拖已画线的把手。
+/// Kind of drag: drawing a new line / curve / pencil stroke, or dragging a handle of the drawn line.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditKind {
     Drag(VelTool),
     Handle(HandleKind),
 }
 
-/// 线 / 曲线的把手：中间（弯度）、两端。
+/// Handles of a line / curve: middle (bend) and the two ends.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HandleKind {
     Mid,
@@ -54,50 +57,50 @@ enum HandleKind {
     B,
 }
 
-/// 已画完的线 / 曲线：把手还能改它时的现场（原版 self.curve）。
+/// A finished line / curve: the state while its handles can still change it (upstream self.curve).
 #[derive(Clone, Debug)]
 struct LiveCurve {
     a: Pt,
     b: Pt,
     c: Pt,
     kind: VelTool,
-    /// 写进各形状的结果；用来判断形状有没有被别处改过
+    /// Result written into each shape; used to tell whether a shape was changed elsewhere
     done: Vec<DoneShape>,
 }
 
-/// 曲线写进一个形状的结果（原版 cv["done"][i] = (sh, env, base, span)）。
+/// The result of writing the curve into one shape (upstream cv["done"][i] = (sh, env, base, span)).
 #[derive(Clone, Debug, PartialEq)]
 struct DoneShape {
     i: usize,
-    /// 写回的包络
+    /// The envelope written back
     env: Vec<Pt>,
-    /// 画之前形状的包络（再弯一次从这里重来）
+    /// The shape's envelope before drawing (bending again restarts from here)
     base: Vec<Pt>,
-    /// 形状的时间跨度（beat）
+    /// The shape's time span (beats)
     span: (f64, f64),
 }
 
-/// 一次拖动（原版 self.edit）。
+/// One drag (upstream self.edit).
 #[derive(Clone, Debug)]
 struct Edit {
     kind: EditKind,
     start: Pt,
     last: Pt,
-    /// 画出的 (beat, velocity) 折线
+    /// The drawn (beat, velocity) polyline
     drawn: Option<Vec<Pt>>,
-    /// 每条 rendered 音符的预览力度，-1 = 没画到（原版 preview）
+    /// Preview velocity per rendered note, -1 = not covered by the drawing (upstream preview)
     preview: Option<Vec<i64>>,
-    /// 这次拖动会写到的形状
+    /// Shapes this drag will write to
     owners: BTreeSet<usize>,
-    /// pencil 的红色鼠标轨迹（面板局部坐标）
+    /// Pencil's red mouse trail (panel-local coordinates)
     trail: Vec<Pos2>,
-    /// 吸附点：选中形状第一 / 最后一个音符的起点（beat）
+    /// Snap points: the starts of the first / last note of the selected shapes (beats)
     ends: Vec<f64>,
-    /// 当前显示的线 / 曲线
+    /// The line / curve currently shown
     curve: Option<(Pt, Pt, Pt)>,
-    /// 拖把手时只改这些形状（原版 mark 的 only）
+    /// While dragging a handle, only these shapes change (the only of upstream mark)
     only: Option<BTreeSet<usize>>,
-    /// 拖把手时的现场
+    /// State while dragging a handle
     handle: Option<HandleDrag>,
 }
 
@@ -107,26 +110,26 @@ struct HandleDrag {
     done: Vec<DoneShape>,
 }
 
-/// 面板状态（原版 VelocityPane 的 self.edit / self.curve / self._pan + app.vel_tool）。
+/// Panel state (upstream VelocityPane's self.edit / self.curve / self._pan + app.vel_tool).
 #[derive(Clone, Debug, Default)]
 pub struct VelocityState {
     tool: VelTool,
     edit: Option<Edit>,
     curve: Option<LiveCurve>,
-    /// 中键平移：按下时的 x 与 view.t（原版 self._pan）
+    /// Middle-button pan: x and view.t at press time (upstream self._pan)
     pan: Option<(f32, f64)>,
 }
 
 impl VelocityState {
-    /// Enter = 完成最后的线 / 曲线：把手消失。有曲线时返回 true（原版 confirm）。
+    /// Enter = finish the last line / curve: the handles disappear. Returns true when there was one (upstream confirm).
     pub fn confirm(&mut self) -> bool {
         self.curve.take().is_some()
     }
 }
 
-// ---------------------------------------------------------------- 纯逻辑（可单测）
+// ---------------------------------------------------------------- pure logic (unit-testable)
 
-/// 从 a 到 b 的直线拖动（beat, velocity），两端各伸出 pad 个 beat（原版 segment）。
+/// Straight drag from a to b (beat, velocity), extending pad beats past both ends (upstream segment).
 fn segment(a: Pt, b: Pt, pad: f64) -> Vec<Pt> {
     let (a, b) = if a[0] > b[0] { (b, a) } else { (a, b) };
     if a[0] == b[0] {
@@ -140,7 +143,7 @@ fn segment(a: Pt, b: Pt, pad: f64) -> Vec<Pt> {
     ]
 }
 
-/// 从 a 到 b、向 c 弯的曲线（beat, velocity），两端各伸出 pad 个 beat（原版 curve_env）。
+/// Curve from a to b bending toward c (beat, velocity), extending pad beats past both ends (upstream curve_env).
 fn curve_env(a: Pt, b: Pt, c: Pt, pad: f64) -> Vec<Pt> {
     let (a, b) = if a[0] > b[0] { (b, a) } else { (a, b) };
     if a[0] == b[0] {
@@ -161,14 +164,14 @@ fn curve_env(a: Pt, b: Pt, c: Pt, pad: f64) -> Vec<Pt> {
     out
 }
 
-/// 把 c 的力度收进刚好让 a → b 的曲线不超出 1..127（形状不变、不出现平顶）（原版 limit_bend）。
+/// Clamps c's velocity just enough that the a → b curve stays within 1..127 (shape unchanged, no flat top) (upstream limit_bend).
 fn limit_bend(a: Pt, b: Pt, c: Pt) -> Pt {
     let hi = 127.0 + ((127.0 - a[1]) * (127.0 - b[1])).sqrt();
     let lo = 1.0 - ((a[1] - 1.0) * (b[1] - 1.0)).sqrt();
     [c[0], c[1].clamp(lo, hi)]
 }
 
-/// 曲线中点（画弯度把手的位置）（原版 curve_mid）。
+/// Curve midpoint (where the bend handle is drawn) (upstream curve_mid).
 fn curve_mid(a: Pt, b: Pt, c: Pt) -> Pt {
     [
         (a[0] + 2.0 * c[0] + b[0]) / 4.0,
@@ -176,7 +179,7 @@ fn curve_mid(a: Pt, b: Pt, c: Pt) -> Pt {
     ]
 }
 
-/// 形状的力度跨度：所有笔画点的 beat 最小 / 最大。
+/// The shape's velocity span: min / max beat over all stroke points.
 fn shape_span(sh: &Shape) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
@@ -189,9 +192,11 @@ fn shape_span(sh: &Shape) -> (f64, f64) {
     if lo > hi { (0.0, 0.0) } else { (lo, hi) }
 }
 
-/// 把画出的 (beat, velocity) 折线写进形状的包络（原版 commit 的逐形状部分），返回 (env, span)。
+/// Writes the drawn (beat, velocity) polyline into the shape's envelope (the per-shape part of
+/// upstream commit) and returns (env, span).
 ///
-/// `base`：起点包络——拖把手时用曲线画之前的包络（重来一次），否则用形状当前的包络。
+/// `base`: the starting envelope — while dragging a handle, the envelope from before the curve
+/// was drawn (start over), otherwise the shape's current envelope.
 fn apply_env(sh: &mut Shape, drawn: &[Pt], base: &[Pt]) -> (Vec<Pt>, (f64, f64)) {
     let (lo, hi) = shape_span(sh);
     let env = if hi > lo {
@@ -201,29 +206,29 @@ fn apply_env(sh: &mut Shape, drawn: &[Pt], base: &[Pt]) -> (Vec<Pt>, (f64, f64))
             .collect();
         tidy_env(&paint_env(base, &pts))
     } else {
-        // 每个音符都在形状起点：整条包络就一个点
+        // Every note is at the shape's start: the whole envelope is one point
         vec![[
             0.0,
             round_half_even(env_at(drawn, lo, false)).clamp(1.0, 127.0),
         ]]
     };
     sh.vel_env = env.clone();
-    sh.own_vel = false; // 粘贴音符自己的力度被替换
+    sh.own_vel = false; // the pasted notes' own velocities are replaced
     sh.vel0 = round_half_even(env_at(&env, 0.0, false)).clamp(1.0, 127.0);
     sh.vel1 = round_half_even(env_at(&env, 1.0, false)).clamp(1.0, 127.0);
     (env, (lo, hi))
 }
 
-// ---------------------------------------------------------------- 面板几何
+// ---------------------------------------------------------------- panel geometry
 
-/// 面板的屏幕几何（力度轴与 x 轴）。
+/// The panel's screen geometry (velocity axis and x axis).
 #[derive(Clone, Copy)]
 struct Pane {
     rect: Rect,
-    /// 127 上面的空隙（原版 self.top）
+    /// Gap above 127 (upstream self.top)
     top: f32,
     h: f32,
-    /// 速度 0 的位置：底边上面也留同样空隙
+    /// Position of velocity 0: the same gap is left above the bottom edge
     bottom: f32,
     kb: f32,
     w: f32,
@@ -243,39 +248,39 @@ impl Pane {
         }
     }
 
-    /// 图像区宽度（卷帘 x 轴重叠的部分）。
+    /// Width of the image area (the part overlapping the roll's x axis).
     fn image_w(self) -> f32 {
         self.w - self.kb
     }
 
-    /// 面板局部坐标 -> 屏幕坐标。
+    /// Panel-local coordinates -> screen coordinates.
     fn pos(self, x: f32, y: f32) -> Pos2 {
         Pos2::new(self.rect.min.x + x, self.rect.min.y + y)
     }
 
-    /// 屏幕坐标 -> 面板局部坐标。
+    /// Screen coordinates -> panel-local coordinates.
     fn local(self, p: Pos2) -> Pos2 {
         p - self.rect.min.to_vec2()
     }
 
-    /// 力度 -> y（原版 v2y）。
+    /// Velocity -> y (upstream v2y).
     fn v2y(self, v: f64) -> f32 {
         (self.bottom as f64 - v / 127.0 * (self.bottom - self.top) as f64).round() as f32
     }
 
-    /// y -> 力度（夹在 1..127）（原版 y2v）。
+    /// y -> velocity (clamped to 1..127) (upstream y2v).
     fn y2v(self, y: f32) -> f64 {
         let span = (self.bottom - self.top).max(1.0) as f64;
         ((self.bottom - y) as f64 / span * 127.0).clamp(1.0, 127.0)
     }
 
-    /// 铅笔红线的鼠标位置：y 收进力度范围内（原版 trail_pt）。
+    /// Mouse position for the pencil's red trail: y clamped into the velocity range (upstream trail_pt).
     fn trail_pt(self, local: Pos2) -> Pos2 {
         Pos2::new(local.x, local.y.clamp(self.v2y(127.0), self.v2y(1.0)))
     }
 }
 
-/// 鼠标键盘输入快照。
+/// Snapshot of mouse and keyboard input.
 struct Inputs {
     pos: Option<Pos2>,
     interact: Option<Pos2>,
@@ -308,12 +313,12 @@ fn read_input(ui: &egui::Ui) -> Inputs {
     })
 }
 
-/// 面板入口：工具条、键盘、输入、绘制。
+/// Panel entry point: toolbar, keyboard, input, painting.
 pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
     velocity_toolbar(app, ui);
-    // 有弹出层（右键菜单 / 下拉框）开着：面板输入让路
+    // A popup (context menu / dropdown) is open: the panel's input steps aside
     let popup_open = crate::roll_menu::is_popup_open(ui.ctx());
-    // Enter = 完成最后的线 / 曲线（原版 pianoroll.on_key -> vel.confirm）
+    // Enter = finish the last line / curve (upstream pianoroll.on_key -> vel.confirm)
     if !popup_open
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -339,7 +344,7 @@ pub fn velocity_ui(app: &mut App, ui: &mut egui::Ui) {
     paint(app, &painter, pane);
 }
 
-/// 顶部小工具条（原版 vbar）。
+/// Small toolbar at the top (upstream vbar).
 fn velocity_toolbar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(rust_i18n::t!("velocity.title"));
@@ -361,7 +366,7 @@ fn velocity_toolbar(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-/// 悬停时的手形 / 十字光标（原版 on_motion）。
+/// Hand / crosshair cursor while hovering (upstream on_motion).
 fn set_cursor(app: &App, input: &Inputs, pane: Pane, ctx: &egui::Context) {
     let Some(p) = input.pos else {
         return;
@@ -383,14 +388,14 @@ fn set_cursor(app: &App, input: &Inputs, pane: Pane, ctx: &egui::Context) {
     });
 }
 
-// ---------------------------------------------------------------- 坐标与吸附
+// ---------------------------------------------------------------- coordinates and snapping
 
-/// 屏幕位置 -> (beat, velocity)（原版 event_pt）。
+/// Screen position -> (beat, velocity) (upstream event_pt).
 fn event_pt(app: &App, pane: Pane, local: Pos2) -> Pt {
     [app.view.b_of(local.x), pane.y2v(local.y)]
 }
 
-/// 拖动端点的吸附点：选中形状第一 / 最后一个音符的起点（原版 snap_spots）。
+/// Snap points for drag ends: the starts of the first / last note of the selected shapes (upstream snap_spots).
 fn snap_spots(app: &App) -> Vec<f64> {
     if app.sels.is_empty() {
         return Vec::new();
@@ -413,7 +418,7 @@ fn snap_spots(app: &App) -> Vec<f64> {
     out
 }
 
-/// b 的吸附：Shift 按住时先吸到选中的两端（屏幕上 10 * scale 内），否则吸到网格（原版 snap_time）。
+/// Snaps b: with Shift held, to the selected ends first (within 10 * scale on screen), otherwise to the grid (upstream snap_time).
 fn snap_time(app: &App, b: f64, shift: bool, ends: &[f64], scale: f32) -> f64 {
     if !shift {
         return b;
@@ -437,9 +442,9 @@ fn snap_time(app: &App, b: f64, shift: bool, ends: &[f64], scale: f32) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------- 编辑
+// ---------------------------------------------------------------- editing
 
-/// 最后的线 / 曲线，若它的形状没被别处改过（把手还能动）（原版 live_curve 的判定）。
+/// The last line / curve, when its shapes were not changed elsewhere (handles still work) (the check of upstream live_curve).
 fn curve_still_live(app: &App, cv: &LiveCurve) -> bool {
     for d in &cv.done {
         let Some(sh) = app.shapes.get(d.i) else {
@@ -452,7 +457,7 @@ fn curve_still_live(app: &App, cv: &LiveCurve) -> bool {
     true
 }
 
-/// 还能动的最后一条线 / 曲线（工具换了或形状变了就不算）。
+/// The last line / curve that still works (changing the tool or a shape disqualifies it).
 fn live_curve(app: &App) -> Option<LiveCurve> {
     app.vel
         .curve
@@ -461,7 +466,7 @@ fn live_curve(app: &App) -> Option<LiveCurve> {
         .cloned()
 }
 
-/// 鼠标在曲线的哪个把手上（原版 near_handle）。
+/// Which handle of the curve the mouse is on (upstream near_handle).
 fn near_handle(app: &App, cv: &LiveCurve, local: Pos2, pane: Pane) -> Option<HandleKind> {
     let near = 7.0 * app.scale();
     let mid = curve_mid(cv.a, cv.b, cv.c);
@@ -471,7 +476,7 @@ fn near_handle(app: &App, cv: &LiveCurve, local: Pos2, pane: Pane) -> Option<Han
         (HandleKind::B, cv.b),
     ] {
         if which == HandleKind::Mid && cv.kind == VelTool::Line {
-            continue; // 直线保持直
+            continue; // a line stays straight
         }
         if (app.view.x_of(p[0]) - local.x).abs() <= near && (pane.v2y(p[1]) - local.y).abs() <= near
         {
@@ -560,7 +565,7 @@ fn on_drag(app: &mut App, local: Pos2, pane: Pane, input: &Inputs) {
             let (mut a, mut b, mut c) = (a0, b0, c0);
             if which == HandleKind::Mid {
                 let (lo, hi) = (a0[0].min(b0[0]), a0[0].max(b0[0]));
-                // 弯度把手保持在两端之间
+                // The bend handle stays between the two ends
                 let mx = pt[0].clamp((3.0 * lo + hi) / 4.0, (lo + 3.0 * hi) / 4.0);
                 c = [
                     2.0 * mx - (a0[0] + b0[0]) / 2.0,
@@ -618,11 +623,11 @@ fn on_drag(app: &mut App, local: Pos2, pane: Pane, input: &Inputs) {
             let t = snap_time(app, pt[0], input.shift, &ends, scale);
             let mut v = pt[1];
             let c = if kind == VelTool::Curve {
-                // 平着起步，像 ease-in
+                // Starts flat, like an ease-in
                 [(a[0] + t) / 2.0, a[1]]
             } else {
                 if input.ctrl {
-                    v = a[1]; // 完全水平
+                    v = a[1]; // completely level
                 }
                 [(a[0] + t) / 2.0, (a[1] + v) / 2.0]
             };
@@ -639,7 +644,7 @@ fn on_release(app: &mut App) {
         return;
     };
     if let Some(handle) = ed.handle {
-        // 拖把手：曲线还活着才写回，撤销步仍算原来的那条曲线（原版 on_release）
+        // Handle drag: write back only while the curve is still live; the undo step still counts as the original curve (upstream on_release)
         let live = app
             .vel
             .curve
@@ -674,7 +679,7 @@ fn on_release(app: &mut App) {
     if let Some((a, b, c)) = ed.curve
         && a[0] != b[0]
     {
-        // 把手还能动，直到别处变化
+        // The handles keep working until something changes elsewhere
         app.vel.curve = Some(LiveCurve {
             a,
             b,
@@ -685,7 +690,7 @@ fn on_release(app: &mut App) {
     }
 }
 
-/// 铅笔：把从 last 到 pt 的一段接进画出的折线（后画的盖住先画的）（原版 extend）。
+/// Pencil: splices the run from last to pt into the drawn polyline (later strokes cover earlier ones) (upstream extend).
 fn extend(app: &mut App, pt: Pt) {
     let pad = 0.5 / app.view.sx.max(1e-9);
     let Some((last, old)) = app.vel.edit.as_ref().map(|e| (e.last, e.drawn.clone())) else {
@@ -703,7 +708,7 @@ fn extend(app: &mut App, pt: Pt) {
     mark(app, &seg, None);
 }
 
-/// 让这次拖动成为从 a 到 b、向 c 弯的曲线（原版 draw_curve）。
+/// Makes this drag a curve from a to b bending toward c (upstream draw_curve).
 fn draw_curve(app: &mut App, a: Pt, b: Pt, c: Pt, only: Option<&BTreeSet<usize>>) {
     let pad = 0.5 / app.view.sx.max(1e-9);
     let c = limit_bend(a, b, c);
@@ -717,7 +722,7 @@ fn draw_curve(app: &mut App, a: Pt, b: Pt, c: Pt, only: Option<&BTreeSet<usize>>
     mark(app, &drawn, only);
 }
 
-/// 记下 seg 覆盖到的可编辑音符的力度预览与它们的形状（后记的盖住先记的）（原版 mark）。
+/// Records the velocity preview and shapes of the editable notes seg covers (later records cover earlier ones) (upstream mark).
 fn mark(app: &mut App, seg: &[Pt], only: Option<&BTreeSet<usize>>) {
     if seg.is_empty() {
         return;
@@ -727,7 +732,7 @@ fn mark(app: &mut App, seg: &[Pt], only: Option<&BTreeSet<usize>>) {
     let hi = seg[seg.len() - 1][0] * ppq;
     let rendered_len = app.rendered.len();
     let sels = app.sels.clone();
-    // 分开借 rendered 与 vel（同一结构体的不同字段）
+    // Borrow rendered and vel separately (different fields of the same struct)
     let rendered = &app.rendered;
     let Some(ed) = app.vel.edit.as_mut() else {
         return;
@@ -757,7 +762,7 @@ fn mark(app: &mut App, seg: &[Pt], only: Option<&BTreeSet<usize>>) {
     }
 }
 
-/// 把画出的力度写进每个 owner 形状（原版 commit）。返回各形状的现场。
+/// Writes the drawn velocities into each owner shape (upstream commit). Returns the per-shape state.
 fn commit(
     app: &mut App,
     drawn: &[Pt],
@@ -777,11 +782,11 @@ fn commit(
         done.push(DoneShape { i, env, base, span });
     }
     app.shapes_changed();
-    app.panel_sel = None; // 侧栏的 vel0/vel1 跟着刷新
+    app.panel_sel = None; // the side panel's vel0/vel1 refresh along with it
     done
 }
 
-// ---------------------------------------------------------------- 输入分发
+// ---------------------------------------------------------------- input dispatch
 
 fn handle_input(app: &mut App, input: &Inputs, pane: Pane) {
     let rect = pane.rect;
@@ -812,7 +817,7 @@ fn handle_input(app: &mut App, input: &Inputs, pane: Pane) {
         && let Some(p) = input.pos
         && rect.contains(p)
     {
-        // 右键：取消正在画的线 / 曲线，并取消选择（原版 on_right）
+        // Right button: cancels the line / curve being drawn and deselects (upstream on_right)
         app.vel.edit = None;
         app.vel.curve = None;
         app.select(None, false);
@@ -842,7 +847,7 @@ fn handle_input(app: &mut App, input: &Inputs, pane: Pane) {
     }
 }
 
-/// 滚轮左右滚，Ctrl+滚轮缩放时间（与卷帘一致，原版 on_wheel）。
+/// Wheel scrolls sideways, Ctrl+wheel zooms time (same as the roll, upstream on_wheel).
 fn on_wheel(app: &mut App, local: Pos2, input: &Inputs) {
     let up = input.scroll_y > 0.0;
     if input.ctrl {
@@ -855,7 +860,7 @@ fn on_wheel(app: &mut App, local: Pos2, input: &Inputs) {
     app.view.clamp();
 }
 
-/// 状态栏位置文本："bar:beat:tick (tick N)     velocity V"（原版 on_motion / time_text）。
+/// Status-bar position text: "bar:beat:tick (tick N)     velocity V" (upstream on_motion / time_text).
 fn position_text(app: &App, local: Pos2, pane: Pane) -> Option<String> {
     if local.x < pane.kb {
         return None;
@@ -867,7 +872,7 @@ fn position_text(app: &App, local: Pos2, pane: Pane) -> Option<String> {
     ))
 }
 
-/// canvas x 处的 bar:beat:tick（与卷帘共用一个 x 轴）。
+/// bar:beat:tick at canvas x (sharing the x axis with the roll).
 fn time_text(app: &App, x: f32) -> String {
     let ppq = app.ppq.max(1) as f64;
     let beats = app.beats.max(1) as f64;
@@ -883,9 +888,9 @@ fn time_text(app: &App, x: f32) -> String {
     )
 }
 
-// ---------------------------------------------------------------- 绘制
+// ---------------------------------------------------------------- painting
 
-/// 各图层的（填充色, 边框色），从低到高（原版 LAYERS）。
+/// Per-layer (fill color, border color), from low to high (upstream LAYERS).
 fn layer_colors() -> Vec<(Color32, Color32)> {
     let mut out = Vec::with_capacity(2 * roll::SLOT_COLORS.len() + 2);
     for (f, b) in roll::SLOT_COLORS {
@@ -897,13 +902,13 @@ fn layer_colors() -> Vec<(Color32, Color32)> {
     out
 }
 
-/// 力度竖条：音符起点一列、顶在力度上；门限够长时在力度处横一道帽（原版 bars）。
+/// A velocity bar: one column at the note's start up to its velocity, with a cap across the velocity when the note is long enough (upstream bars).
 struct Bar {
     layer: usize,
-    /// 图像区局部 x（已减去 kb_w）
+    /// Image-area local x (kb_w already subtracted)
     x0: f32,
     x1: f32,
-    /// 力度对应的 y
+    /// y corresponding to the velocity
     y: f32,
 }
 
@@ -938,7 +943,7 @@ fn collect_bars(app: &App, state: &VelocityState, pane: Pane) -> Vec<Bar> {
         } else if app.sels.contains(&(n[5] as usize)) {
             SELECTED
         } else {
-            slot // 没选中的淡显
+            slot // unselected ones fade
         };
         push(n, layer, vel, &mut out);
     }
@@ -958,7 +963,7 @@ fn paint_bars(app: &App, painter: &egui::Painter, pane: Pane) {
     let layers = layer_colors();
     let state = &app.vel;
     let mut bars = collect_bars(app, state, pane);
-    // 低图层先画；同一列同层里力度高的盖住低的
+    // Lower layers first; in the same column and layer, higher velocity covers lower
     bars.sort_by(|p, q| {
         p.layer
             .cmp(&q.layer)
@@ -995,7 +1000,7 @@ fn paint_bars(app: &App, painter: &egui::Painter, pane: Pane) {
     }
 }
 
-/// 卷帘的竖直网格线（简化版 grid_cols）：吸附线、拍线、小节线。
+/// The roll's vertical grid lines (simplified grid_cols): snap lines, beat lines, bar lines.
 fn grid_columns(app: &App, w: f32) -> Vec<(f32, Color32)> {
     let v = &app.view;
     let mut cols = Vec::new();
@@ -1037,7 +1042,7 @@ fn grid_columns(app: &App, w: f32) -> Vec<(f32, Color32)> {
     cols
 }
 
-/// 画一条线 / 曲线：红线 + 两端方块把手 +（弯的）中间的圆把手（原版 draw_curve_line）。
+/// Draws a line / curve: red line + square handles at both ends + a round middle handle (when bent) (upstream draw_curve_line).
 fn draw_curve_line(
     app: &App,
     painter: &egui::Painter,
@@ -1077,7 +1082,7 @@ fn draw_curve_line(
 fn paint(app: &App, painter: &egui::Painter, pane: Pane) {
     painter.rect_filled(pane.rect, 0.0, Color32::WHITE);
 
-    // 力度档位线：96 / 64 / 32 淡，127 / 0 深
+    // Velocity level lines: 96 / 64 / 32 faint, 127 / 0 dark
     let level_color = |v: i64| {
         if v == 127 || v == 0 {
             Color32::from_rgb(0x9f, 0xb2, 0xcf)
@@ -1100,7 +1105,7 @@ fn paint(app: &App, painter: &egui::Painter, pane: Pane) {
         Stroke::new(1.0, Color32::from_rgb(0x80, 0x80, 0x80)),
     );
 
-    // 竖直网格
+    // vertical grid
     for (x, color) in grid_columns(app, pane.w) {
         if x >= pane.kb - 1.0 && x <= pane.w {
             painter.line_segment(
@@ -1110,10 +1115,10 @@ fn paint(app: &App, painter: &egui::Painter, pane: Pane) {
         }
     }
 
-    // 力度条
+    // velocity bars
     paint_bars(app, painter, pane);
 
-    // 左侧力度刻度条
+    // left-hand velocity scale strip
     painter.rect_filled(
         Rect::from_min_max(pane.rect.min, pane.pos(pane.kb, pane.h)),
         0.0,
@@ -1137,7 +1142,7 @@ fn paint(app: &App, painter: &egui::Painter, pane: Pane) {
         );
     }
 
-    // 正在画的线 / 曲线 / 铅笔轨迹，或最后一条还能动的线 / 曲线
+    // The line / curve / pencil trail being drawn, or the last line / curve that still works
     let lw = app.scale().max(1.0);
     let state = &app.vel;
     if let Some(ed) = &state.edit {
@@ -1166,7 +1171,7 @@ fn paint(app: &App, painter: &egui::Painter, pane: Pane) {
         );
     }
 
-    // 播放线（与卷帘同步）
+    // Play line (in sync with the roll)
     let x = app.view.x_of(app.playhead).round();
     if x >= pane.kb && x <= pane.w {
         painter.line_segment(
@@ -1192,7 +1197,7 @@ mod tests {
         assert_eq!(s.first().copied(), Some([-0.25, 10.0]));
         assert_eq!(s.last().copied(), Some([4.25, 90.0]));
         assert!(s.windows(2).all(|w| w[0][0] <= w[1][0]));
-        // 同一个 beat：两点都带 pad
+        // Same beat: both points carry pad
         let z = segment([2.0, 20.0], [2.0, 20.0], 0.5);
         assert_eq!(z, vec![[1.5, 20.0], [2.5, 20.0]]);
     }
@@ -1235,7 +1240,7 @@ mod tests {
 
     #[test]
     fn apply_env_starts_over_from_base() {
-        // 再弯一次：从画之前的包络（base）重来，而不是叠在已画的结果上
+        // Bending again starts from the envelope before drawing (base), not stacked on the drawn result
         let mut sh = line_shape([0.0, 127.0], [4.0, 127.0]);
         sh.vel_env = vec![[0.0, 10.0], [1.0, 10.0]];
         let base = velocity_env(&sh);
@@ -1266,7 +1271,7 @@ mod tests {
         assert!((env_at(&drawn, 1.5, false) - 90.0).abs() < 1e-9);
         assert!((env_at(&drawn, 0.5, false) - 10.0).abs() < 1e-9);
         assert!(drawn.windows(2).all(|w| w[0][0] <= w[1][0]));
-        // 反向再画一段：仍然有序，后画的赢（起点 1.5 处已经是新值）
+        // Drawing another run in the opposite direction: still sorted, later strokes win (the start at 1.5 already holds the new value)
         let drawn = paint_env(&drawn, &segment([3.0, 30.0], [1.5, 50.0], 0.05));
         assert!(drawn.windows(2).all(|w| w[0][0] <= w[1][0]));
         assert!((env_at(&drawn, 1.5, true) - 50.0).abs() < 1e-9);

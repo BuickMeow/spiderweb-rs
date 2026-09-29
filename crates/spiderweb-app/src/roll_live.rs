@@ -1,10 +1,12 @@
-//! Live 绘制与自定义形状的笔画（原版 roll/roll_live.py）。
+//! Live drawing and custom shape strokes (upstream roll/roll_live.py).
 //!
-//! Live 开着时，线 / 折线 / 自由笔 / 曲线 / 弧 / 方 / 圆 / 三角画下的东西成为同一个自定义形状的笔画
-//! （选中的那个，否则新建一个）；方 / 圆 / 三角无论 Live 开关都生成自己的自定义形状。还负责：
-//! 拾取自定义形状的一条笔画（[`stroke_at`]）、删掉它（[`delete_stroke`]）、
-//! 弯曲被拾取的曲线笔画（锚点 / 手柄，逻辑在 [`spiderweb_core::bezier`]）。
-//! 笔画存在形状自己的框里（核心 custom 的 `add_stroke` / `refit`）。
+//! With Live on, things drawn with line / poly / freehand / curve / arc / square / circle /
+//! triangle become strokes of the same custom shape (the selected one, otherwise a new one);
+//! square / circle / triangle always produce their own custom shape regardless of Live.
+//! This module also handles: picking a custom shape's stroke ([`stroke_at`]), deleting it
+//! ([`delete_stroke`]), and bending the picked curve stroke (anchors / handles; logic in
+//! [`spiderweb_core::bezier`]). Strokes live in the shape's own frame (core custom's
+//! `add_stroke` / `refit`).
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Vec2};
@@ -21,7 +23,7 @@ use spiderweb_core::shape::{Kind, Shape, Stroke as PathStroke};
 
 use crate::app::{App, Tool};
 
-/// Live 时会画成笔画的工具（roll_live.STROKE_TOOLS）。
+/// Tools whose drawings become strokes when Live is on (roll_live.STROKE_TOOLS).
 pub const STROKE_TOOLS: [Tool; 8] = [
     Tool::Line,
     Tool::Poly,
@@ -33,22 +35,22 @@ pub const STROKE_TOOLS: [Tool; 8] = [
     Tool::Triangle,
 ];
 
-/// 方 / 圆 / 三角：总是生成自定义形状（自己的，或 Live 形状的一条笔画）。
+/// Square / Circle / Triangle: always produce a custom shape (their own, or a stroke of the Live shape).
 pub const BOX_TOOLS: [Tool; 3] = [Tool::Square, Tool::Circle, Tool::Triangle];
 
-/// 内置方形的笔画点（roll_live.SQUARE）。
+/// Stroke points of the built-in square (roll_live.SQUARE).
 pub const SQUARE: [Pt; 5] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]];
-/// 内置三角的笔画点（roll_live.TRIANGLE，同 Drawer 内置 Triangle）。
+/// Stroke points of the built-in triangle (roll_live.TRIANGLE, same as Drawer's built-in Triangle).
 pub const TRIANGLE: [Pt; 4] = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.0, 0.0]];
-/// 长自由笔画的点数门槛：超过只在该笔画被拾取时显示点（roll_live.LONG_STROKE）。
+/// Point-count threshold for a long freehand stroke: above it, points appear only when the stroke is picked (roll_live.LONG_STROKE).
 pub const LONG_STROKE: usize = 64;
 
-/// 被拾取笔画的紫色（roll_draw.STROKE_POINT_COLOR / roll_live.draw_picked_stroke）。
+/// Purple of the picked stroke (roll_draw.STROKE_POINT_COLOR / roll_live.draw_picked_stroke).
 const PICK_COLOR: Color32 = Color32::from_rgb(0x7a, 0x1f, 0xe0);
-/// 曲线锚点 / 手柄的蓝色（roll_curve.HANDLE_COLOR）。
+/// Blue of curve anchors / handles (roll_curve.HANDLE_COLOR).
 const HANDLE_COLOR: Color32 = Color32::from_rgb(0x00, 0x50, 0xd0);
 
-/// Ctrl 时方 / 圆 / 三角要保持的宽 / 高（roll_live.BOX_ASPECT）。
+/// Width / height ratio kept for square / circle / triangle with Ctrl (roll_live.BOX_ASPECT).
 pub fn box_aspect(tool: Tool) -> f64 {
     match tool {
         Tool::Triangle => 2.0 / 3.0_f64.sqrt(),
@@ -64,7 +66,7 @@ pub fn is_stroke_tool(tool: Tool) -> bool {
     STROKE_TOOLS.contains(&tool)
 }
 
-/// 工程里的自定义默认设置 -> 核心 custom 的默认设置。
+/// The project's custom defaults -> core custom defaults.
 pub fn core_custom_defaults(app: &App) -> CoreCustomDefaults {
     CoreCustomDefaults {
         fill: app.custom_defaults.fill,
@@ -76,7 +78,7 @@ pub fn core_custom_defaults(app: &App) -> CoreCustomDefaults {
     }
 }
 
-/// 内置模板（Circle / Square / Triangle）的笔画与宽 / 高。
+/// Strokes and width / height of the built-in templates (Circle / Square / Triangle).
 pub fn builtin_shape(name: &str) -> Option<(Vec<PathStroke>, f64)> {
     let poly = |pts: &[Pt]| PathStroke::Poly {
         pts: pts.to_vec(),
@@ -99,12 +101,12 @@ pub fn builtin_shape(name: &str) -> Option<(Vec<PathStroke>, f64)> {
     }
 }
 
-/// 形状模板：先查图形库 `shapes/*.json` 里的同名形状（归一化），没有就退回内置模板（原版 custom_template）。
+/// Shape template: first look for a same-named shape in the library `shapes/*.json` (normalized), otherwise fall back to the built-in template (upstream custom_template).
 pub fn builtin_template(dir: &std::path::Path, name: &str) -> Option<(Vec<PathStroke>, f64)> {
     crate::drawer::library_template(dir, name).or_else(|| builtin_shape(name))
 }
 
-/// 方 / 圆 / 三角拖出来的自定义形状（roll_live.box_draft 的纯逻辑）。
+/// Custom shape dragged out with square / circle / triangle (pure logic of roll_live.box_draft).
 pub fn box_draft_parts(
     defaults: &Shape,
     cd: &CoreCustomDefaults,
@@ -136,7 +138,7 @@ pub fn box_draft_parts(
     sh
 }
 
-/// 面板里选的内置模板放进框里（原版 new_custom）。
+/// Puts a built-in template picked in the panel into the frame (upstream new_custom).
 pub fn new_custom_parts(
     defaults: &Shape,
     cd: &CoreCustomDefaults,
@@ -154,7 +156,7 @@ pub fn new_custom_parts(
     sh
 }
 
-/// 方 / 圆 / 三角拖出来的自定义形状。
+/// Custom shape dragged out with square / circle / triangle.
 pub fn box_draft(app: &App, tool: Tool, a: Pt, b: Pt) -> Shape {
     box_draft_parts(
         &app.defaults.clone(),
@@ -165,8 +167,9 @@ pub fn box_draft(app: &App, tool: Tool, a: Pt, b: Pt) -> Shape {
     )
 }
 
-/// 从 (start) 到 (pt) 的框，按 drawing 的宽 / 高（Ctrl）修正 pt（roll_custom.keep_aspect）。
-/// keys 是工程的按键范围：音高夹在 0 .. keys - 1。
+/// Box from (start) to (pt); corrects pt to the drawing's width / height ratio (Ctrl)
+/// (roll_custom.keep_aspect). keys is the project's key range: pitch is clamped to
+/// 0 .. keys - 1.
 pub fn keep_aspect_xy(start: Pt, pt: Pt, aspect: f64, sx: f64, sy: f64, keys: i64) -> Pt {
     let mut dx = (pt[0] - start[0]) * sx;
     let mut dy = (pt[1] - start[1]) * sy;
@@ -181,19 +184,19 @@ pub fn keep_aspect_xy(start: Pt, pt: Pt, aspect: f64, sx: f64, sy: f64, keys: i6
     ]
 }
 
-/// Ctrl 的 box 比例修正。
+/// Box aspect correction for Ctrl.
 pub fn keep_aspect(app: &App, start: Pt, pt: Pt, aspect: f64) -> Pt {
     keep_aspect_xy(start, pt, aspect, app.view.sx, app.view.sy, app.keys)
 }
 
-// ---------------------------------------------------------------- Live 绘制
+// ---------------------------------------------------------------- Live drawing
 
-/// Live 开着且当前工具会画笔画（roll_live.live_drawing）。
+/// Live is on and the current tool draws strokes (roll_live.live_drawing).
 pub fn live_drawing(app: &App) -> bool {
     app.live && is_stroke_tool(app.tool)
 }
 
-/// 新笔画画进的自定义形状（Live 开且只选了一个自定义形状）：返回下标。
+/// The custom shape new strokes are drawn into (Live on and exactly one custom shape selected): returns its index.
 pub fn live_target(app: &App) -> Option<usize> {
     let i = app.sel?;
     let sh = app.shapes.get(i)?;
@@ -205,7 +208,7 @@ pub fn live_target(app: &App) -> Option<usize> {
         .then_some(i)
 }
 
-/// event_pt，且在 Live 绘制时：离画进去的形状的笔画端（或正在画的折线起点）够近就精确落上去（roll_live.draw_pt）。
+/// event_pt, and while Live drawing: snaps exactly onto a stroke end of the target shape (or the start of the polyline being drawn) when close enough (roll_live.draw_pt).
 pub fn draw_pt(app: &App, pos: Pos2, snap: bool, shift: bool) -> Pt {
     let pt = crate::roll::event_pt(app, pos, snap, shift);
     if !live_drawing(app) {
@@ -240,7 +243,7 @@ pub fn draw_pt(app: &App, pos: Pos2, snap: bool, shift: bool) -> Pt {
     best.unwrap_or(pt)
 }
 
-/// 画完的草稿 -> 一条笔画（弧变成曲线，好跟着曲线那样弯）（roll_live.draft_stroke）。
+/// Finished draft -> a stroke (an arc becomes a curve so it can bend like one) (roll_live.draft_stroke).
 pub fn draft_stroke(sh: &Shape, draw: Option<Tool>) -> Option<PathStroke> {
     if let Some(tool) = draw
         && is_box_tool(tool)
@@ -295,8 +298,9 @@ pub fn draft_stroke(sh: &Shape, draw: Option<Tool>) -> Option<PathStroke> {
     }
 }
 
-/// 画完的草稿进 Live 形状（或新建一个）当一条笔画；没开 Live 的方 / 圆 / 三角成为独立的自定义形状。
-/// true = 已处理（调用方不要再加形状），false = 普通形状（调用方自己加）（roll_live.live_commit）。
+/// The finished draft becomes a stroke of the Live shape (or a new one); square / circle /
+/// triangle without Live become their own custom shape. true = handled (the caller should not
+/// add a shape), false = ordinary shape (the caller adds it) (roll_live.live_commit).
 pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
     let draw = app.draft_draw.take();
     let is_box = draw.is_some_and(is_box_tool);
@@ -314,21 +318,21 @@ pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
         }
     }
     let Some(st) = draft_stroke(sh, draw) else {
-        return true; // 框不够点：丢掉
+        return true; // frame has too few points: drop it
     };
     if is_box {
         let (Some(a), Some(b), Some(c)) = (sh.pts.first(), sh.pts.get(1), sh.pts.get(2)) else {
             return true;
         };
         if a[0] == b[0] || a[1] == c[1] {
-            return true; // 没有宽或高：丢掉
+            return true; // no width or height: drop it
         }
     } else if let PathStroke::Poly { pts, .. }
     | PathStroke::Curve { pts, .. }
     | PathStroke::Arc { pts, .. } = &st
         && pts.first().is_none_or(|p| pts.iter().all(|q| q == p))
     {
-        return true; // 所有点重合：丢掉
+        return true; // all points coincide: drop it
     }
     let is_curve_stroke =
         |target: &Shape, k: usize| matches!(target.strokes.get(k), Some(PathStroke::Curve { .. }));
@@ -368,9 +372,9 @@ pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
     }
 }
 
-// ---------------------------------------------------------------- 笔画
+// ---------------------------------------------------------------- strokes
 
-/// 屏幕点到线段的距离（roll_funnel.seg_dist）。
+/// Distance from a screen point to a segment (roll_funnel.seg_dist).
 fn seg_dist(x: f32, y: f32, a: Pos2, b: Pos2) -> f32 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let ll = dx * dx + dy * dy;
@@ -382,14 +386,14 @@ fn seg_dist(x: f32, y: f32, a: Pos2, b: Pos2) -> f32 {
     ((x - a.x - u * dx).powi(2) + (y - a.y - u * dy).powi(2)).sqrt()
 }
 
-/// 形状笔画在屏幕上的路径。
+/// A shape stroke's path on screen.
 fn screen_path(app: &App, path: &[Pt]) -> Vec<Pos2> {
     path.iter()
         .map(|p| Pos2::new(app.view.x_of(p[0]), app.view.y_of(p[1])))
         .collect()
 }
 
-/// 屏幕上 (x, y) 下的笔画号（roll_live.stroke_at）。
+/// Stroke number under screen point (x, y) (roll_live.stroke_at).
 pub fn stroke_at(app: &App, sh: &Shape, pos: Pos2, near: f32) -> Option<usize> {
     let mut best: Option<(f32, usize)> = None;
     for (k, path) in engine::shape_strokes(sh).iter().enumerate() {
@@ -405,25 +409,25 @@ pub fn stroke_at(app: &App, sh: &Shape, pos: Pos2, near: f32) -> Option<usize> {
     best.map(|(_, k)| k)
 }
 
-/// 被拾取的笔画号（roll_live.picked_stroke）。
+/// The picked stroke number (roll_live.picked_stroke).
 pub fn picked_stroke(app: &App, sh: &Shape) -> Option<usize> {
     let k = app.stroke?;
     (sh.kind == Kind::Custom && k < sh.strokes.len()).then_some(k)
 }
 
-/// 笔画列里被拾取的是曲线时返回它（roll_live.stroke_curve）。
+/// Returns the picked stroke when it is a curve in this stroke list (roll_live.stroke_curve).
 fn picked_curve_in(app: &App, strokes: &[PathStroke]) -> Option<usize> {
     let k = app.stroke?;
     matches!(strokes.get(k), Some(PathStroke::Curve { .. })).then_some(k)
 }
 
-/// 被拾取的笔画是曲线时返回它（roll_live.stroke_curve）。
+/// Returns the picked stroke when it is a curve (roll_live.stroke_curve).
 fn picked_curve_stroke(app: &App, sh: &Shape) -> Option<usize> {
     picked_stroke(app, sh)?;
     picked_curve_in(app, &sh.strokes)
 }
 
-/// 一条笔画的原始点数（椭圆没有原始点）。
+/// Raw point count of a stroke (an ellipse has no raw points).
 fn stroke_raw_len(st: &PathStroke) -> usize {
     match st {
         PathStroke::Poly { pts, .. }
@@ -433,8 +437,9 @@ fn stroke_raw_len(st: &PathStroke) -> usize {
     }
 }
 
-/// 会显示点（并跟着 Select 工具拖动）的笔画：Live 开且只选一个时是全部
-/// （长自由笔画只在被拾取时），否则只是被拾取的那条（roll_live.point_strokes）。
+/// Strokes that show points (and can be dragged with the Select tool): all of them when Live
+/// is on and exactly one shape is selected (long freehand strokes only when picked), otherwise
+/// just the picked one (roll_live.point_strokes).
 pub fn point_strokes(app: &App, sh: &Shape) -> Vec<usize> {
     if sh.text.is_some() || sh.notes.is_some() {
         return Vec::new();
@@ -452,8 +457,8 @@ pub fn point_strokes(app: &App, sh: &Shape) -> Vec<usize> {
     }
 }
 
-/// 一条笔画能拖的点 (点号, (u, v))：折线的点、曲线的两端、椭圆的左 / 右 / 下 / 上（点号 0-3）
-/// （roll_live.stroke_spots）。
+/// Draggable points of a stroke as (point number, (u, v)): polyline points, the two ends of a
+/// curve, the left / right / bottom / top of an ellipse (point numbers 0-3) (roll_live.stroke_spots).
 pub fn stroke_spots(st: &PathStroke) -> Vec<(usize, Pt)> {
     match st {
         PathStroke::Ellipse { box_, .. } => {
@@ -474,17 +479,17 @@ pub fn stroke_spots(st: &PathStroke) -> Vec<(usize, Pt)> {
     }
 }
 
-/// 自定义形状的一个笔画把手。
+/// A stroke handle of a custom shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StrokeHandleId {
-    /// 笔画的一个点（Select 工具）：笔画号与点号
+    /// A stroke point (Select tool): stroke number and point number
     Pt { k: usize, j: usize },
-    /// 被拾取曲线笔画的锚点 / 手柄：ctrl 区分手柄，j 是点号
+    /// Anchor / handle of the picked curve stroke: ctrl distinguishes handles, j is the point number
     Curve { ctrl: bool, j: usize },
 }
 
-/// 选中自定义形状要显示的笔画把手 `(beat, pitch, 把手, 任何工具可用)`
-/// （roll_live.stroke_handles）。
+/// Stroke handles to display for the selected custom shape as
+/// `(beat, pitch, handle, available with any tool)` (roll_live.stroke_handles).
 pub fn stroke_handles(app: &App, sh: &Shape) -> Vec<(Pt, StrokeHandleId, bool)> {
     let Some(to_bp) = frame_to_bp(&sh.pts) else {
         return Vec::new();
@@ -519,7 +524,7 @@ pub fn stroke_handles(app: &App, sh: &Shape) -> Vec<(Pt, StrokeHandleId, bool)> 
     out
 }
 
-/// 屏幕上命中笔画把手；`any` 为 true（Select 工具）时笔画点也可命中。
+/// Hit tests stroke handles on screen; stroke points are also hit testable when `any` is true (Select tool).
 pub fn hit_stroke_handle(app: &App, sh: &Shape, pos: Pos2, any: bool) -> Option<StrokeHandleId> {
     let near = 7.0_f32.max(8.0 * app.scale());
     for (p, id, free) in stroke_handles(app, sh).into_iter().rev() {
@@ -535,7 +540,7 @@ pub fn hit_stroke_handle(app: &App, sh: &Shape, pos: Pos2, any: bool) -> Option<
     None
 }
 
-/// 一次笔画拖动要改的形状现场：(u, v) 映射与框的点。
+/// The shape state a stroke drag edits: (u, v) mapping and frame points.
 struct StrokeFrame {
     frame: Vec<Pt>,
     strokes: Vec<PathStroke>,
@@ -556,7 +561,7 @@ fn stroke_frame(app: &App) -> Option<(usize, StrokeFrame)> {
     ))
 }
 
-/// 把改动写回形状并重新套框。
+/// Writes the changes back to the shape and refits the frame.
 fn commit_strokes(app: &mut App, i: usize, frame: Vec<Pt>, strokes: Vec<PathStroke>) {
     if let Some(target) = app.shapes.get_mut(i) {
         target.pts = frame;
@@ -565,9 +570,11 @@ fn commit_strokes(app: &mut App, i: usize, frame: Vec<Pt>, strokes: Vec<PathStro
     }
 }
 
-/// 拖一条笔画的点（"pt"）：吸附到网格（Shift 自由），离别的笔画点几像素内就落上去（轮廓能接上）。
-/// 同一位置的所有笔画点一起走；曲线端点带着手柄，椭圆边点改那一边。
-/// 返回要继续用的把手（椭圆边拖过对面会变成那一边）（roll_live.drag_stroke_point）。
+/// Drags a stroke point ("pt"): snaps to the grid (Shift = free) and lands on another
+/// stroke's point within a few pixels (so outlines can join up). All stroke points at the same
+/// position move together; a curve end takes its handles along, and an ellipse edge point
+/// changes that side. Returns the handle to keep using (dragging an ellipse edge past the
+/// opposite side turns into that side) (roll_live.drag_stroke_point).
 pub fn drag_stroke_point(
     app: &mut App,
     hid: StrokeHandleId,
@@ -685,8 +692,8 @@ pub fn drag_stroke_point(
     hid
 }
 
-/// (u, v) <-> 屏幕的映射（roll_live.stroke_maps）。
-#[allow(clippy::type_complexity)] // 两个闭包的类型没法起别名
+/// (u, v) <-> screen mapping (roll_live.stroke_maps).
+#[allow(clippy::type_complexity)] // the two closure types cannot be given an alias
 fn stroke_maps(
     app: &App,
     frame: &[Pt],
@@ -707,8 +714,9 @@ fn stroke_maps(
     ))
 }
 
-/// 拖一个笔画把手：笔画点是 [`drag_stroke_point`]，被拾取曲线的锚点 / 手柄走 bezier
-/// （吸附，Alt 同 bezier.drag_point）。返回要继续用的把手（roll_live.drag_stroke）。
+/// Drags a stroke handle: stroke points go to [`drag_stroke_point`], anchors / handles of the
+/// picked curve go through bezier (snapped, Alt as in bezier.drag_point). Returns the handle
+/// to keep using (roll_live.drag_stroke).
 pub fn drag_stroke_handle(
     app: &mut App,
     hid: StrokeHandleId,
@@ -761,10 +769,10 @@ pub fn drag_stroke_handle(
     }
 }
 
-/// 右键被拾取曲线笔画的一个点：锚点删掉，手柄收回去（roll_live.delete_stroke_handle）。
+/// Right-click on a point of the picked curve stroke: an anchor is deleted and handles retract (roll_live.delete_stroke_handle).
 pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
     let StrokeHandleId::Curve { j, .. } = hid else {
-        return; // 笔画点：右键当在笔画上（出菜单 / 取消选择）
+        return; // stroke point: right-click counts as being on the stroke (menu / deselect)
     };
     let Some((i, fr)) = stroke_frame(app) else {
         return;
@@ -810,8 +818,8 @@ pub fn delete_stroke_handle(app: &mut App, hid: StrokeHandleId) {
     }
 }
 
-/// 被拾取曲线笔画上离鼠标最近的地方加一个锚点并移到鼠标；`near` 内才加。
-/// true = 加上了（roll_live.stroke_click）。
+/// Adds an anchor at the point of the picked curve stroke closest to the mouse and moves it
+/// there; only within `near`. true = added (roll_live.stroke_click).
 pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) -> bool {
     let Some((i, fr)) = stroke_frame(app) else {
         return false;
@@ -865,7 +873,7 @@ pub fn stroke_click(app: &mut App, pos: Pos2, near: Option<f64>, shift: bool) ->
     true
 }
 
-/// 把笔画 k 从自定义形状里删掉（最后一条：整个形状删掉）（roll_live.delete_stroke）。
+/// Deletes stroke k from the custom shape (the last one: deletes the whole shape) (roll_live.delete_stroke).
 pub fn delete_stroke(app: &mut App, i: usize, k: usize) {
     let n = app.shapes.get(i).map(|s| s.strokes.len()).unwrap_or(0);
     if n <= 1 {
@@ -884,7 +892,7 @@ pub fn delete_stroke(app: &mut App, i: usize, k: usize) {
     app.shapes_changed();
 }
 
-/// (b, p) 在屏幕上的位置。
+/// Position of (b, p) on screen.
 fn at(app: &App, rect: Rect, p: Pt) -> Pos2 {
     Pos2::new(
         rect.min.x + app.view.x_of(p[0]),
@@ -892,9 +900,9 @@ fn at(app: &App, rect: Rect, p: Pt) -> Pos2 {
     )
 }
 
-// ---------------------------------------------------------------- 绘制
+// ---------------------------------------------------------------- painting
 
-/// 被拾取的那条笔画：粗紫线，压在把手下面（roll_live.draw_picked_stroke）。
+/// The picked stroke: a thick purple line, under the handles (roll_live.draw_picked_stroke).
 pub fn paint_picked_stroke(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     let Some(k) = picked_stroke(app, sh) else {
         return;
@@ -913,7 +921,7 @@ pub fn paint_picked_stroke(app: &App, painter: &egui::Painter, rect: Rect, sh: &
     ));
 }
 
-/// 选中自定义形状的笔画点与被拾取曲线笔画的锚点 / 手柄（roll_draw.draw_handles 的 custom 分支）。
+/// Stroke points of the selected custom shape and anchors / handles of the picked curve stroke (the custom branch of roll_draw.draw_handles).
 pub fn paint_custom_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     let s = app.scale();
     if let Some(k) = picked_curve_stroke(app, sh)
@@ -961,7 +969,7 @@ pub fn paint_custom_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: 
     }
 }
 
-/// 偶奇规则：从 (b, p) 向右的线穿过轮廓奇数次就在里面（roll_custom.inside_strokes）。
+/// Even-odd rule: inside when a ray to the right from (b, p) crosses the outline an odd number of times (roll_custom.inside_strokes).
 pub fn inside_strokes(strokes: &[Vec<Pt>], b: f64, p: f64) -> bool {
     let mut inside = false;
     for poly in strokes {
@@ -1008,7 +1016,7 @@ mod tests {
         assert!(sh.union && sh.apart);
         match &sh.strokes[..] {
             [PathStroke::Poly { pts, .. }] => assert_eq!(pts.as_slice(), &SQUARE),
-            other => panic!("期望 poly 笔画，得到 {other:?}"),
+            other => panic!("expected poly stroke, got {other:?}"),
         }
     }
 
@@ -1032,7 +1040,7 @@ mod tests {
         assert_eq!(sh.name, "Triangle");
         match &sh.strokes[..] {
             [PathStroke::Poly { pts, .. }] => assert_eq!(pts.as_slice(), &TRIANGLE),
-            other => panic!("期望 poly 笔画，得到 {other:?}"),
+            other => panic!("expected poly stroke, got {other:?}"),
         }
     }
 
@@ -1053,14 +1061,14 @@ mod tests {
 
     #[test]
     fn keep_aspect_taller_than_wide_fixes_dx() {
-        // 高 40px、宽 10px，aspect 2 -> 宽要 80px = 8 拍
+        // 40px tall, 10px wide, aspect 2 -> width must be 80px = 8 beats
         let got = keep_aspect_xy([0.0, 0.0], [1.0, 4.0], 2.0, 10.0, 10.0, 128);
         assert_eq!(got, [8.0, 4.0]);
     }
 
     #[test]
     fn keep_aspect_takes_screen_ratio() {
-        // 每拍 20px、每 key 5px：(2 拍, 8 key) 在屏幕上都是 40px，aspect 2 -> 宽 80px = 4 拍
+        // 20px per beat, 5px per key: (2 beats, 8 keys) is 40px on screen both ways, aspect 2 -> width 80px = 4 beats
         let got = keep_aspect_xy([0.0, 0.0], [2.0, 8.0], 2.0, 20.0, 5.0, 128);
         assert!((got[0] - 4.0).abs() < 1e-12);
         assert!((got[1] - 8.0).abs() < 1e-12);
@@ -1070,7 +1078,7 @@ mod tests {
     fn keep_aspect_clamps_inside_roll() {
         let got = keep_aspect_xy([0.0, 0.0], [-3.0, 2.0], 1.0, 10.0, 10.0, 128);
         assert_eq!(got, [0.0, 3.0]);
-        // 高的那维是 800px：宽被拉到 800px = 80 拍，音高夹在 127
+        // The tall dimension is 800px: width is stretched to 800px = 80 beats, pitch clamped to 127
         let got = keep_aspect_xy([0.0, 120.0], [5.0, 200.0], 1.0, 10.0, 10.0, 128);
         assert_eq!(got, [80.0, 127.0]);
     }
@@ -1091,7 +1099,7 @@ mod tests {
         let square = vec![SQUARE.to_vec()];
         assert!(inside_strokes(&square, 0.5, 0.5));
         assert!(!inside_strokes(&square, 1.5, 0.5));
-        // 洞：一个外框 + 反向内框，中间不算里面
+        // A hole: one outer box + one reversed inner box; the middle does not count as inside
         let hole = vec![
             SQUARE.to_vec(),
             vec![

@@ -1,19 +1,21 @@
-//! Windows 剪贴板 FFI（对应原版 `put_on_clipboard` / `get_from_clipboard` 的 ctypes 部分）。
+//! Windows clipboard FFI (corresponds to the ctypes part of the original `put_on_clipboard` /
+//! `get_from_clipboard`).
 //!
-//! 手写 `extern "system"` 声明，不引入额外依赖。非 Windows 平台提供同签名的空实现，
-//! 返回 `false` / [`ClipboardGet::NoData`]，保证跨平台编译通过。
+//! Hand-written `extern "system"` declarations, no extra dependencies. Non-Windows platforms
+//! get empty implementations with the same signatures, returning `false` /
+//! [`ClipboardGet::NoData`], so the code still compiles cross-platform.
 
-/// 剪贴板格式名。
+/// Clipboard format name.
 pub const FORMAT: &str = "MidiPortalSequence";
 
-/// [`get_from_clipboard`] 的结果。
+/// Result of [`get_from_clipboard`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardGet {
-    /// 剪贴板被别的程序占着（重试 10 次仍打不开，对应原版返回 None）。
+    /// The clipboard is held by another program (still unopenable after 10 retries, matching the original returning None).
     Busy,
-    /// 剪贴板上没有这种格式的数据（对应原版返回 b""）。
+    /// The clipboard has no data in this format (matching the original returning b"").
     NoData,
-    /// 数据本身。
+    /// The data itself.
     Data(Vec<u8>),
 }
 
@@ -65,38 +67,38 @@ mod win {
         fn Sleep(ms: u32);
     }
 
-    /// 注册剪贴板格式，失败返回 None。
+    /// Register the clipboard format; returns None on failure.
     fn register_format() -> Option<Uint> {
         let mut name: Vec<u16> = FORMAT.encode_utf16().collect();
         name.push(0);
-        // SAFETY: name 以 NUL 结尾，调用期间一直有效。
+        // SAFETY: name is NUL-terminated and stays valid for the duration of the call.
         let fmt = unsafe { RegisterClipboardFormatW(name.as_ptr()) };
         (fmt != 0).then_some(fmt)
     }
 
-    /// 原版的重试：10 次、每次等 20ms，别的程序有时会短暂占着剪贴板。
+    /// The original's retry: 10 attempts, 20ms apart; other programs sometimes hold the clipboard briefly.
     fn open_clipboard() -> bool {
         for _ in 0..OPEN_RETRIES {
-            // SAFETY: NULL 表示当前任务。
+            // SAFETY: NULL means the current task.
             if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
                 return true;
             }
-            // SAFETY: 参数只是一个毫秒数。
+            // SAFETY: the argument is just a millisecond count.
             unsafe { Sleep(RETRY_SLEEP_MS) };
         }
         false
     }
 
-    /// 把 raw 作为 FORMAT 放到剪贴板（替换原有内容）。剪贴板打不开或内存不够返回 false。
+    /// Put raw on the clipboard as FORMAT (replacing the previous content). Returns false when the clipboard cannot be opened or memory is short.
     pub fn put_on_clipboard(raw: &[u8]) -> bool {
         let Some(fmt) = register_format() else {
             return false;
         };
-        // SAFETY: 只调用系统 API，指针都在使用期间有效。
+        // SAFETY: only system APIs are called; the pointers stay valid for the duration.
         unsafe {
             let h = GlobalAlloc(GMEM_MOVEABLE, raw.len());
             if h.is_null() {
-                return false; // 原版这里抛 MemoryError
+                return false; // the original raises MemoryError here
             }
             let p = GlobalLock(h);
             if p.is_null() {
@@ -111,24 +113,24 @@ mod win {
             }
             EmptyClipboard();
             if SetClipboardData(fmt, h).is_null() {
-                // 失败时内存还在我们手里
+                // on failure the memory is still ours
                 GlobalFree(h);
                 CloseClipboard();
                 return false;
             }
-            // 成功时剪贴板接管 h，不能再释放
+            // on success the clipboard takes over h, so it must not be freed
             CloseClipboard();
             true
         }
     }
 
-    /// 剪贴板上 FORMAT 的字节；没有数据是 [`ClipboardGet::NoData`]，打不开是
-    /// [`ClipboardGet::Busy`]。
+    /// The bytes of FORMAT on the clipboard; no data is [`ClipboardGet::NoData`], an
+    /// unopenable clipboard is [`ClipboardGet::Busy`].
     pub fn get_from_clipboard() -> ClipboardGet {
         let Some(fmt) = register_format() else {
             return ClipboardGet::NoData;
         };
-        // SAFETY: 只调用系统 API，指针都在使用期间有效。
+        // SAFETY: only system APIs are called; the pointers stay valid for the duration.
         unsafe {
             if !open_clipboard() {
                 return ClipboardGet::Busy;

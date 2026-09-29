@@ -1,7 +1,7 @@
-"""向量生成脚本的公共部分：导入 Python 原版模块并把用例写成 JSON。
+"""Common pieces of the vector generator scripts: import the Python originals and write the cases as JSON.
 
-每个模块一个生成脚本 tools/gen_<module>_vectors.py，输出到
-crates/spiderweb-core/tests/vectors/<module>.json，Rust 测试逐用例对照。
+One generator script per module, tools/gen_<module>_vectors.py, writes to
+crates/spiderweb-core/tests/vectors/<module>.json for the Rust tests to compare case by case.
 """
 
 import json
@@ -9,10 +9,10 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 原版源码目录：默认 1.1.0 参考副本，可用 SPIDERWEB_SRC 指到别的版本（如 1.2.0）
+# Original source dir: defaults to the 1.1.0 reference copy; SPIDERWEB_SRC can point at another version (e.g. 1.2.0)
 SCRIPTS = os.environ.get("SPIDERWEB_SRC") or os.path.join(os.path.dirname(REPO), "Spiderweb-main", "scripts")
 if not os.path.isdir(SCRIPTS):
-    # worktree 在临时目录时按相对路径找不到原版，回退到固定路径
+    # when the worktree is in a temp dir the relative path misses the original, so fall back to a fixed path
     SCRIPTS = "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts"
 OUT_DIR = os.path.join(REPO, "crates", "spiderweb-core", "tests", "vectors")
 

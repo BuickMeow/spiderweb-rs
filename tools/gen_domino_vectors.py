@@ -1,11 +1,13 @@
-"""domino_clip.py 的对照向量。
+"""Differential vectors for domino_clip.py.
 
-用 Python 原版生成：clip_data 的输入 / raw / 解压负载，以及 read_notes 的输入 raw /
-期望行，存到 crates/spiderweb-domino/tests/vectors/domino.json，Rust 测试逐用例对照。
-压缩字节不要求与 Python 逐位相同，所以 Rust 侧只对照解压负载；read_notes 直接读 Python
-生成的 raw。
+Generated with the Python original: clip_data's input / raw / decompressed payload, and
+read_notes' input raw / expected rows, saved to
+crates/spiderweb-domino/tests/vectors/domino.json for the Rust tests to compare case by case.
+The compressed bytes need not match Python bit for bit, so the Rust side only compares the
+decompressed payload; read_notes reads the Python-generated raw directly.
 
-worktree 在临时目录时 vec_common 推不出原版脚本目录，这里补一个回退路径。
+When the worktree is in a temp dir, vec_common cannot derive the original script dir; add a
+fallback path here.
 """
 
 import json
@@ -30,18 +32,18 @@ OUT = os.path.join(REPO, "crates", "spiderweb-domino", "tests", "vectors", "domi
 
 
 def wrap(data):
-    """原版 clip_data 尾部的包装：MAGIC + 解压后大小 + zlib。"""
+    """The wrapper the original clip_data appends: MAGIC + decompressed size + zlib."""
     return D.MAGIC + struct.pack("<I", len(data)) + zlib.compress(data)
 
 
 def note(tick, key, vel, gate):
-    """常规布局的单条音符项。"""
+    """One note item in the regular layout."""
     return D.item(2001, D.item(1001, struct.pack("<I", tick)) + D.item(2001, bytes([key])) +
                          D.item(2002, bytes([vel])) + D.item(2003, struct.pack("<I", gate)))
 
 
 def payload(*tracks, ppq=96):
-    """SONG_START + PPQ + SONG_REST + 各轨 + SONG_TAIL 的完整解压负载。"""
+    """The full decompressed payload: SONG_START + PPQ + SONG_REST + each track + SONG_TAIL."""
     body = D.SONG_START
     if ppq is not None:
         body += D.item(1002, struct.pack("<H", ppq))
@@ -53,7 +55,7 @@ def rows5(notes):
     return np.array(notes, dtype=np.int64).reshape(-1, 5)
 
 
-# ------------------------------------------------------------------ clip 用例
+# ------------------------------------------------------------------ clip cases
 
 def clip_cases():
     cases = []
@@ -116,10 +118,10 @@ def clip_error_cases():
     return cases
 
 
-# ------------------------------------------------------------------ read 用例
+# ------------------------------------------------------------------ read cases
 
 def read_case(name, raw):
-    """期望行 / ppq 都由 Python 原版算；坏数据记下错误种类。"""
+    """Expected rows / ppq are both computed by the Python original; bad data records the error kind."""
     try:
         rows, ppq = D.read_notes(raw)
     except ValueError as e:
@@ -136,71 +138,71 @@ def read_cases(clip):
         cases.append({"name": "roundtrip_" + case["name"], "raw": case["raw"],
                       "rows": rows.tolist(), "ppq": ppq})
 
-    # 控制器夹在常规音符之间：note_run 提前停，再接着解析。
+    # A controller between regular notes: note_run stops early and parsing resumes after it.
     t = (D.TRACK_HEAD + note(10, 60, 100, 5) + note(20, 61, 101, 6) + D.item(2004, b"\x01\x02") +
          note(30, 62, 102, 7) + D.TRACK_TAIL)
     cases.append(read_case("controller_between", wrap(payload(t))))
 
-    # 同一长度(34)但字段顺序不对：快路径失败后走其它布局解析。
+    # Same length (34) but wrong field order: the fast path fails and parsing continues with the other layout.
     odd34 = D.item(2001, D.item(2001, bytes([70])) + D.item(2002, b"") +
                           D.item(2003, struct.pack("<I", 99)) + D.item(1001, struct.pack("<I", 500)))
     cases.append(read_case("odd_same_length", wrap(payload(D.TRACK_HEAD + odd34 + D.TRACK_TAIL))))
 
-    # 缺 2002（力度默认 100）、2002 空 body、不同长度。
+    # Missing 2002 (velocity defaults to 100), empty 2002 body, different lengths.
     odd_no_vel = D.item(2001, D.item(2001, bytes([71])) + D.item(2003, struct.pack("<I", 88)) +
                                D.item(1001, struct.pack("<I", 600)))
     odd_empty_vel = D.item(2001, D.item(2001, bytes([72])) + D.item(2002, b"") +
                                   D.item(2003, struct.pack("<I", 77)) + D.item(1001, struct.pack("<I", 700)))
     cases.append(read_case("odd_no_velocity", wrap(payload(D.TRACK_HEAD + odd_no_vel + odd_empty_vel + D.TRACK_TAIL))))
 
-    # 内部 tag 重复时最后一个生效（2002 两次）。
+    # With duplicate inner tags the last one wins (2002 twice).
     odd_dup = D.item(2001, D.item(1001, struct.pack("<I", 800)) + D.item(2001, bytes([73])) +
                             D.item(2002, bytes([10])) + D.item(2002, bytes([44])) +
                             D.item(2003, struct.pack("<I", 66)))
     cases.append(read_case("odd_duplicate_tags", wrap(payload(D.TRACK_HEAD + odd_dup + D.TRACK_TAIL))))
 
-    # 常规音符 + odd34 + 常规音符：odd 排在所有 runs 后面。
+    # regular note + odd34 + regular note: odd is placed after all runs.
     mixed = (D.TRACK_HEAD + note(11, 60, 100, 5) + odd34 + note(12, 61, 101, 6) + D.TRACK_TAIL)
     cases.append(read_case("odd_after_runs", wrap(payload(mixed))))
 
-    # 两条轨：后面的轨里的常规音符也排在前一轨的 odd 音符前面。
+    # Two tracks: regular notes in the later track also come before the odd notes of the previous track.
     t0 = D.TRACK_HEAD + note(10, 60, 100, 5) + odd34 + note(20, 61, 101, 6) + D.TRACK_TAIL
     t1 = D.TRACK_HEAD + note(11, 62, 102, 7) + D.TRACK_TAIL
     cases.append(read_case("two_tracks_odd_order", wrap(payload(t0, t1))))
 
-    # key > 127 的其它布局音符被丢掉。
+    # Other-layout notes with key > 127 are dropped.
     odd_high_key = D.item(2001, D.item(1001, struct.pack("<I", 900)) + D.item(2001, bytes([200])) +
                                   D.item(2003, struct.pack("<I", 55)) + D.item(1001, struct.pack("<I", 7)))
     cases.append(read_case("odd_high_key", wrap(payload(D.TRACK_HEAD + odd_high_key + D.TRACK_TAIL))))
 
-    # 轨道体里最后一项长度超出轨道范围：直接停。
+    # The last item in a track body has a length beyond the track: stop right there.
     truncated_track = D.TRACK_HEAD + note(1, 2, 3, 4) + struct.pack("<HI", 9999, 1000) + b"x"
     cases.append(read_case("truncated_track", wrap(payload(truncated_track))))
 
-    # 顶层项长度超出负载：后面的都不看了（PPQ 已经拿到）。
+    # A top-level item has a length beyond the payload: nothing after it is read (PPQ is already captured).
     cases.append(read_case("truncated_top", wrap(D.SONG_START + D.item(1002, struct.pack("<H", 96)) +
                                                  struct.pack("<HI", 1003, 1000) + b"x")))
 
-    # 没有 PPQ 项；PPQ 项长度不对也当没有。
+    # No PPQ item; a PPQ item with the wrong length also counts as none.
     cases.append(read_case("no_ppq", wrap(payload(D.TRACK_HEAD + note(1, 2, 3, 4) + D.TRACK_TAIL, ppq=None))))
     cases.append(read_case("wrong_ppq_len", wrap(D.SONG_START + D.item(1002, b"\x01") + D.SONG_TAIL)))
 
-    # 有两个 PPQ 项：最后一个生效。
+    # Two PPQ items: the last one wins.
     cases.append(read_case("last_ppq_wins", wrap(D.SONG_START + D.item(1002, struct.pack("<H", 96)) +
                                                  D.item(1002, struct.pack("<H", 480)) + D.SONG_TAIL)))
 
-    # 空轨、没有轨。
+    # Empty track, no tracks.
     cases.append(read_case("empty_track", wrap(payload(D.TRACK_HEAD + D.TRACK_TAIL))))
     cases.append(read_case("no_tracks", wrap(payload())))
 
-    # 一个音符都没有的项都被跳过。
+    # Items without a single note are all skipped.
     cases.append(read_case("only_settings", wrap(payload(D.TRACK_HEAD + D.item(2001, b"\x01") + D.TRACK_TAIL))))
 
-    # 压缩数据后面还有垃圾：Python 忽略。
+    # Garbage after the compressed data: Python ignores it.
     trailing = wrap(payload(D.TRACK_HEAD + note(1, 2, 3, 4) + D.TRACK_TAIL)) + b"JUNK"
     cases.append(read_case("trailing_garbage", trailing))
 
-    # 坏数据。
+    # Bad data.
     cases.append(read_case("empty", b""))
     cases.append(read_case("short", D.MAGIC[:10]))
     cases.append(read_case("magic_only", D.MAGIC))

@@ -1,8 +1,9 @@
-"""smooth.py 的对照向量。
+"""Differential vectors for smooth.py.
 
-所有输入的浮点数先量化到 15 位有效数字再交给 Python 原版计算：这样
-serde_json 的默认浮点解析（无 float_roundtrip 特性）也能精确还原，从而
-保证 Rust 与原版在同一批 double 上运算。输出保持原版算出的全精度。
+Every input float is first quantised to 15 significant digits before being handed to the Python
+original: that way serde_json's default float parsing (without the float_roundtrip feature) can
+reproduce it exactly, guaranteeing Rust and the original operate on the same doubles. The output
+keeps the full precision the original computes.
 """
 
 import math
@@ -12,7 +13,7 @@ import sys
 
 from vec_common import write
 
-# 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
+# when run in the worktree, vec_common cannot derive the original script dir; add a fallback path
 _SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS", "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
@@ -37,7 +38,7 @@ def rjson(v):
 
 
 def serde_parse(x):
-    """复刻 serde_json（未开 float_roundtrip）的浮点解析，用于自检。"""
+    """Replicate serde_json's float parsing (float_roundtrip off) for self-checks."""
     tok = repr(x)
     neg = tok.startswith("-")
     if neg:
@@ -84,7 +85,7 @@ def add(cases, fn, args, call):
     cases.append({"fn": fn, "args": a, "out": call(*a)})
 
 
-# ---------------------------------------------------------------- 输入笔画
+# ---------------------------------------------------------------- input strokes
 
 def noisy_line(seed, n=26, noise=0.35):
     r = random.Random(seed)
@@ -200,17 +201,17 @@ def scribble(seed, n=90):
 def gen():
     cases = []
 
-    # ---- tolerance：level 边界 / size 边界
+    # ---- tolerance: level bounds / size bounds
     for level in (0.0, 0.5, 1.0, 12.5, 30.0, 50.0, 60.0, 99.9, 100.0, 100.5, 150.0, -5.0, 33.3):
         for size in (0.0, 1.0, 12.75, 123.456):
             add(cases, "tolerance", [level, size], S.tolerance)
 
-    # ---- clean_level：取整（.5 取偶）、夹取、极端值
+    # ---- clean_level: rounding (.5 to even), clamping, extreme values
     for v in (0.0, 1.0, 7.0, 60.0, 100.0, 150.0, -20.0, -0.5, 0.5, 1.5, 2.5, 33.5, 44.5, 45.5,
               99.4, 99.6, 100.4, 1e6, 1e-6, 1e300, -1e300):
         add(cases, "clean_level", [v], S.clean_level)
 
-    # ---- smooth_path：固定笔画 × 四个级别
+    # ---- smooth_path: fixed strokes × four levels
     P = {
         "line": noisy_line(11),
         "line_flat": noisy_line(12, noise=0.08),
@@ -229,24 +230,24 @@ def gen():
         for level in (0, 30, 60, 100):
             add(cases, "smooth_path", [pts, float(level), 1.0], S.smooth_path)
 
-    # ---- k != 1：屏幕上 x 被压缩 / 拉伸
+    # ---- k != 1: x is squeezed / stretched on screen
     for name, k in (("line", 2.0), ("line", 0.5), ("wave", 3.0), ("circle", 0.5),
                     ("ellipse", 2.0), ("box", 3.0), ("triangle", 0.25), ("s", 1.5)):
         for level in (30, 60, 100):
             add(cases, "smooth_path", [P[name], float(level), k], S.smooth_path)
 
-    # ---- 随机游走闭合环（12 个种子；后 4 个差一点闭合）
+    # ---- random-walk closed loops (12 seeds; the last 4 close almost but not quite)
     for seed in range(12):
         offset = (0.0, 0.0) if seed < 8 else (2.5, 1.5)
         pts = random_loop(100 + seed, offset=offset)
         for level in (30, 55, 80, 100):
             add(cases, "smooth_path", [pts, float(level), 1.0], S.smooth_path)
 
-    # ---- 环的缺口在 LOOP / closed 边界附近
+    # ---- ring gaps near the LOOP / closed boundary
     for off in ((1.0, 0.5), (4.0, 2.0), (8.0, 0.0), (20.0, 0.0)):
         add(cases, "smooth_path", [circle_ring(60, offset=off), 60.0, 1.0], S.smooth_path)
 
-    # ---- 退化：少于 3 点、k <= 0、level <= 0、重合点
+    # ---- degenerate: fewer than 3 points, k <= 0, level <= 0, coincident points
     add(cases, "smooth_path", [[[0.0, 60.0], [5.0, 61.0]], 60.0, 1.0], S.smooth_path)
     add(cases, "smooth_path", [[[0.0, 60.0], [5.0, 61.0], [10.0, 60.0]], 60.0, 0.0], S.smooth_path)
     add(cases, "smooth_path", [[[0.0, 60.0], [5.0, 61.0], [10.0, 60.0]], 60.0, -2.0], S.smooth_path)

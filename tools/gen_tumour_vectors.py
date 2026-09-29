@@ -1,4 +1,4 @@
-"""tumour.py 的对照向量（tools/gen_tumour_vectors.py）。"""
+"""Differential vectors for tumour.py (tools/gen_tumour_vectors.py)."""
 
 import math
 import random
@@ -26,7 +26,7 @@ def tm(**kw):
     return d
 
 
-# ---- 路径 -----------------------------------------------------------------
+# ---- paths -----------------------------------------------------------------
 
 LINE = [[0.0, 60.0], [1.0, 60.0]]
 VLINE = [[0.0, 60.0], [1.0, 64.0]]
@@ -242,14 +242,14 @@ def gen():
         dg = T.graph_fn(cleaned, "dist", 1.0)
         add("graph_starts", [raw, lo, hi, dist, fit, even], T.graph_starts(dg, lo, hi, dist, fit, even))
 
-    # ---- tumour_path：4 shape × 4 side（random 用不同 seed）× 2 wrap ----
+    # ---- tumour_path: 4 shapes × 4 sides (random uses different seeds) × 2 wraps ----
     for shape in ["triangle", "square", "circle", "parabola"]:
         for wrap in ["simple", "wrap"]:
             for side in ["alt", "left", "right"]:
                 add_tp(LINE, tm(shape=shape, side=side, wrap=wrap))
             for seed in [1, 42]:
                 add_tp(LINE, tm(shape=shape, side="random", wrap=wrap, seed=seed))
-    # 另一条折线 / 竖线 / 反向路径上的代表用例
+    # representative cases on another polyline / a vertical line / a backward path
     add_tp(VLINE, tm(shape="triangle", side="alt", wrap="simple"))
     add_tp(VLINE, tm(shape="circle", side="left", wrap="wrap", size=-2.0))
     add_tp(POLY, tm(shape="triangle", side="alt", wrap="simple"))
@@ -261,17 +261,17 @@ def gen():
     add_tp(DUPES, tm(shape="triangle", side="alt", wrap="simple"))
     add_tp(DUPES, tm(shape="triangle", side="alt", wrap="wrap"))
 
-    # ---- 太短 / 空路径：原样返回 ----
+    # ---- too short / empty path: returned as-is ----
     add_tp(TINY, tm())
     add_tp(SHORT, tm())
     add_tp(ZERO, tm())
     add_tp([[0.0, 60.0], [0.0, 60.0], [1.0, 61.0]], tm())
 
-    # ---- size 为 0 / 极小：原样返回 ----
+    # ---- size 0 / tiny: returned as-is ----
     add_tp(LINE, tm(size=0.0))
     add_tp(LINE, tm(size=1e-13, length=0.0))
 
-    # ---- 尖刺：length = 0 ----
+    # ---- spikes: length = 0 ----
     for side in ["alt", "left", "right"]:
         add_tp(LINE, tm(shape="triangle", side=side, wrap="simple", length=0.0))
         add_tp(LINE, tm(shape="square", side=side, wrap="wrap", length=0.0))
@@ -307,7 +307,7 @@ def gen():
     add_tp(SQUARE_LOOP, tm(shape="triangle", side="alt", wrap="simple", fit=True, dist=0.5))
     add_tp(SQUARE_LOOP, tm(shape="circle", side="right", wrap="wrap", fit=True, dist=0.2))
 
-    # ---- 闭合环（非 fit） ----
+    # ---- closed loops (non-fit) ----
     add_tp(CIRCLE, tm(shape="triangle", side="alt", wrap="wrap"))
     add_tp(CIRCLE, tm(shape="triangle", side="alt", wrap="simple"))
     add_tp(CIRCLE, tm(shape="circle", side="left", wrap="wrap"))
@@ -324,7 +324,7 @@ def gen():
     add_tp(LINE, tm(shape="circle", side="alt", mirror=True, length=0.0))
     add_tp(CIRCLE, tm(shape="triangle", side="alt", mirror=True, wrap="wrap", fit=True))
 
-    # ---- start / end 区间（含半段与零长） ----
+    # ---- start / end ranges (including half and zero length) ----
     add_tp(LINE, tm(shape="triangle", side="alt", start=0.2, end=0.8))
     add_tp(LINE, tm(shape="triangle", side="alt", start=0.8, end=0.2))
     add_tp(LINE, tm(shape="triangle", side="alt", start=0.3, end=0.3))
@@ -341,7 +341,7 @@ def gen():
     add_tp(LINE, tm(shape="triangle", side="random", k=0.0625, seed=4))
     add_tp(POLY, tm(shape="triangle", side="alt", k=2.0, wrap="wrap", ease=0.1))
 
-    # ---- 尺寸 / 距离 / 长度 ----
+    # ---- size / distance / length ----
     add_tp(LINE, tm(shape="triangle", side="alt", size=-2.0))
     add_tp(LINE, tm(shape="circle", side="alt", size=8.0, wrap="wrap"))
     add_tp(LINE, tm(shape="triangle", side="alt", dist=0.5))
@@ -412,7 +412,7 @@ def gen():
         left, right = path[:cut], path[cut - 1:]
         add("split_tumour", [cleaned, left, right], list(T.split_tumour(cleaned, left, right)))
 
-    # ---- 随机压力：固定种子，形状 / 方向 / 包裹 / 区间 / 缓动 / fit 混着来 ----
+    # ---- random fuzz: fixed seed, shapes / sides / wraps / ranges / ease / fit mixed together ----
     rnd = random.Random(12345)
     shapes = ["triangle", "square", "circle", "parabola"]
     sides = ["alt", "left", "right", "random"]

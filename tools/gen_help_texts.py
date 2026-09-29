@@ -1,19 +1,21 @@
-"""help_texts.py 的机械转换：原版 scripts/window/help_texts.py -> crates/spiderweb-app/src/help_texts.rs。
+"""Mechanical conversion of help_texts.py: original scripts/window/help_texts.py -> crates/spiderweb-app/src/help_texts.rs.
 
-原版模块直接 import，TOPICS / SECTIONS / NEXT / SEE / TOOL_TOPICS 原样转成 Rust 常量
-（字符串按 Rust 字面量转义，非 ASCII 保留 UTF-8）。改文案只改原版，再跑一次本脚本：
+The original module is imported directly; TOPICS / SECTIONS / NEXT / SEE / TOOL_TOPICS become
+Rust constants as they are (strings escaped as Rust literals, non-ASCII kept as UTF-8). To change
+the wording, edit the original and run this script again:
 
     python3 tools/gen_help_texts.py
 
-原版脚本目录默认 /Users/jieneng/Documents/GitHub/Spiderweb-main/scripts，可用
-SPIDERWEB_SCRIPTS 环境变量覆盖（与 tools/gen_*_vectors.py 约定一致）。
+The original script dir defaults to /Users/jieneng/Documents/GitHub/Spiderweb-main/scripts and
+can be overridden with the SPIDERWEB_SCRIPTS environment variable (same convention as
+tools/gen_*_vectors.py).
 """
 
 import os
 import subprocess
 import sys
 
-# 在 worktree 里跑时推不出原版脚本目录，这里用与 gen_*_vectors.py 相同的回退路径
+# when run in the worktree the original script dir cannot be derived; use the same fallback path as gen_*_vectors.py
 _SCRIPTS = os.environ.get("SPIDERWEB_SCRIPTS",
                           "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
@@ -26,7 +28,7 @@ _OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 
 
 def lit(s):
-    """Python 字符串 -> Rust 字符串字面量（含引号）。"""
+    """Python string -> Rust string literal (including the quotes)."""
     out = ['"']
     for ch in s:
         o = ord(ch)
@@ -155,7 +157,7 @@ def main():
     ]
     with open(_OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
-    # 输出直接按 rustfmt 排好，跑完 cargo fmt --check 不再有改动（没有 rustfmt 就跳过）
+    # The output is laid out by rustfmt directly, so cargo fmt --check stays clean (skipped without rustfmt)
     try:
         subprocess.run(["rustfmt", "--edition", "2024", _OUT], check=True)
     except (OSError, subprocess.CalledProcessError) as e:

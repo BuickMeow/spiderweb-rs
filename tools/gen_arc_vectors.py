@@ -1,8 +1,8 @@
-"""arc.py 的对照向量。
+"""Differential vectors for arc.py.
 
-所有输入的浮点数先量化到 15 位有效数字再交给 Python 原版计算：
-这样 serde_json 的默认浮点解析（无 float_roundtrip 特性）也能精确还原，
-从而保证 Rust 与原版在同一批 double 上运算。
+Every input float is first quantised to 15 significant digits before being handed to the Python
+original: that way serde_json's default float parsing (without the float_roundtrip feature) can
+reproduce it exactly, guaranteeing Rust and the original operate on the same doubles.
 """
 
 import math
@@ -11,7 +11,7 @@ import sys
 
 from vec_common import write
 
-# 在 worktree 里跑时 vec_common 推不出原版脚本目录，这里补一个回退路径
+# when run in the worktree, vec_common cannot derive the original script dir; add a fallback path
 _SCRIPTS = (os.environ.get("SPIDERWEB_SCRIPTS") or os.environ.get("SPIDERWEB_SRC")
             or "/Users/jieneng/Documents/GitHub/Spiderweb-main/scripts")
 if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
@@ -37,7 +37,7 @@ def rjson(v):
 
 
 def serde_parse(x):
-    """复刻 serde_json（未开 float_roundtrip）的浮点解析，用于自检。"""
+    """Replicate serde_json's float parsing (float_roundtrip off) for self-checks."""
     tok = repr(x)
     neg = tok.startswith("-")
     if neg:
@@ -91,16 +91,16 @@ def arc_k_one(k):
 def gen():
     cases = []
 
-    # ---- circle：一般三点 / 共线 / 重合 / 近似共线
+    # ---- circle: generic triangle / collinear / coincident / nearly collinear
     triples = [
         ([0.0, 0.0], [1.0, 1.0], [2.0, 0.0]),
-        ([0.0, 0.0], [1.0, 1.0], [2.0, 2.0]),           # 共线
-        ([0.0, 0.0], [0.0, 0.0], [1.0, 2.0]),           # 前两点重合
-        ([1.0, 1.0], [2.0, 2.0], [1.0, 1.0]),           # 首尾重合
-        ([0.0, 0.0], [3.0, 4.0], [6.0, 8.0000000001]),  # 近似共线
+        ([0.0, 0.0], [1.0, 1.0], [2.0, 2.0]),           # collinear
+        ([0.0, 0.0], [0.0, 0.0], [1.0, 2.0]),           # first two points coincide
+        ([1.0, 1.0], [2.0, 2.0], [1.0, 1.0]),           # first and last coincide
+        ([0.0, 0.0], [3.0, 4.0], [6.0, 8.0000000001]),  # nearly collinear
         ([-2.5, 3.25], [0.0, 7.0], [4.0, -1.0]),
         ([0.0, 0.0], [1.0, 0.0], [0.0, 1.0]),
-        ([5.0, 5.0], [5.0, 5.0], [5.0, 5.0]),           # 全重合
+        ([5.0, 5.0], [5.0, 5.0], [5.0, 5.0]),           # all coincide
     ]
     for triple in triples:
         add(cases, "circle", list(triple), A.circle)
@@ -109,14 +109,14 @@ def gen():
     whole = [
         ([0.0, 0.0], [1.0, 0.0], [0.0, 0.0]),
         ([1.0, 1.0], [2.0, 2.0], [1.0, 1.0]),
-        ([0.0, 0.0], [1.0, 0.0], [1.0, 0.0]),  # 首尾不同
-        ([0.0, 0.0], [0.0, 0.0], [0.0, 0.0]),  # 全同
+        ([0.0, 0.0], [1.0, 0.0], [1.0, 0.0]),  # first and last differ
+        ([0.0, 0.0], [0.0, 0.0], [0.0, 0.0]),  # all identical
         ([-1.0, 2.0], [3.0, -0.5], [-1.0, 2.0]),
     ]
     for triple in whole:
         add(cases, "full_circle", list(triple), A.full_circle)
 
-    # ---- arc_circle：一般三点 / k / 整圆 / 共线（没有圆弧时 None）
+    # ---- arc_circle: generic triangle / k / full circle / collinear (None when there is no arc)
     for p, k in (
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0),
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 0.5),
@@ -126,41 +126,41 @@ def gen():
     ):
         add(cases, "arc_circle", [p, k], A.arc_circle)
 
-    # ---- arc_points：k / step / 共线 / 整圆 / 超半圆 / 点不足
+    # ---- arc_points: k / step / collinear / full circle / over half circle / too few points
     arc_pts = [
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0, A.STEP),
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 0.5, A.STEP),
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 2.0, A.STEP),
-        ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 1.0, A.STEP),    # 超半圆
-        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0, 0.5),         # 整圆（大 step）
-        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0, A.STEP),      # 整圆（默认 step）
-        ([[0.0, 1.0], [1.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # 恰转过 0
-        ([[2.0, 3.0], [2.0, 5.0], [2.0, 7.0]], 1.0, A.STEP),      # 共线
-        ([[0.0, 0.0], [0.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # 中间点等于起点
-        ([[0.0, 0.0], [2.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # 中间点等于终点
-        ([[0.0, 0.0], [1.0, 2.0]], 1.0, A.STEP),                  # 只有两点
-        ([[3.0, 4.0]], 1.0, A.STEP),                              # 只有一点
+        ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 1.0, A.STEP),    # over half circle
+        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0, 0.5),         # full circle (large step)
+        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0, A.STEP),      # full circle (default step)
+        ([[0.0, 1.0], [1.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # exactly past 0
+        ([[2.0, 3.0], [2.0, 5.0], [2.0, 7.0]], 1.0, A.STEP),      # collinear
+        ([[0.0, 0.0], [0.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # middle point equals start
+        ([[0.0, 0.0], [2.0, 0.0], [2.0, 0.0]], 1.0, A.STEP),      # middle point equals end
+        ([[0.0, 0.0], [1.0, 2.0]], 1.0, A.STEP),                  # only two points
+        ([[3.0, 4.0]], 1.0, A.STEP),                              # only one point
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0, math.pi / 8),
         ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 0.25, math.pi / 4),
     ]
     for p, k, step in arc_pts:
         add(cases, "arc_points", [p, k, step], A.arc_points)
 
-    # ---- arc_bezier：四分之一分段 / k / 整圆 / 顺逆时针 / 共线
+    # ---- arc_bezier: quarter segmentation / k / full circle / clockwise and counter-clockwise / collinear
     arc_bez = [
-        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0),        # 半圆 -> 2 段
+        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.0),        # half circle -> 2 segments
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 0.5),
         ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 2.0),
-        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.7),        # k 非整数倍
-        ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 1.0),       # 超半圆 -> 3 段
-        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0),        # 整圆 -> 4 段
+        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 1.7),        # k not an integer multiple
+        ([[0.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], 1.0),       # over half circle -> 3 segments
+        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 1.0),        # full circle -> 4 segments
         ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], 0.5),
-        ([[0.0, 1.0], [1.0, 0.0], [2.0, 1.0]], 1.0),        # 顺时针
-        ([[2.0, 3.0], [2.0, 5.0], [2.0, 7.0]], 1.0),        # 共线 -> 直线
+        ([[0.0, 1.0], [1.0, 0.0], [2.0, 1.0]], 1.0),        # clockwise
+        ([[2.0, 3.0], [2.0, 5.0], [2.0, 7.0]], 1.0),        # collinear -> straight line
         ([[0.0, 0.0], [0.0, 0.0], [2.0, 0.0]], 1.0),
-        ([[0.0, 0.0], [3.0, 0.0], [0.0, 0.0]], 2.5),        # 压扁的整圆
-        ([[0.0, 0.0], [1.0, 0.001], [2.0, 0.0]], 1.0),      # 很平的弧
-        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 10.0),       # 极扁（近直线）
+        ([[0.0, 0.0], [3.0, 0.0], [0.0, 0.0]], 2.5),        # flattened full circle
+        ([[0.0, 0.0], [1.0, 0.001], [2.0, 0.0]], 1.0),      # very flat arc
+        ([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]], 10.0),       # extremely flat (nearly straight)
     ]
     for p, k in arc_bez:
         add(cases, "arc_bezier", [p, k], A.arc_bezier)
@@ -172,7 +172,7 @@ def gen():
     for a, c in (([0.0, 0.0], [6.0, 3.0]), ([2.0, 5.0], [-2.0, -5.0]), ([1.0, 1.0], [1.0, 1.0])):
         add(cases, "line_bezier", [a, c], A.line_bezier)
 
-    # ---- clean_k（Python 侧为 arc_k({"k": ...})）：边界、负数、inf / nan
+    # ---- clean_k (arc_k({"k": ...}) on the Python side): bounds, negatives, inf / nan
     ks = [1.0, 0.5, 2.0, 1e-9, 1.0001e-9, 1e9, 999999999.0, 1e10, -1.0, 0.0, "inf", "-inf", "nan"]
     for k in ks:
         add(cases, "clean_k", [k], arc_k_one)
@@ -182,5 +182,5 @@ def gen():
 
 if __name__ == "__main__":
     data = gen()
-    # 自检：所有输出里的浮点也要能被 Rust 侧按 1e-9 容差比较即可，无需量化
+    # Self-check: floats in all outputs only need to compare within Rust's 1e-9 tolerance, so no quantisation is needed
     write("arc", data["cases"])

@@ -1,15 +1,22 @@
-//! 自定义形状抽屉（原版 window/drawer.py）：0..1 的画板 + 图形库 shapes/*.json。
+//! Custom shape drawer (upstream window/drawer.py): the 0..1 drawing board + the shape
+//! library shapes/*.json.
 //!
-//! 画板是 u / v = 0..1 的方框（v 向上），画在哪里都行，放上卷帘时按自己的大小被拉伸。
-//! 工具：选择 / 线 / 折线 / 自由笔 / 曲线 / 三点弧 / 方 / 圆 / 三角 / 橡皮；编辑：整体拖动、
-//! 点与椭圆角拖动、翻转、转 90°、曲线对称、正多边形；图形库：打开 / 新建 / 删除 / 改名 /
-//! 保存 / 另存 / Rename / Use（作为卷帘 Custom 工具的模板）。
+//! The board is a u / v = 0..1 square (v upward); draw anywhere, and it is stretched to the
+//! shape's own size on the roll. Tools: select / line / polyline / freehand / curve /
+//! three-point arc / square / circle / triangle / eraser; editing: whole-stroke drag, point
+//! and ellipse-corner drag, flip, turn 90°, curve symmetry, regular polygons; shape library:
+//! open / new / delete / rename / save / save as / Rename / Use (as a template for the roll's
+//! Custom tool).
 //!
-//! 与原版的差异（都记在实现里）：
-//! - 曲线的钢笔锚点 / 手柄、自由笔、三点弧复用 [`spiderweb_core::bezier`] 与核心 custom；
-//! - 旋转 / 斜切的自定义形状盒子在卷帘里已有（roll_custom.rs），画板只做笔画级的翻转与 90° 转；
-//! - "Sides" 正多边形是需求补充（原版画板没有），一键生成正 n 边形；
-//! - 未保存的图形在切换 / 关闭时用系统确认框，不用原版的自定义对话框。
+//! Differences from upstream (all noted in the implementation):
+//! - curve pen anchors / handles, freehand and the three-point arc reuse
+//!   [`spiderweb_core::bezier`] and core custom;
+//! - the rotate / skew box for custom shapes already exists on the roll (roll_custom.rs), so
+//!   the board only does stroke-level flip and 90° turns;
+//! - the "Sides" regular polygon is a port addition (upstream has none), generating a regular
+//!   n-gon in one go;
+//! - unsaved drawings use a system confirmation dialog on switch / close instead of upstream's
+//!   custom dialog.
 
 use std::path::{Path, PathBuf};
 
@@ -28,9 +35,9 @@ use spiderweb_io::safefile;
 use crate::app::{App, Tool};
 use crate::drawer_tools::{self as dt, DrawerTool, Spot};
 
-/// 内置形状（原版 drawer.BUILT_IN 的名字）：同名文件会被优先使用，删掉文件就回来。
+/// Built-in shapes (the names of upstream drawer.BUILT_IN): a file with the same name takes priority, and deleting the file brings the built-in back.
 pub const BUILT_IN: [&str; 3] = ["Circle", "Square", "Triangle"];
-/// 文件名里不能用的字符（原版 drawer.BAD_CHARS）。
+/// Characters not allowed in file names (upstream drawer.BAD_CHARS).
 const BAD_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 const STROKE_COLOR: Color32 = Color32::from_rgb(0xc0, 0x39, 0x2b);
@@ -44,14 +51,14 @@ const GRID_MID: Color32 = Color32::from_rgb(0x7f, 0x8f, 0xb0);
 const BOARD_EDGE: Color32 = Color32::from_rgb(0x60, 0x60, 0x60);
 const SIDES_SPAN: f64 = 0.4;
 
-// ---------------------------------------------------------------- 图形库
+// ---------------------------------------------------------------- shape library
 
-/// 库目录（与可执行文件同级的 shapes/，原版 drawer.LIBRARY）。
+/// Library directory (shapes/ next to the executable; upstream drawer.LIBRARY).
 pub fn library_dir(app: &App) -> PathBuf {
     app.library_dir.clone()
 }
 
-/// 库里已有的形状文件名（不含 .json）。
+/// Shape file names already in the library (without .json).
 pub fn saved_names(dir: &Path) -> Vec<String> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -66,7 +73,7 @@ pub fn saved_names(dir: &Path) -> Vec<String> {
     out
 }
 
-/// name 是内置形状时返回它本来的写法（大小写不敏感）。
+/// When name is a built-in shape, returns its canonical spelling (case-insensitive).
 pub fn builtin_name(name: &str) -> Option<&'static str> {
     BUILT_IN
         .iter()
@@ -74,7 +81,7 @@ pub fn builtin_name(name: &str) -> Option<&'static str> {
         .copied()
 }
 
-/// 库列表：文件 + 没被覆盖的内置形状，按小写排（原版 library_names）。
+/// Library list: files + built-in shapes not overridden, sorted by lowercase (upstream library_names).
 pub fn library_names(dir: &Path) -> Vec<String> {
     let mut names = saved_names(dir);
     let taken: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
@@ -87,12 +94,12 @@ pub fn library_names(dir: &Path) -> Vec<String> {
     names
 }
 
-/// 形状的库文件路径。
+/// The library file path of a shape.
 pub fn shape_file(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.json"))
 }
 
-/// 读一个库形状；文件不在时退回内置，文件坏了返回 None（原版 load_shape）。
+/// Reads a library shape; falls back to the built-in when the file is missing, returns None when it is broken (upstream load_shape).
 pub fn load_shape(dir: &Path, name: &str) -> Option<Vec<Stroke>> {
     match std::fs::read_to_string(shape_file(dir, name)) {
         Ok(text) => {
@@ -108,7 +115,7 @@ pub fn load_shape(dir: &Path, name: &str) -> Option<Vec<Stroke>> {
     }
 }
 
-/// 把笔画写进库文件 `{"strokes": [...]}`（原版 save_shape 的格式）。
+/// Writes strokes into a library file `{"strokes": [...]}` (the format of upstream save_shape).
 pub fn save_shape(dir: &Path, name: &str, strokes: &[Stroke]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let sh = Shape {
@@ -122,13 +129,13 @@ pub fn save_shape(dir: &Path, name: &str, strokes: &[Stroke]) -> std::io::Result
     safefile::write_text(&shape_file(dir, name), &(text + "\n"))
 }
 
-/// 文件名清理（原版 clean_name）：去掉非法字符、首尾空白与结尾的句点。
+/// File name cleanup (upstream clean_name): strips invalid characters, surrounding whitespace and trailing periods.
 pub fn clean_name(name: &str) -> String {
     let cleaned: String = name.chars().filter(|c| !BAD_CHARS.contains(c)).collect();
     cleaned.trim().trim_end_matches('.').to_string()
 }
 
-/// 库形状作为模板：归一化到 0..1，并给出宽 / 高（平的时候 1.0）（原版 custom_template）。
+/// A library shape as a template: normalized to 0..1, with its width / height (1.0 when flat) (upstream custom_template).
 pub fn library_template(dir: &Path, name: &str) -> Option<(Vec<Stroke>, f64)> {
     let strokes = load_shape(dir, name)?;
     let (out, ratio) = normalize_strokes(&strokes);
@@ -148,9 +155,9 @@ fn confirm(text: &str) -> bool {
         == rfd::MessageDialogResult::Yes
 }
 
-// ---------------------------------------------------------------- 状态
+// ---------------------------------------------------------------- state
 
-/// 画板视图：zoom = 1 时整个方框放进窗口；center 是窗口中间对应的画板点。
+/// Board view: at zoom = 1 the whole square fits the window; center is the board point at the window center.
 #[derive(Clone, Copy, Debug)]
 pub struct BoardView {
     pub zoom: f64,
@@ -166,33 +173,33 @@ impl Default for BoardView {
     }
 }
 
-/// 一次画板拖动。
+/// One board drag.
 enum BoardDrag {
-    /// 空白拖动 / 中键：平移视图
+    /// Empty-space drag / middle button: pan the view
     Pan { start: Pos2, center: Pt },
-    /// 方框类工具：从按下处拖到鼠标
+    /// Box tools: drag from the press position to the mouse
     Box { start: Pt },
-    /// 自由笔：跟着鼠标加点
+    /// Freehand: add points following the mouse
     Free { last: Pos2 },
-    /// 折线的光标点
+    /// Polyline cursor point
     Poly,
-    /// 拖动整体
+    /// Drag the whole stroke
     Move { i: usize, start: Pt, orig: Stroke },
-    /// 同一位置的点一起拖
+    /// Points at the same position move together
     Points {
         group: Vec<(usize, usize)>,
         start: Pt,
     },
-    /// 椭圆角点缩放（对角不动）
+    /// Ellipse corner resize (the opposite corner stays put)
     Corner { i: usize, k: usize, box_: [f64; 4] },
-    /// 曲线的锚点 / 手柄
+    /// Curve anchors / handles
     Pen { i: usize, j: usize },
 }
 
-/// 抽屉窗口状态（原版 Drawer）。
+/// Drawer window state (upstream Drawer).
 pub struct Drawer {
     pub open: bool,
-    /// 键盘归抽屉（原版 in_drawer）：在抽屉里按过东西后，卷帘快捷键让路。
+    /// Keyboard goes to the drawer (upstream in_drawer): after pressing something in the drawer, the roll's shortcuts step aside.
     pub focus: bool,
     pub tool: DrawerTool,
     pub grid_n: i64,
@@ -201,7 +208,7 @@ pub struct Drawer {
     pub draft: Option<Stroke>,
     pub sel: Option<usize>,
     drag: Option<BoardDrag>,
-    /// 点一下后没拖：笔画跟着鼠标，下一次点击定下来（原版 follow）
+    /// Clicked without dragging: the stroke follows the mouse and the next click fixes it (upstream follow)
     pub follow: Option<(Pt, DrawerTool)>,
     pub undo_stack: Vec<Vec<Stroke>>,
     /// Undone steps, until something new is drawn (upstream redo_stack).
@@ -259,7 +266,7 @@ impl Drawer {
         Self::default()
     }
 
-    /// 从库里打开一个形状（不清库列表，调用方 refresh）（原版 open_shape）。
+    /// Opens a shape from the library (does not clear the library list; the caller refreshes) (upstream open_shape).
     pub fn open_shape(&mut self, name: &str, strokes: Vec<Stroke>) {
         self.strokes = strokes;
         self.undo_stack.clear();
@@ -275,9 +282,9 @@ impl Drawer {
         self.status.clear();
     }
 
-    // ------------------------------------------------------------ 坐标
+    // ------------------------------------------------------------ coordinates
 
-    /// 每个画板单位的像素数（短边减掉边距）。
+    /// Pixels per board unit (short side minus the margin).
     fn px(&self) -> f64 {
         ((self.board_rect.width().min(self.board_rect.height()) as f64) - 48.0).max(10.0)
             * self.view.zoom
@@ -321,7 +328,7 @@ impl Drawer {
         }
     }
 
-    /// 缩放（按鼠标位置），原版 on_wheel。
+    /// Zoom (around the mouse position), upstream on_wheel.
     fn zoom_at(&mut self, pos: Pos2, up: bool) {
         let before = self.uv_at(pos.x, pos.y);
         self.view.zoom = (self.view.zoom * if up { 1.25 } else { 0.8 }).clamp(0.05, 64.0);
@@ -330,7 +337,7 @@ impl Drawer {
         self.view.center[1] += before[1] - after[1];
     }
 
-    // ------------------------------------------------------------ 编辑
+    // ------------------------------------------------------------ editing
 
     /// A step to undo: the strokes as they were, and the redo steps are dropped
     /// (upstream push_undo; the undone steps stay in redo_kept for a click that moves nothing).
@@ -385,7 +392,7 @@ impl Drawer {
         self.push_undo();
         self.strokes.push(st);
         if matches!(self.strokes.last(), Some(Stroke::Curve { .. })) {
-            self.sel = Some(self.strokes.len() - 1); // 曲线刚画完就能弯手柄
+            self.sel = Some(self.strokes.len() - 1); // a just-finished curve can be bent by its handles right away
         }
         self.changed();
     }
@@ -412,14 +419,14 @@ impl Drawer {
         self.cancel_draft();
     }
 
-    // ------------------------------------------------------------ 命中
+    // ------------------------------------------------------------ hit testing
 
     fn hit_stroke(&self, pos: Pos2) -> Option<usize> {
         let map = self.screen_map();
         dt::stroke_at(&self.strokes, &map, pos.x as f64, pos.y as f64, 8.0)
     }
 
-    /// 选中的曲线里，鼠标下的锚点 / 手柄点号（不包括两端）。
+    /// In the selected curve, the anchor / handle point number under the mouse (ends excluded).
     fn pen_handle_at(&self, pos: Pos2) -> Option<(usize, usize)> {
         let i = dt::selected_curve(&self.strokes, self.sel)?;
         let Stroke::Curve { pts, .. } = &self.strokes[i] else {
@@ -438,7 +445,7 @@ impl Drawer {
         None
     }
 
-    /// (u, v) 相同的可拖点（折线端、曲线端都算；椭圆不算）（原版 select_press 的 group）。
+    /// Draggable points with the same (u, v) (polyline and curve ends count, ellipses don't) (the group of upstream select_press).
     fn point_group(&self, u: f64, v: f64) -> Vec<(usize, usize)> {
         let mut group = Vec::new();
         for (i, spot, p) in dt::handles(&self.strokes, self.sel) {
@@ -452,7 +459,7 @@ impl Drawer {
         group
     }
 
-    /// 拖曲线的点（锚点 / 手柄），原版 drag_point 的 exact 模式。
+    /// Drags a curve point (anchor / handle), the exact mode of upstream drag_point.
     fn drag_pen(&mut self, i: usize, j: usize, pt: Pt, alt: bool) {
         let Some(Stroke::Curve {
             pts, sharp, sym, ..
@@ -481,7 +488,7 @@ impl Drawer {
         }
     }
 
-    /// 曲线的对称开关（原版 set_curve_symmetry；source 按鼠标在曲线的哪一半）。
+    /// Curve symmetry switch (upstream set_curve_symmetry; source is which half of the curve the mouse is on).
     fn set_symmetry_mode(&mut self, mode: Option<Sym>, mouse: Option<Pos2>) {
         let Some(i) = dt::selected_curve(&self.strokes, self.sel) else {
             return;
@@ -524,7 +531,7 @@ impl Drawer {
         self.changed();
     }
 
-    /// 右键选中的曲线点：锚点删掉 / 手柄收回去（原版 delete_point）。
+    /// Right-click on a selected curve point: an anchor is deleted / a handle retracts (upstream delete_point).
     fn delete_pen_point(&mut self, pos: Pos2) -> bool {
         let Some((i, j)) = self.pen_handle_at(pos) else {
             return false;
@@ -597,7 +604,7 @@ impl Drawer {
         self.changed();
     }
 
-    // ------------------------------------------------------------ 鼠标
+    // ------------------------------------------------------------ mouse
 
     fn on_press(&mut self, pos: Pos2, input: &Input) {
         let pt = self.event_pt(pos, true, input.shift);
@@ -781,7 +788,7 @@ impl Drawer {
         }
     }
 
-    /// 没按住鼠标时的草稿跟随（折线 / 弧的光标点、"点一下再点一下"的方框）。
+    /// Draft following while no mouse button is held (the polyline / arc cursor point, the click-move-click box).
     fn on_hover_draft(&mut self, pos: Pos2, input: &Input) {
         let pt = self.event_pt(pos, true, input.shift);
         if let Some((start, tool)) = self.follow {
@@ -820,7 +827,7 @@ impl Drawer {
                     }
                     self.finish_box();
                 } else {
-                    // 点一下：笔画跟着鼠标，下次点击定下来（原版 follow）
+                    // clicked: the stroke follows the mouse and the next click fixes it (upstream follow)
                     self.draft = None;
                     self.follow = Some((start, self.tool));
                 }
@@ -950,7 +957,7 @@ impl Drawer {
         }
     }
 
-    /// 折线的下一次点击（原版 poly_point）：点到起点附近就闭合、收工。
+    /// The polyline's next click (upstream poly_point): a click near the start closes and finishes it.
     fn poly_click(&mut self, pos: Pos2, pt: Pt) {
         let first = match &self.draft {
             Some(Stroke::Poly { pts, .. }) => pts.first().copied(),
@@ -983,13 +990,13 @@ impl Drawer {
         pts.push(pt);
     }
 
-    /// 折线收工（Enter / 双击 / 右键）（原版 finish_poly）。
+    /// Finishes the polyline (Enter / double-click / right-click) (upstream finish_poly).
     fn finish_poly(&mut self) {
         let Some(Stroke::Poly { pts, .. }) = &self.draft else {
             return;
         };
         let mut done = pts.clone();
-        done.pop(); // 最后一个是跟着鼠标的点
+        done.pop(); // the last one is the point following the mouse
         let done = dt::dedupe_points(&done);
         self.draft = None;
         self.drag = None;
@@ -1004,7 +1011,7 @@ impl Drawer {
         }
     }
 
-    /// 三点弧收工（原版 commit）。
+    /// Finishes the three-point arc (upstream commit).
     fn finish_arc(&mut self) {
         if let Some(st) = self.draft.take() {
             self.drag = None;
@@ -1012,7 +1019,7 @@ impl Drawer {
         }
     }
 
-    /// 方框类工具的草稿（Ctrl 时方 / 圆保持正）。
+    /// Draft for the box tools (with Ctrl, square / circle stay regular).
     fn box_draft(&mut self, tool: DrawerTool, start: Pt, pt: Pt, ctrl: bool) {
         let pt = if ctrl && matches!(tool, DrawerTool::Square | DrawerTool::Circle) {
             dt::perfect(start, pt)
@@ -1059,7 +1066,7 @@ impl Drawer {
         });
     }
 
-    /// 松手时判断草稿够不够大（原版 on_release 的 ok）。
+    /// Decides on release whether the draft is big enough (the ok of upstream on_release).
     fn finish_box(&mut self) {
         let tool = self.tool;
         let Some(st) = self.draft.take() else {
@@ -1095,9 +1102,9 @@ impl Drawer {
         }
     }
 
-    // ------------------------------------------------------------ 图形库动作
+    // ------------------------------------------------------------ shape library actions
 
-    /// 库列表刷新（原版 refresh_list）；select 在列表里就选中它。
+    /// Refreshes the library list (upstream refresh_list); selects select when it is in the list.
     pub fn refresh_list(&mut self, dir: &Path, select: Option<&str>) {
         self.list = library_names(dir);
         if let Some(name) = select
@@ -1107,7 +1114,7 @@ impl Drawer {
         }
     }
 
-    /// 保存到库里的名字；没保存返回 None（原版 save）。
+    /// The name saved into the library; None when it was not saved (upstream save).
     pub fn save(&mut self, dir: &Path) -> Option<String> {
         let name = clean_name(&self.name);
         if self.strokes.is_empty() {
@@ -1143,7 +1150,7 @@ impl Drawer {
         Some(name)
     }
 
-    /// Use：没改过就直接用已保存的名字，否则先保存（原版 use）。
+    /// Use: with no changes, use the saved name directly; otherwise save first (upstream use).
     fn use_shape(&mut self, dir: &Path) -> Option<String> {
         let same =
             self.saved_name.as_deref() == Some(clean_name(&self.name).as_str()) && !self.dirty;
@@ -1154,14 +1161,14 @@ impl Drawer {
         }
     }
 
-    /// 改过就确认（原版 keep_changes）。
+    /// Confirms when there are changes (upstream keep_changes).
     fn keep_changes(&self) -> bool {
         !(self.dirty && !self.strokes.is_empty())
             || confirm(rust_i18n::t!("drawer.discard").as_ref())
     }
 
     fn open_selected(&mut self, dir: &Path) {
-        // 没选形状：原版直接什么都不做
+        // no shape selected: upstream does nothing at all
         let Some(name) = self.lib_sel.clone() else {
             return;
         };
@@ -1206,7 +1213,7 @@ impl Drawer {
         self.lib_sel = None;
     }
 
-    /// Rename 是移植版补充的（原版画板没有改名）：能用的错误提示沿用原版措辞。
+    /// Rename is a port addition (upstream's board has no rename): the error messages reuse upstream wording where possible.
     fn rename_selected(&mut self, dir: &Path) {
         let Some(old) = self.lib_sel.clone() else {
             return;
@@ -1235,7 +1242,7 @@ impl Drawer {
         self.refresh_list(dir, Some(&new));
     }
 
-    // ------------------------------------------------------------ 绘制
+    // ------------------------------------------------------------ painting
 
     fn draw_stroke(&self, painter: &egui::Painter, st: &Stroke, color: Color32, width: f32) {
         let pts: Vec<Pos2> = custom::stroke_points(st)
@@ -1283,7 +1290,7 @@ impl Drawer {
         }
     }
 
-    /// 网格（原版 redraw 的网格部分）：太密时只画每四分之一。
+    /// Grid (the grid part of upstream redraw): when too dense, draw only every fourth line.
     fn paint_grid(&self, painter: &egui::Painter) {
         let n = self.grid_n.max(1) as f64;
         let k = self.px() / n;
@@ -1366,7 +1373,7 @@ impl Drawer {
         }
         for (i, spot, p) in dt::handles(&self.strokes, self.sel) {
             if matches!(spot, Spot::Pen { .. }) {
-                continue; // 曲线的锚点 / 手柄上面画过了
+                continue; // curve anchors / handles were already drawn above
             }
             let q = self.to_screen(p[0], p[1]);
             let r = Rect::from_center_size(q, Vec2::splat(8.0));
@@ -1422,7 +1429,7 @@ impl Drawer {
         }
     }
 
-    /// 状态文字（原版 redraw 末尾）。
+    /// Status text (the end of upstream redraw).
     fn update_state_text(&mut self) {
         let mut text = if self.strokes.is_empty() {
             rust_i18n::t!("drawer.state_nothing").to_string()
@@ -1440,7 +1447,7 @@ impl Drawer {
     }
 }
 
-// ---------------------------------------------------------------- 输入
+// ---------------------------------------------------------------- input
 
 struct Input {
     pos: Option<Pos2>,
@@ -1480,9 +1487,9 @@ fn read_input(ui: &egui::Ui) -> Input {
     })
 }
 
-// ---------------------------------------------------------------- 界面
+// ---------------------------------------------------------------- UI
 
-/// 抽屉窗口入口：`App.drawer` 是 Some 时画它（原版 Drawer 窗口）。
+/// Drawer window entry point: draws it when `App.drawer` is Some (upstream's Drawer window).
 pub fn drawer_ui(app: &mut App, ctx: &egui::Context) {
     let Some(mut d) = app.drawer.take() else {
         return;
@@ -1536,7 +1543,7 @@ pub fn drawer_ui(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// 抽屉里的快捷键（只有抽屉有焦点时；原版 on_key 与 Ctrl+Z 等）。
+/// Drawer shortcuts (only while the drawer has focus; upstream on_key and Ctrl+Z etc.).
 fn drawer_keys(d: &mut Drawer, ctx: &egui::Context) {
     ctx.input_mut(|i| {
         if i.consume_key(Modifiers::COMMAND, Key::Z) || i.consume_key(Modifiers::CTRL, Key::Z) {
@@ -1583,7 +1590,7 @@ fn tool_key(tool: DrawerTool) -> Option<Key> {
     })
 }
 
-/// 抽屉工具 -> 帮助主题 id（原版 DRAWER_TOOL_TOPICS；Triangle 是移植版补充，用总主题）。
+/// Drawer tool -> help topic id (upstream DRAWER_TOOL_TOPICS; Triangle is a port addition and uses the general topic).
 fn tool_topic(tool: DrawerTool) -> &'static str {
     match tool {
         DrawerTool::Select => "drawer_select",
@@ -1825,7 +1832,7 @@ impl Drawer {
             ui.label(egui::RichText::new(&self.status).weak());
         }
         ui.separator();
-        // 侧栏底部的帮助：当前工具的 + 总主题（原版 update_side_help）
+        // Help at the bottom of the side panel: the current tool's + the general topic (upstream update_side_help)
         if let (Some(t), Some(dr)) = (
             crate::help_texts::by_id(tool_topic(self.tool)),
             crate::help_texts::by_id("drawer"),
@@ -1890,7 +1897,7 @@ impl Drawer {
                 self.on_hover_draft(pos, &input);
             }
         } else if let Some(pos) = input.pos.filter(|p| rect.contains(*p)) {
-            // 没按键：折线 / 弧的光标点、点一下后跟鼠标的方框跟着走
+            // No button held: the polyline / arc cursor point and the click-then-follow box trail the mouse
             self.on_hover_draft(pos, &input);
         }
         if input.middle_released && matches!(self.drag, Some(BoardDrag::Pan { .. })) {
@@ -1936,7 +1943,7 @@ impl Drawer {
 }
 
 impl App {
-    /// Drawer 的 "Use on the piano roll"：新自定义形状用这个库形状（原版 app.use_custom）。
+    /// The drawer's "Use on the piano roll": new custom shapes use this library shape (upstream app.use_custom).
     pub fn use_custom(&mut self, name: &str) {
         self.custom_defaults.shape = name.to_string();
         self.select(None, false);
@@ -1945,7 +1952,7 @@ impl App {
         self.schedule_autosave();
     }
 
-    /// 打开抽屉（原版 panel_custom.open_drawer）：先放进当前选的面板形状。
+    /// Opens the drawer (upstream panel_custom.open_drawer): first loads the shape selected in the panel.
     pub fn open_drawer(&mut self) {
         if let Some(d) = self.drawer.as_mut() {
             d.open = true;
@@ -2027,7 +2034,7 @@ mod tests {
                 src: None,
             },
             Stroke::Curve {
-                // 7 点 = 两段：sharp / sym 才有效（原版 clean_curve 对短曲线会丢弃）
+                // 7 points = two segments: sharp / sym only take effect then (upstream clean_curve drops short curves)
                 pts: vec![
                     [0.0, 0.0],
                     [0.2, 0.0],
@@ -2042,10 +2049,13 @@ mod tests {
                 src: None,
             },
         ];
-        save_shape(&dir, "Spider", &strokes).expect("写库文件");
-        let text = std::fs::read_to_string(shape_file(&dir, "Spider")).expect("读库文件");
-        assert!(text.contains("\"strokes\""), "库文件要有 strokes 键");
-        let got = load_shape(&dir, "Spider").expect("形状读回来");
+        save_shape(&dir, "Spider", &strokes).expect("write library file");
+        let text = std::fs::read_to_string(shape_file(&dir, "Spider")).expect("read library file");
+        assert!(
+            text.contains("\"strokes\""),
+            "the library file must have a strokes key"
+        );
+        let got = load_shape(&dir, "Spider").expect("read the shape back");
         assert_eq!(got, strokes);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2053,7 +2063,7 @@ mod tests {
     #[test]
     fn load_missing_file_falls_back_to_builtin() {
         let dir = temp_dir("builtin");
-        let circle = load_shape(&dir, "Circle").expect("内置圆");
+        let circle = load_shape(&dir, "Circle").expect("built-in circle");
         assert_eq!(
             circle,
             vec![Stroke::Ellipse {
@@ -2068,7 +2078,7 @@ mod tests {
     #[test]
     fn broken_file_reads_as_none_not_builtin() {
         let dir = temp_dir("broken");
-        std::fs::write(shape_file(&dir, "Circle"), "not json").expect("写坏文件");
+        std::fs::write(shape_file(&dir, "Circle"), "not json").expect("write broken file");
         assert!(load_shape(&dir, "Circle").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2076,13 +2086,15 @@ mod tests {
     #[test]
     fn library_names_merge_files_and_builtins() {
         let dir = temp_dir("names");
-        save_shape(&dir, "Spider", &[poly(vec![[0.0, 0.0], [1.0, 0.0]])]).expect("写库文件");
-        save_shape(&dir, "circle", &[poly(vec![[0.0, 0.0], [1.0, 1.0]])]).expect("写同名文件");
+        save_shape(&dir, "Spider", &[poly(vec![[0.0, 0.0], [1.0, 0.0]])])
+            .expect("write library file");
+        save_shape(&dir, "circle", &[poly(vec![[0.0, 0.0], [1.0, 1.0]])])
+            .expect("write same-named file");
         let names = library_names(&dir);
         assert!(names.contains(&"Spider".to_string()));
         assert!(
             !names.contains(&"Circle".to_string()),
-            "文件覆盖内置：只留 circle"
+            "the file overrides the built-in: only circle is kept"
         );
         assert!(names.contains(&"Square".to_string()));
         assert!(names.contains(&"Triangle".to_string()));
@@ -2099,8 +2111,8 @@ mod tests {
     fn template_prefers_saved_shape_and_normalizes() {
         let dir = temp_dir("template");
         let raw = vec![poly(vec![[2.0, 1.0], [4.0, 1.0], [4.0, 3.0], [2.0, 3.0]])];
-        save_shape(&dir, "Wide", &raw).expect("写库文件");
-        let (strokes, ratio) = library_template(&dir, "Wide").expect("模板");
+        save_shape(&dir, "Wide", &raw).expect("write library file");
+        let (strokes, ratio) = library_template(&dir, "Wide").expect("template");
         match &strokes[0] {
             Stroke::Poly { pts, .. } => {
                 let us: Vec<f64> = pts.iter().map(|p| p[0]).collect();
@@ -2110,18 +2122,18 @@ mod tests {
                 assert!((vs.iter().copied().fold(f64::INFINITY, f64::min)).abs() < 1e-9);
                 assert!((vs.iter().copied().fold(f64::NEG_INFINITY, f64::max) - 1.0).abs() < 1e-9);
             }
-            other => panic!("期望 poly，得到 {other:?}"),
+            other => panic!("expected poly, got {other:?}"),
         }
         assert!((ratio - 1.0).abs() < 1e-9);
-        // 文件不在：退回内置
-        let (tri, _) = library_template(&dir, "Triangle").expect("内置三角");
+        // File missing: fall back to the built-in
+        let (tri, _) = library_template(&dir, "Triangle").expect("built-in triangle");
         assert_eq!(tri.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn saved_shape_flows_into_the_roll_custom_tool() {
-        // 主链路：画一个形状 -> Save -> 作为卷帘 Custom 模板 -> 能出音符
+        // Main flow: draw a shape -> Save -> use as a roll Custom template -> produces notes
         let dir = temp_dir("flow");
         let square = vec![poly(vec![
             [0.0, 0.0],
@@ -2130,8 +2142,8 @@ mod tests {
             [0.0, 1.0],
             [0.0, 0.0],
         ])];
-        save_shape(&dir, "Box", &square).expect("写库文件");
-        let (strokes, aspect) = crate::roll_live::builtin_template(&dir, "Box").expect("模板");
+        save_shape(&dir, "Box", &square).expect("write library file");
+        let (strokes, aspect) = crate::roll_live::builtin_template(&dir, "Box").expect("template");
         assert!((aspect - 1.0).abs() < 1e-9);
         let shape = crate::roll_live::new_custom_parts(
             &Shape::default(),
@@ -2145,7 +2157,7 @@ mod tests {
         assert_eq!(shape.name, "Box");
         assert!(
             !custom::custom_notes(&shape, 960.0).is_empty(),
-            "放在卷帘上要出音符"
+            "it must produce notes when placed on the roll"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2162,13 +2174,13 @@ mod tests {
         let (norm, ratio) = normalize_strokes(&raw);
         let pts = match &norm[0] {
             Stroke::Poly { pts, .. } => pts.clone(),
-            other => panic!("期望 poly，得到 {other:?}"),
+            other => panic!("expected poly, got {other:?}"),
         };
         assert!((pts[2][0] - 1.0).abs() < 1e-9);
         assert!((pts[2][1] - 1.0).abs() < 1e-9);
         assert!((ratio.unwrap_or(0.0) - 0.5).abs() < 1e-9);
 
-        // refit：笔画没填满时把框重新套上（框动、画不动）
+        // refit: re-fits the frame when the strokes do not fill it (the frame moves, the drawing doesn't)
         let mut sh = Shape {
             kind: Kind::Custom,
             strokes: vec![poly(vec![[0.25, 0.25], [0.75, 0.75]])],
@@ -2181,7 +2193,7 @@ mod tests {
                 assert!((pts[0][0]).abs() < 1e-9 && (pts[0][1]).abs() < 1e-9);
                 assert!((pts[1][0] - 1.0).abs() < 1e-9 && (pts[1][1] - 1.0).abs() < 1e-9);
             }
-            other => panic!("期望 poly，得到 {other:?}"),
+            other => panic!("expected poly, got {other:?}"),
         }
         assert!((sh.pts[0][0] - 0.25).abs() < 1e-9);
         assert!((sh.pts[0][1] - 0.25).abs() < 1e-9);

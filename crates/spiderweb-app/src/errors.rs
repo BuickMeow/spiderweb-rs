@@ -1,5 +1,6 @@
-//! 错误日志（原版 files/errors.py）：panic 详情写到程序目录的 errors.log（超过 1MB 先改名为
-//! errors-old.log），并在状态栏提示一次。App::new 里用组合原 hook 的方式安装 panic hook。
+//! Error log (upstream files/errors.py): panic details are written to errors.log in the
+//! program directory (renamed to errors-old.log first if over 1MB), and a status-bar notice
+//! is shown once. App::new installs the panic hook by chaining the previous hook.
 
 use std::fs;
 use std::io::Write;
@@ -9,24 +10,25 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 日志文件名（程序目录下）。
+/// Log file name (in the program directory).
 pub const LOG: &str = "errors.log";
-/// 日志太大时改名到这里（原版 errors-old.log）。
+/// Rename target when the log is too big (upstream errors-old.log).
 pub const OLD_LOG: &str = "errors-old.log";
-/// 超过这个字节数就先改名（原版 MAX_LOG）。
+/// Rename first once the log exceeds this many bytes (upstream MAX_LOG).
 pub const MAX_LOG: u64 = 1_000_000;
 
-/// 已安装 hook，避免重复装（原版全局 install）。
+/// Hook already installed flag, to avoid installing twice (upstream global install).
 static INSTALLED: AtomicBool = AtomicBool::new(false);
-/// 最近一次出错给状态栏的消息，等界面取走。
+/// Status-bar message for the latest error, waiting to be taken by the UI.
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
 
-/// 日志路径：程序目录 + errors.log。
+/// Log path: program directory + errors.log.
 pub fn log_path(dir: &Path) -> PathBuf {
     dir.join(LOG)
 }
 
-/// 安装 panic hook：先写日志、记下状态栏消息，再交给原来的 hook。重复调用只装一次。
+/// Installs the panic hook: write the log and stash the status-bar message first, then hand
+/// over to the previous hook. Repeated calls install only once.
 pub fn install(dir: PathBuf) {
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
@@ -41,12 +43,12 @@ pub fn install(dir: PathBuf) {
     }));
 }
 
-/// 取走待显示的错误消息（每次只提示一次）。
+/// Takes the pending error message (shown only once).
 pub fn take_pending() -> Option<String> {
     PENDING.lock().ok().and_then(|mut p| p.take())
 }
 
-/// panic 信息写进日志，返回要显示在状态栏的话。
+/// Writes the panic info to the log and returns the text to show in the status bar.
 pub fn record_panic(dir: &Path, info: &PanicHookInfo<'_>) -> String {
     let head = format!(
         "==== {}   Spiderweb {}   {}   (panic)",
@@ -63,7 +65,7 @@ pub fn record_panic(dir: &Path, info: &PanicHookInfo<'_>) -> String {
     }
 }
 
-/// panic 的线程、位置与消息（原版 traceback 的简版）。
+/// Thread, location and message of a panic (a simplified version of upstream traceback).
 pub fn panic_text(info: &PanicHookInfo<'_>) -> String {
     let msg = info
         .payload()
@@ -83,7 +85,7 @@ pub fn panic_text(info: &PanicHookInfo<'_>) -> String {
     )
 }
 
-/// 往 errors.log 追一条；太大先改名成 errors-old.log。true = 写成功。
+/// Appends a record to errors.log; renames to errors-old.log first if too big. true = write succeeded.
 pub fn append(dir: &Path, head: &str, text: &str) -> bool {
     let path = log_path(dir);
     if fs::metadata(&path)
@@ -98,7 +100,7 @@ pub fn append(dir: &Path, head: &str, text: &str) -> bool {
     }
 }
 
-/// 现在的时间（UTC，`YYYY-MM-DD HH:MM:SS`）。
+/// Current time (UTC, `YYYY-MM-DD HH:MM:SS`).
 pub fn timestamp() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -107,7 +109,7 @@ pub fn timestamp() -> String {
     format_timestamp(secs)
 }
 
-/// UNIX 秒 -> UTC 时间文本。
+/// UNIX seconds -> UTC time text.
 pub fn format_timestamp(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -120,7 +122,7 @@ pub fn format_timestamp(secs: u64) -> String {
     )
 }
 
-/// 1970-01-01 起的天数 -> (年, 月, 日)（Howard Hinnant 的 civil_from_days）。
+/// Days since 1970-01-01 -> (year, month, day) (Howard Hinnant's civil_from_days).
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -149,17 +151,17 @@ mod tests {
     fn log_is_appended_and_rotated() {
         let tmp = crate::test_support::TempDir::new("errors");
         assert_eq!(log_path(tmp.path()), tmp.path().join(LOG));
-        assert!(append(tmp.path(), "==== head", "第一行\n第二行"));
-        let text = fs::read_to_string(log_path(tmp.path())).expect("读 errors.log");
+        assert!(append(tmp.path(), "==== head", "first line\nsecond line"));
+        let text = fs::read_to_string(log_path(tmp.path())).expect("read errors.log");
         assert!(text.contains("==== head"));
-        assert!(text.contains("第一行\n第二行"));
+        assert!(text.contains("first line\nsecond line"));
 
-        fs::write(log_path(tmp.path()), vec![b'x'; (MAX_LOG + 1) as usize]).expect("写大日志");
+        fs::write(log_path(tmp.path()), vec![b'x'; (MAX_LOG + 1) as usize]).expect("write big log");
         assert!(append(tmp.path(), "==== head2", "boom"));
         assert!(tmp.path().join(OLD_LOG).exists());
-        let old = fs::read_to_string(tmp.path().join(OLD_LOG)).expect("读 errors-old.log");
+        let old = fs::read_to_string(tmp.path().join(OLD_LOG)).expect("read errors-old.log");
         assert_eq!(old.len(), (MAX_LOG + 1) as usize);
-        let text = fs::read_to_string(log_path(tmp.path())).expect("读新 errors.log");
+        let text = fs::read_to_string(log_path(tmp.path())).expect("read new errors.log");
         assert!(text.contains("boom") && text.contains("head2"));
     }
 }

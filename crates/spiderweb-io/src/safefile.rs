@@ -1,8 +1,10 @@
-//! 保存文件而不会留下写了一半的文件（Python `files/safefile.py` 的移植）。
+//! Save files without leaving a half-written file (port of Python `files/safefile.py`).
 //!
-//! 新内容先写到旁边的临时文件 `path + ".tmp"`，完整写完（flush + fsync）后才替换正式文件。
-//! 保存中崩溃、断电或出错时，旧文件保持原样。替换被占用时重试 20 次（每次间隔 50ms，例如
-//! 杀毒软件短暂占着旧文件），仍不行就直接覆盖写，并清掉临时文件。
+//! New content is first written to a sibling temp file `path + ".tmp"` and only replaces the
+//! real file after it is fully written (flush + fsync). If saving crashes, loses power or
+//! errors out, the old file stays untouched. If the replace is blocked, retry 20 times (50ms
+//! apart, e.g. an antivirus briefly holding the old file); if it still fails, write directly
+//! over the file and remove the temp file.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -10,14 +12,14 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-/// 临时文件名（Python 的 `path + ".tmp"`）。
+/// Temp file name (Python's `path + ".tmp"`).
 pub fn tmp_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".tmp");
     PathBuf::from(name)
 }
 
-/// 原子地写字节；行为见模块说明。
+/// Atomically write bytes; see the module docs for the behaviour.
 pub fn write_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = tmp_path(path);
     {
@@ -43,7 +45,7 @@ pub fn write_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     direct
 }
 
-/// 原子地写 UTF-8 文本（Python 的 `write_text`）。
+/// Atomically write UTF-8 text (Python's `write_text`).
 pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
     write_bytes(path, text.as_bytes())
 }

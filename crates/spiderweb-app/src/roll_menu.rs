@@ -1,7 +1,9 @@
-//! 右键菜单（原版 roll/roll_menu.py）：命中形状时弹出编辑菜单；双击右键切工具。
+//! Context menu (upstream roll/roll_menu.py): right-clicking a shape opens its edit menu;
+//! double right-click switches tools.
 //!
-//! 菜单项先算成 [`MenuEntry`]（纯逻辑、可单测），弹出层里点中的命令记成 [`MenuAction`]，
-//! 等弹出层关掉后再改 App，避免在菜单闭包里同时借用。
+//! Menu entries are computed first as [`MenuEntry`] (pure logic, unit-testable), the command
+//! clicked in the popup is recorded as a [`MenuAction`], and App is only modified after the
+//! popup closes, avoiding simultaneous borrows inside the menu closure.
 
 use eframe::egui;
 use egui::Pos2;
@@ -10,7 +12,7 @@ use spiderweb_core::shape::{Kind, Stroke};
 
 use crate::app::App;
 
-/// 菜单里能做的事（原版各菜单项；没移植的项以禁用显示）。
+/// Things the menu can do (upstream menu items; items not yet ported show as disabled).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     AddPolyPoint,
@@ -33,7 +35,7 @@ pub enum MenuAction {
     TurnRight,
 }
 
-/// 一个菜单项：分隔线或可点的命令。
+/// A menu entry: a separator or a clickable command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MenuEntry {
     Separator,
@@ -44,28 +46,28 @@ pub enum MenuEntry {
     },
 }
 
-/// 打开着的菜单（原版 show_menu 的现场）：命中的形状、右键位置（卷帘局部坐标）与 Shift。
+/// Open menu (the live state of upstream show_menu): hit shape, right-click position (roll-local coordinates) and Shift.
 #[derive(Clone, Debug)]
 pub struct MenuState {
     pub target: usize,
     pub pos: Pos2,
     pub shift: bool,
-    /// 刚打开：下一帧在 egui 里把 Popup 打开
+    /// Just opened: open the Popup in egui on the next frame
     pub pending: bool,
 }
 
-/// 菜单项要看的东西（从 App 里摘出来，方便单测）。
+/// What menu entries depend on (extracted from App for easy unit testing).
 #[derive(Clone, Debug)]
 pub struct MenuTarget {
     pub kind: Kind,
     pub has_text: bool,
     pub has_notes: bool,
-    /// 选中数量（Delete shape / N shapes 的措辞）
+    /// Number of selected shapes (wording of Delete shape / N shapes)
     pub count: usize,
     pub clipboard: bool,
-    /// 被拾取的笔画（自定义形状）
+    /// The picked stroke (custom shapes)
     pub picked_stroke: Option<usize>,
-    /// 被拾取的笔画正好是曲线（可以加锚点）
+    /// The picked stroke is a curve (an anchor can be added)
     pub picked_curve: Option<usize>,
     /// The hit shape is a line kind (it can be cut in two here)
     pub line_kind: bool,
@@ -89,7 +91,7 @@ fn item(label: impl Into<String>, action: MenuAction, enabled: bool) -> MenuEntr
     }
 }
 
-/// 命中形状 i 时菜单长什么样（原版 show_menu 的菜单项，顺序一致）。
+/// What the menu looks like when shape i is hit (upstream show_menu's items, same order).
 pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
     let Some(sh) = app.shapes.get(i) else {
         return Vec::new();
@@ -113,7 +115,7 @@ pub fn menu_entries(app: &App, i: usize) -> Vec<MenuEntry> {
     })
 }
 
-/// 纯逻辑版的 [`menu_entries`]。
+/// Pure-logic version of [`menu_entries`].
 pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
     let one = t.count == 1;
     let mut out: Vec<MenuEntry> = Vec::new();
@@ -255,7 +257,7 @@ pub fn menu_entries_for(t: &MenuTarget) -> Vec<MenuEntry> {
     out
 }
 
-/// 右键命中形状 i：选中它（还没选中的话）、自定义形状先拾取鼠标下的笔画，然后开菜单。
+/// Right-click hit on shape i: select it (if not selected), pick the stroke under the mouse for custom shapes, then open the menu.
 pub fn open_menu(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     if app.shapes.get(i).is_none() {
         return;
@@ -278,12 +280,12 @@ pub fn open_menu(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     });
 }
 
-/// 有弹出层（右键菜单 / 下拉框）开着：卷帘输入让路（原版 tk 菜单会抓走事件）。
+/// A popup (context menu / dropdown) is open: the roll's input steps aside (upstream tk menus grab events).
 pub fn is_popup_open(ctx: &egui::Context) -> bool {
     egui::Popup::is_any_open(ctx)
 }
 
-/// 每帧画菜单（放在卷帘绘制之后）。菜单外点击 / Esc 由 egui 的 Popup 关掉。
+/// Draws the menu each frame (after the roll is painted). Clicks outside the menu / Esc close it via egui's Popup.
 pub fn menu_ui(app: &mut App, ui: &egui::Ui) {
     let Some(state) = app.shape_menu.clone() else {
         return;
@@ -301,7 +303,7 @@ pub fn menu_ui(app: &mut App, ui: &egui::Ui) {
         return;
     }
     let entries = menu_entries(app, state.target);
-    // 右键位置是卷帘局部坐标：换成屏幕坐标挂 Popup
+    // The right-click position is roll-local: convert to screen coordinates to anchor the Popup
     let at = state.pos + ui.max_rect().min.to_vec2();
     let mut action: Option<MenuAction> = None;
     let layer = egui::LayerId::new(egui::Order::Foreground, id);
@@ -360,7 +362,7 @@ fn apply_action(app: &mut App, action: MenuAction, i: usize, pos: Pos2, shift: b
     }
 }
 
-/// "Add anchor here"：曲线形状加在曲线上，自定义形状加在被拾取的曲线笔画上。
+/// "Add anchor here": for curve shapes add it on the curve; for custom shapes add it on the picked curve stroke.
 fn add_anchor(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     let kind = app.shapes.get(i).map(|sh| sh.kind);
     let pt = crate::roll::event_pt(app, pos, true, shift);
@@ -376,7 +378,7 @@ fn add_anchor(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     }
 }
 
-/// "Add point here"：在折线上加一个吸附好的点，放在最不拉长折线的地方（原版 insert_poly_point）。
+/// "Add point here": adds a snapped point to the polyline at the spot that stretches it least (upstream insert_poly_point).
 fn add_poly_point(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     let pt = crate::roll::event_pt(app, pos, true, shift);
     let view = &app.view;
@@ -400,7 +402,7 @@ fn add_poly_point(app: &mut App, i: usize, pos: Pos2, shift: bool) {
     app.shapes_changed();
 }
 
-/// 折线里插入 q 后多出来的屏幕长度（原版 extra_length）。
+/// Extra screen length caused by inserting q into the polyline (upstream extra_length).
 fn poly_extra(screen: &[[f32; 2]], i: usize, q: [f32; 2]) -> f64 {
     if i == 0 {
         return screen.first().map(|a| seg_len(*a, q)).unwrap_or(0.0);
@@ -412,7 +414,7 @@ fn poly_extra(screen: &[[f32; 2]], i: usize, q: [f32; 2]) -> f64 {
     seg_len(a, q) + seg_len(q, b) - seg_len(a, b)
 }
 
-/// 加点后折线最短的位置（屏幕坐标；原版 insert_poly_point 取 extra_length 最小）。
+/// Position that keeps the polyline shortest after adding the point (screen coordinates; upstream insert_poly_point takes the minimum extra_length).
 pub fn poly_insert_index(screen: &[[f32; 2]], q: [f32; 2]) -> usize {
     (0..=screen.len())
         .min_by(|&a, &b| poly_extra(screen, a, q).total_cmp(&poly_extra(screen, b, q)))
@@ -470,12 +472,12 @@ mod tests {
             MenuAction::TurnLeft,
             MenuAction::TurnRight,
         ] {
-            assert!(enabled(&got, a), "缺少可用项：{a:?}");
+            assert!(enabled(&got, a), "missing enabled item: {a:?}");
         }
-        // 剪贴板空：粘贴项在但禁用
+        // Clipboard empty: the paste item is present but disabled
         assert!(find(&got, MenuAction::Paste).is_some());
         assert!(!enabled(&got, MenuAction::Paste));
-        // 直线没有加点 / 加锚点 / 删笔画
+        // A line has no add point / add anchor / delete stroke
         assert!(find(&got, MenuAction::AddPolyPoint).is_none());
         assert!(find(&got, MenuAction::AddCurveAnchor).is_none());
     }
@@ -521,10 +523,10 @@ mod tests {
         let got = menu_entries_for(&t);
         assert!(enabled(&got, MenuAction::AddCurveAnchor));
         assert!(enabled(&got, MenuAction::DeleteStroke));
-        // 图形库没移植：项在但禁用
+        // Shape library not ported: the item is present but disabled
         assert!(find(&got, MenuAction::SaveToLibrary).is_some());
         assert!(!enabled(&got, MenuAction::SaveToLibrary));
-        // 拾取的是普通折线：不能加锚点，但能删
+        // A plain polyline was picked: no anchor can be added, but it can be deleted
         t.picked_curve = None;
         let got = menu_entries_for(&t);
         assert!(find(&got, MenuAction::AddCurveAnchor).is_none());
@@ -566,14 +568,14 @@ mod tests {
 
     #[test]
     fn poly_point_goes_where_it_stretches_least() {
-        // 横着一排点 (0,0)-(10,0)-(20,0)：点在 (15,1) 最近的是最后两点之间（下标 2）
+        // A row of points (0,0)-(10,0)-(20,0): the point (15,1) is closest between the last two points (index 2)
         let screen = [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]];
         assert_eq!(poly_insert_index(&screen, [15.0, 1.0]), 2);
-        // 点在开头左边：插在最前
+        // The point is left of the start: insert at the very front
         assert_eq!(poly_insert_index(&screen, [-5.0, 0.0]), 0);
-        // 点在末尾右边：插在最后
+        // The point is right of the end: insert at the very back
         assert_eq!(poly_insert_index(&screen, [30.0, 0.0]), 3);
-        // 空折线：只有 0
+        // Empty polyline: only 0
         assert_eq!(poly_insert_index(&[], [1.0, 1.0]), 0);
     }
 }

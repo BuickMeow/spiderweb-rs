@@ -1,4 +1,4 @@
-"""paths.py 的对照向量。"""
+"""Differential vectors for paths.py."""
 
 import math
 import random
@@ -59,7 +59,7 @@ def gen():
     add("ends_forward", [[[100.0, 60.0], [50.0, 62.0], [3.0, 64.0]]], P.ends_forward(np.array([[100.0, 60.0], [50.0, 62.0], [3.0, 64.0]])))
     add("ends_forward", [[[0.0, 60.0], [0.0, 64.0]]], P.ends_forward(np.array([[0.0, 60.0], [0.0, 64.0]])))
 
-    # line_notes / path_notes：手工用例 + 随机
+    # line_notes / path_notes: hand-picked cases + random ones
     hand_paths = [
         [[0.0, 60.0], [100.0, 64.0]],
         [[0.0, 64.0], [100.0, 60.0]],
@@ -85,7 +85,7 @@ def gen():
         pts = [[t, p]]
         for _ in range(n - 1):
             if rnd.random() < 0.25:
-                t += 0.0  # 竖直
+                t += 0.0  # vertical
             else:
                 t += rnd.uniform(1, 60) * (1 if rnd.random() < 0.8 else -1)
             p += rnd.uniform(-6, 6)
@@ -95,13 +95,13 @@ def gen():
         add("path_notes", [pts, True], P.path_notes(np.array(pts), True))
         add("path_notes", [pts, False], P.path_notes(np.array(pts), False))
 
-    # parts_notes 直接调用
+    # call parts_notes directly
     r = [[0.0, 60.0], [10.0, 60.0], [20.0, 64.0], [30.0, 64.0], [40.0, 62.0]]
     notes, per = P.parts_notes(np.array(r), np.array([0, 2]), np.array([False, True]), True)
     cases.append({"fn": "parts_notes", "args": [r, [0, 2], [False, True], True],
                   "out": [notes.tolist(), per.tolist()]})
 
-    # dot_segment_notes：折线
+    # dot_segment_notes: polyline
     add("dot_segment_notes", [[[0.0, 60.0], [100.0, 64.0], [50.0, 68.0]]],
         P.dot_segment_notes(np.array([[0.0, 60.0], [100.0, 64.0], [50.0, 68.0]])))
     add("dot_segment_notes", [[[0.0, 60.0], [40.0, 62.0], [80.0, 62.0], [120.0, 65.0]]],

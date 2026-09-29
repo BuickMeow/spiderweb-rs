@@ -1,11 +1,12 @@
-//! i18n 的守卫测试（手写扫描，不引 regex）：
-//! 1. `src/**.rs` 里 `t!("...")` 用到的字面量键都要在 `locales/en.yml` 里；
-//! 2. 非注释、非测试代码的字符串字面量里不再有中文字符（注释 / 测试代码例外）。
+//! Guard tests for i18n (hand-written scanning, no regex):
+//! 1. Literal keys used by `t!("...")` in `src/**.rs` must exist in `locales/en.yml`;
+//! 2. String literals in non-comment, non-test code no longer contain Chinese
+//!    characters (comments / test code are exempt).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// 遍历目录下的 .rs 文件（`src/**.rs`）。
+/// Walks the .rs files under a directory (`src/**.rs`).
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -30,7 +31,7 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// 去掉注释（字符串 / 字符字面量里的 `//`、`/*` 不算注释）。
+/// Strips comments (`//` and `/*` inside string / char literals are not comments).
 fn strip_comments(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
@@ -75,7 +76,7 @@ fn strip_comments(src: &str) -> String {
     out
 }
 
-/// 把从 `start`（一个 `"`）开始的字符串字面量原样抄进 `out`，返回结束后的下标。
+/// Copies the string literal starting at `start` (a `"`) verbatim into `out` and returns the index after its end.
 fn copy_literal(src: &str, start: usize, out: &mut String) -> usize {
     let bytes = src.as_bytes();
     let mut i = start;
@@ -94,7 +95,7 @@ fn copy_literal(src: &str, start: usize, out: &mut String) -> usize {
     i
 }
 
-/// 找出源码里所有 `t!("key")` / `rust_i18n::t!("key")` 的字面量键。
+/// Finds every literal key used by `t!("key")` / `rust_i18n::t!("key")` in the source.
 fn key_literals(src: &str) -> Vec<String> {
     let src = strip_comments(src);
     let bytes = src.as_bytes();
@@ -129,7 +130,7 @@ fn key_literals(src: &str) -> Vec<String> {
     out
 }
 
-/// `locales/en.yml` 里的键（只认 `键:` 行；嵌套按缩进拼成 `a.b.c`）。
+/// Keys in `locales/en.yml` (only `key:` lines; nesting is joined by indentation into `a.b.c`).
 fn yaml_keys(text: &str) -> BTreeSet<String> {
     let mut stack: Vec<(usize, String)> = Vec::new();
     let mut out = BTreeSet::new();
@@ -162,7 +163,7 @@ fn yaml_keys(text: &str) -> BTreeSet<String> {
     out
 }
 
-/// 测试代码（`#[cfg(test)] mod …` 起的）从扫描里去掉。
+/// Removes test code (starting at `#[cfg(test)] mod …`) from the scan.
 fn without_test_modules(src: &str) -> &str {
     let mut from = 0;
     while let Some(at) = src[from..].find("#[cfg(test)]") {
@@ -180,7 +181,7 @@ fn is_han(c: char) -> bool {
     ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3400}'..='\u{4dbf}').contains(&c)
 }
 
-/// 字符串字面量（跳过字符字面量 / 注释）里出现的汉字：`(第几行, 字面量)`。
+/// Han characters appearing in string literals (char literals / comments skipped): `(line number, literal)`.
 fn han_string_literals(src: &str) -> Vec<(usize, String)> {
     let src = without_test_modules(src);
     let bytes = src.as_bytes();
@@ -234,7 +235,7 @@ fn han_string_literals(src: &str) -> Vec<(usize, String)> {
             continue;
         }
         if c == '\'' {
-            // 字符字面量：整段跳过；生命周期 / 单引号直接跳过
+            // Char literal: skip it whole; lifetimes / lone single quotes are skipped too
             let rest = &src[i + 1..];
             if let Some(end) = char_literal_end(rest) {
                 i += 1 + end;
@@ -246,7 +247,7 @@ fn han_string_literals(src: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// `'` 后面到配对的 `'` 的距离（含收尾的 `'`）；不是字符字面量返回 None。
+/// Distance from after `'` to the matching `'` (inclusive); returns None if not a char literal.
 fn char_literal_end(rest: &str) -> Option<usize> {
     let mut it = rest.char_indices();
     let (_, first) = it.next()?;
@@ -266,12 +267,12 @@ fn skip_file(name: &str) -> bool {
 #[test]
 fn every_t_key_exists_in_en_yml() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let yml = std::fs::read_to_string(root.join("locales/en.yml")).expect("读 locales/en.yml");
+    let yml = std::fs::read_to_string(root.join("locales/en.yml")).expect("read locales/en.yml");
     let keys = yaml_keys(&yml);
     let mut missing: Vec<String> = Vec::new();
     let mut used = BTreeSet::new();
     for file in rust_files(&root.join("src")) {
-        let src = std::fs::read_to_string(&file).expect("读源码");
+        let src = std::fs::read_to_string(&file).expect("read source");
         for key in key_literals(&src) {
             used.insert(key.clone());
             if !keys.contains(&key) {
@@ -279,10 +280,10 @@ fn every_t_key_exists_in_en_yml() {
             }
         }
     }
-    assert!(!used.is_empty(), "源码里一个 t! 键都没有");
+    assert!(!used.is_empty(), "no t! key found in the source");
     assert!(
         missing.is_empty(),
-        "en.yml 缺少这些键：\n{}",
+        "en.yml is missing these keys:\n{}",
         missing.join("\n")
     );
 }
@@ -296,14 +297,14 @@ fn no_han_in_production_string_literals() {
         if skip_file(name) {
             continue;
         }
-        let src = std::fs::read_to_string(&file).expect("读源码");
+        let src = std::fs::read_to_string(&file).expect("read source");
         for (line, text) in han_string_literals(&src) {
             bad.push(format!("{}:{line}: \"{text}\"", file.display()));
         }
     }
     assert!(
         bad.is_empty(),
-        "非测试代码的字符串字面量里还有中文：\n{}",
+        "production string literals still contain Chinese:\n{}",
         bad.join("\n")
     );
 }

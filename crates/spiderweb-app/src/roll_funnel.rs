@@ -1,6 +1,7 @@
-//! 漏斗工具与编辑（原版 roll/roll_funnel.py，曲线形状在 panel_funnel / roll_menu）：
-//! 两次点击画线 + 墙、在线上加起点、靠近曲线加锚点、拖曲线把手 / 起点、右键删点、
-//! 高亮线与联动曲线（主 part 紫、联动的青）。
+//! Funnel tool and editing (upstream roll/roll_funnel.py; curve shapes are in panel_funnel /
+//! roll_menu): two clicks draw a line + wall, add a start on a line, add an anchor near a
+//! curve, drag curve handles / starts, right-click deletes points, and highlight lines and
+//! linked curves (main part purple, linked ones cyan).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,23 +18,23 @@ use spiderweb_io::project::FunnelDefaults;
 use crate::app::{App, PartId};
 use crate::roll::{Drag, event_pt};
 
-/// 高亮的线 / 点中的曲线（原版 roll_draw.PART_COLOR）。
+/// Highlighted lines / the picked curve (upstream roll_draw.PART_COLOR).
 const PART_COLOR: Color32 = Color32::from_rgb(0x7a, 0x1f, 0xe0);
-/// 与点中的曲线联动的曲线（原版 roll_draw.TWIN_COLOR）。
+/// Curves linked to the picked curve (upstream roll_draw.TWIN_COLOR).
 const TWIN_COLOR: Color32 = Color32::from_rgb(0x00, 0xa3, 0x9a);
-/// 把手线与手柄的颜色（原版 HANDLE_COLOR）。
+/// Color of handle lines and handles (upstream HANDLE_COLOR).
 const HANDLE_COLOR: Color32 = Color32::from_rgb(0x00, 0x50, 0xd0);
-/// 普通点的方块描边（原版 #c00000）。
+/// Outline of ordinary point squares (upstream #c00000).
 const POINT_COLOR: Color32 = Color32::from_rgb(0xc0, 0x00, 0x00);
 
-// ---------------------------------------------------------------- 纯几何
+// ---------------------------------------------------------------- pure geometry
 
-/// 屏幕方向：x 沿 beat、y 沿 pitch（原版 FunnelEditing.screen_dir）。
+/// Screen direction: x along beat, y along pitch (upstream FunnelEditing.screen_dir).
 fn screen_dir(sx: f64, sy: f64, a: Pt, b: Pt) -> [f64; 2] {
     [(b[0] - a[0]) * sx, (a[1] - b[1]) * sy]
 }
 
-/// 点到无限长直线（屏幕）的距离（原版 wall_dist）。
+/// Distance from a point to an infinite line (on screen) (upstream wall_dist).
 fn line_dist(dir: [f64; 2], origin: Pt, pt: Pt, sx: f64, sy: f64) -> f64 {
     let p = screen_dir(sx, sy, origin, pt);
     let len = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
@@ -44,7 +45,7 @@ fn line_dist(dir: [f64; 2], origin: Pt, pt: Pt, sx: f64, sy: f64) -> f64 {
     }
 }
 
-/// 点到屏幕上线段的距离（原版 roll_funnel.seg_dist）。
+/// Distance from a point to a screen segment (upstream roll_funnel.seg_dist).
 fn seg_dist(x: f32, y: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
     let (ax, ay) = a;
     let (bx, by) = b;
@@ -58,9 +59,10 @@ fn seg_dist(x: f32, y: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
     ((x - ax - u * dx).powi(2) + (y - ay - u * dy).powi(2)).sqrt()
 }
 
-/// 画下的 [线起点, 线终点, 墙1, 墙2] 整理成 [线起, 线终, 墙1, 墙2]：先画的不算数，
-/// 更立的那条是墙，线的起点在离墙远的一头；两条方向太近（小于约 12°）返回 None
-/// （原版 FunnelEditing.arrange_funnel）。
+/// Turns the drawn [line start, line end, wall1, wall2] into [line start, line end, wall1, wall2]:
+/// what was drawn first does not count, the more vertical one is the wall, and the line starts
+/// at the end farther from the wall; None when the two directions are too close (less than
+/// about 12°) (upstream FunnelEditing.arrange_funnel).
 fn arrange_funnel(sx: f64, sy: f64, pts: &[Pt]) -> Option<[Pt; 4]> {
     let p0 = *pts.first()?;
     let p1 = *pts.get(1)?;
@@ -85,7 +87,7 @@ fn arrange_funnel(sx: f64, sy: f64, pts: &[Pt]) -> Option<[Pt; 4]> {
     Some([line[0], line[1], wall[0], wall[1]])
 }
 
-/// 两条无限长直线（beat, pitch）的交点（原版 FunnelEditing.crossing）。
+/// Intersection of two infinite lines (beat, pitch) (upstream FunnelEditing.crossing).
 fn crossing(line: [Pt; 2], wall: [Pt; 2]) -> Option<Pt> {
     let d1 = [line[1][0] - line[0][0], line[1][1] - line[0][1]];
     let d2 = [wall[1][0] - wall[0][0], wall[1][1] - wall[0][1]];
@@ -97,15 +99,15 @@ fn crossing(line: [Pt; 2], wall: [Pt; 2]) -> Option<Pt> {
     Some([line[0][0] + t * d1[0], line[0][1] + t * d1[1]])
 }
 
-/// 拖墙端 `pt` 时，Ctrl 让墙另一端关于线与墙的交点对称（原版拖 2 / 3 点的做法）。
+/// While dragging wall end `pt`, Ctrl mirrors the other wall end about the line-wall intersection (what upstream does when dragging points 2 / 3).
 fn wall_mirror(line: [Pt; 2], fixed: Pt, pt: Pt) -> Option<Pt> {
     let mid = crossing(line, [fixed, pt])?;
     Some([2.0 * mid[0] - pt[0], 2.0 * mid[1] - pt[1]])
 }
 
-// ---------------------------------------------------------------- 设置转换
+// ---------------------------------------------------------------- settings conversion
 
-/// 形状的漏斗设置。
+/// The shape's funnel settings.
 pub(crate) fn settings_of_shape(sh: &Shape) -> FunnelSettings {
     FunnelSettings {
         fill: sh.funnel_fill,
@@ -118,7 +120,7 @@ pub(crate) fn settings_of_shape(sh: &Shape) -> FunnelSettings {
     }
 }
 
-/// 新漏斗的默认设置。
+/// Default settings for new funnels.
 pub(crate) fn settings_of_defaults(d: &FunnelDefaults) -> FunnelSettings {
     FunnelSettings {
         fill: d.fill,
@@ -131,7 +133,7 @@ pub(crate) fn settings_of_defaults(d: &FunnelDefaults) -> FunnelSettings {
     }
 }
 
-/// 把漏斗设置写进形状。
+/// Writes funnel settings into a shape.
 pub(crate) fn apply_settings(sh: &mut Shape, s: FunnelSettings) {
     sh.funnel_fill = s.fill;
     sh.gate0 = s.gate0;
@@ -142,16 +144,16 @@ pub(crate) fn apply_settings(sh: &mut Shape, s: FunnelSettings) {
     sh.wall = s.wall;
 }
 
-/// 新漏斗的默认：形状默认值 + 漏斗面板设置（原版 new_defaults("funnel")）。
+/// Defaults for a new funnel: shape defaults + funnel panel settings (upstream new_defaults("funnel")).
 pub(crate) fn new_funnel_defaults(app: &App) -> Shape {
     let mut d = app.defaults.clone();
     apply_settings(&mut d, settings_of_defaults(&app.funnel_defaults));
     d
 }
 
-// ---------------------------------------------------------------- 小工具
+// ---------------------------------------------------------------- helpers
 
-/// 曲线（起点 k 通向墙端 end）的只读引用。
+/// Read-only reference to the curve from start k to wall end end.
 fn curve_ref(sh: &Shape, k: usize, end: usize) -> Option<&FunnelCurve> {
     sh.starts
         .get(k)
@@ -159,7 +161,7 @@ fn curve_ref(sh: &Shape, k: usize, end: usize) -> Option<&FunnelCurve> {
         .and_then(|c| c.as_ref())
 }
 
-/// 曲线（起点 k 通向墙端 end）的可变引用。
+/// Mutable reference to the curve from start k to wall end end.
 fn curve_mut(sh: &mut Shape, k: usize, end: usize) -> Option<&mut FunnelCurve> {
     sh.starts
         .get_mut(k)
@@ -167,7 +169,7 @@ fn curve_mut(sh: &mut Shape, k: usize, end: usize) -> Option<&mut FunnelCurve> {
         .and_then(|c| c.as_mut())
 }
 
-/// 在曲线第 seg 段的 t 处加锚点，形状不变（原版 FunnelEditing.add_anchor）。
+/// Adds an anchor at t on segment seg of the curve, keeping its shape (upstream FunnelEditing.add_anchor).
 fn add_anchor(c: &mut FunnelCurve, seg: usize, t: f64) {
     c.pts = bezier::split(&c.pts, seg, t);
     c.sharp = c
@@ -177,7 +179,7 @@ fn add_anchor(c: &mut FunnelCurve, seg: usize, t: f64) {
         .collect();
 }
 
-/// 去掉曲线的锚点 a（原版 FunnelEditing.drop_anchor）。
+/// Removes anchor a from the curve (upstream FunnelEditing.drop_anchor).
 fn drop_anchor(c: &mut FunnelCurve, a: usize) {
     c.pts = bezier::remove_anchor(&c.pts, a);
     c.sharp = c
@@ -195,8 +197,8 @@ fn drop_anchor(c: &mut FunnelCurve, a: usize) {
         .collect();
 }
 
-/// 联动曲线跟上刚改过的点（原版 sync_linked）：Ctrl 时不动联动曲线；
-/// 点号按 flip 首尾映射，尖角跟着走。
+/// Linked curves follow the just-edited points (upstream sync_linked): with Ctrl they are left
+/// alone; point numbers map end-to-end by flip and sharp corners follow.
 fn sync_linked(
     sh: &mut Shape,
     k: usize,
@@ -222,7 +224,7 @@ fn sync_linked(
             continue;
         };
         if c2.pts.len() != n {
-            continue; // Ctrl 弄成不一样的：别动
+            continue; // made different by Ctrl: leave it alone
         }
         for &j in &changed {
             let jj = if flip { n - 1 - j } else { j };
@@ -236,8 +238,8 @@ fn sync_linked(
     }
 }
 
-/// 线上离鼠标最近的位置 0..1（吸附后投影到线上）；`near` 给定时离线段太远返回 None
-/// （原版 line_at）。
+/// Position 0..1 on the line closest to the mouse (projected onto the line after snapping);
+/// with `near`, None when too far from the segment (upstream line_at).
 fn line_at(
     app: &App,
     sh: &Shape,
@@ -267,7 +269,7 @@ fn line_at(
     Some(along(app.view.x_of(pt[0]), app.view.y_of(pt[1])) as f64)
 }
 
-/// (beat, pitch) 已映射到屏幕的点是否落在漏斗的墙上（原版 near_wall）。
+/// Whether a (beat, pitch) point mapped to the screen lands on the funnel's wall (upstream near_wall).
 fn near_wall(app: &App, sh: &Shape, pt: Pt) -> bool {
     let (Some(w0), Some(w1)) = (sh.pts.get(2), sh.pts.get(3)) else {
         return false;
@@ -280,9 +282,9 @@ fn near_wall(app: &App, sh: &Shape, pt: Pt) -> bool {
     ) <= 8.0
 }
 
-// ---------------------------------------------------------------- 画线画墙
+// ---------------------------------------------------------------- drawing line and wall
 
-/// Funnel 工具按下（原版 on_press）：还没有线就起一条线；线画好（两个点）就接着画墙。
+/// Funnel tool press (upstream on_press): start a line when there is none; once the line is done (two points), continue with the wall.
 pub fn funnel_press(app: &mut App, pos: Pos2, shift: bool) {
     let pt = event_pt(app, pos, true, shift);
     let waiting_wall = app
@@ -305,7 +307,7 @@ pub fn funnel_press(app: &mut App, pos: Pos2, shift: bool) {
     });
 }
 
-/// 拖动正在画的墙：更新第二个墙端；Ctrl 让第一个墙端关于线对称（原版 wall 拖动）。
+/// Drags the wall being drawn: updates the second wall end; Ctrl mirrors the first wall end about the line (upstream wall drag).
 pub fn funnel_drag_wall(app: &mut App, pt: Pt, ctrl: bool) {
     let Some(d) = app.draft.as_mut() else {
         return;
@@ -319,8 +321,9 @@ pub fn funnel_drag_wall(app: &mut App, pt: Pt, ctrl: bool) {
     }
 }
 
-/// 松开正在画的墙（原版 on_release 的 wall 分支）：原地单击 / 墙不能与线交叉时退回等墙；
-/// 否则整理顺序，大漏斗先确认再提交。
+/// Releases the wall being drawn (the wall branch of upstream on_release): a click in place / a
+/// wall that cannot cross the line falls back to waiting for the wall; otherwise order it and,
+/// for big funnels, confirm before committing.
 pub fn funnel_finish_wall(app: &mut App, still: bool) {
     let Some(d) = app.draft.as_ref() else {
         return;
@@ -346,20 +349,20 @@ pub fn funnel_finish_wall(app: &mut App, still: bool) {
     }
 }
 
-/// 退回"只差墙"的状态（删掉 draft 里的两个墙端点）。
+/// Falls back to the "wall still missing" state (removes the two wall endpoints from the draft).
 fn truncate_wall(app: &mut App) {
     if let Some(d) = app.draft.as_mut() {
         d.pts.truncate(2);
     }
 }
 
-/// 松开 Funnel 的线：画到选中漏斗的墙上就变成它的一条新线，否则留着 draft 等墙
-/// （原版 on_release 的 create 分支）。
+/// Releases a Funnel line: drawn onto the selected funnel's wall it becomes a new line for it,
+/// otherwise the draft stays waiting for the wall (the create branch of upstream on_release).
 pub fn funnel_finish_line(app: &mut App) {
     let _ = add_funnel_line(app);
 }
 
-/// 刚画的线落在选中漏斗的墙上：加为那个漏斗的一条新线（原版 add_funnel_line）。
+/// The just-drawn line lands on the selected funnel's wall: add it as a new line of that funnel (upstream add_funnel_line).
 fn add_funnel_line(app: &mut App) -> bool {
     let Some(sel) = app.sel else {
         return false;
@@ -387,7 +390,7 @@ fn add_funnel_line(app: &mut App) -> bool {
         return false;
     };
     if arr[2] != wall[0] || arr[3] != wall[1] {
-        return false; // 画出来的墙跟原来的不一样：不算同一条线
+        return false; // the wall drawn differs from the original: not the same line
     }
     app.cancel_draft();
     app.push_undo(&rust_i18n::t!("roll_funnel.add_a_funnel_line"));
@@ -399,9 +402,9 @@ fn add_funnel_line(app: &mut App) -> bool {
     true
 }
 
-// ---------------------------------------------------------------- 拖把手
+// ---------------------------------------------------------------- handle dragging
 
-/// 一次曲线点拖动需要的一切。
+/// Everything a curve point drag needs.
 struct CurveDrag {
     k: usize,
     end: usize,
@@ -413,7 +416,7 @@ struct CurveDrag {
     box_: (Pt, Pt, Pt),
 }
 
-/// 拖一个曲线锚点或手柄（原版 drag_funnel 的 anchor / ctrl 分支）。
+/// Drags a curve anchor or handle (the anchor / ctrl branches of upstream drag_funnel).
 fn drag_curve_point(app: &App, sh: &mut Shape, d: &CurveDrag) {
     let Some(c) = curve_mut(sh, d.k, d.end) else {
         return;
@@ -426,7 +429,7 @@ fn drag_curve_point(app: &App, sh: &mut Shape, d: &CurveDrag) {
     };
     if d.anchor {
         if d.alt {
-            // Alt：从锚点两侧拉出新手柄，锚点变成平滑的
+            // Alt: pull new handles out on both sides of the anchor, making it smooth
             if d.pi > 0 && d.pi + 1 < c.pts.len() {
                 let a = c.pts[d.pi];
                 let (dx, dy) = (d.new[0] - a[0], d.new[1] - a[1]);
@@ -435,7 +438,7 @@ fn drag_curve_point(app: &App, sh: &mut Shape, d: &CurveDrag) {
                 c.sharp.retain(|&a| a != d.pi / 3);
             }
         } else {
-            // 锚点带着两侧手柄一起走
+            // The anchor takes both handles along
             let a = c.pts[d.pi];
             let (dx, dy) = (d.new[0] - a[0], d.new[1] - a[1]);
             for j in d.pi.saturating_sub(1)..=(d.pi + 1) {
@@ -450,11 +453,11 @@ fn drag_curve_point(app: &App, sh: &mut Shape, d: &CurveDrag) {
         let middle = a > 0 && a + 1 < c.pts.len();
         if middle && !c.sharp.contains(&(a / 3)) {
             if d.alt {
-                // Alt：只动这一根，锚点变尖角
+                // Alt: move only this one, making the anchor a sharp corner
                 c.sharp.push(a / 3);
                 c.sharp.sort_unstable();
             } else {
-                // 平滑锚点：另一根手柄反方向、保持屏幕长度
+                // Smooth anchor: the other handle keeps its screen length in the opposite direction
                 let other = 2 * a - d.pi;
                 if let (Some(ap), Some(hp), Some(op)) = (
                     c.pts.get(a).copied(),
@@ -480,9 +483,10 @@ fn drag_curve_point(app: &App, sh: &mut Shape, d: &CurveDrag) {
     sync_linked(sh, d.k, d.end, &before, &sharp_before, d.ctrl);
 }
 
-/// 拖动漏斗把手（原版 drag_funnel）：
-/// `i < pts.len()` 是普通点（线 / 墙端；墙端 2 / 3 时 Ctrl 关于线对称）；
-/// 否则是曲线把手 / 起点，`i - pts.len()` 索引 [`funnel::funnel_handles`]。
+/// Drags a funnel handle (upstream drag_funnel):
+/// `i < pts.len()` is an ordinary point (line / wall end; wall ends 2 / 3 mirror about the
+/// line with Ctrl); otherwise it is a curve handle / start, with `i - pts.len()` indexing
+/// [`funnel::funnel_handles`].
 pub fn funnel_drag_handle(app: &mut App, i: usize, pos: Pos2, shift: bool, alt: bool, ctrl: bool) {
     let Some(sel) = app.sel else {
         return;
@@ -557,8 +561,9 @@ pub fn funnel_drag_handle(app: &mut App, i: usize, pos: Pos2, shift: bool, alt: 
     app.shapes_changed();
 }
 
-/// 选中漏斗的把手命中：曲线把手 / 起点（任何工具）与普通点（只有 Select 工具）相比，
-/// 返回 [`funnel_drag_handle`] 用的合并编号（原版 hit_handle + handles）。
+/// Hit test for the selected funnel's handles: curve handles / starts (any tool) take priority
+/// over ordinary points (Select tool only); returns the merged index used by
+/// [`funnel_drag_handle`] (upstream hit_handle + handles).
 pub fn hit_funnel_handle(app: &App, sh: &Shape, p: Pos2, any: bool) -> Option<usize> {
     if sh.kind != Kind::Funnel {
         return None;
@@ -584,10 +589,11 @@ pub fn hit_funnel_handle(app: &App, sh: &Shape, p: Pos2, any: bool) -> Option<us
     None
 }
 
-// ---------------------------------------------------------------- 加起点 / 锚点
+// ---------------------------------------------------------------- adding starts / anchors
 
-/// 中键 / 面板在选中的漏斗上操作（原版 funnel_click）：点在线上 = 那里加一个起点；
-/// 否则在最近的曲线上加一个锚点并拖到点击处（联动曲线也加）。true = 加上了。
+/// Middle-click / panel action on the selected funnel (upstream funnel_click): on a line = add
+/// a start there; otherwise add an anchor on the closest curve and drag it to the click
+/// (linked curves too). true = added.
 pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
     let Some(sel) = app.sel else {
         return false;
@@ -599,7 +605,7 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
         return false;
     }
 
-    // 1) 在线上：新起点
+    // 1) On a line: a new start
     for line in 0..funnel::funnel_lines(&sh).len() {
         if let Some(at) = line_at(app, &sh, line, pos, shift, Some(6.0)) {
             let Some(st) = funnel::new_start(&sh, at, line) else {
@@ -610,12 +616,12 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
                 shm.starts.push(st);
             }
             app.shapes_changed();
-            // 原版这里弹 "funnel_links" 的 tip（help.rs 的 tips），没有状态栏文案
+            // upstream pops the "funnel_links" tip here (help.rs's tips) and writes nothing to the status bar
             return true;
         }
     }
 
-    // 2) 靠近某条曲线：加锚点
+    // 2) Near a curve: add an anchor
     let curves = funnel::funnel_curves(&sh, false);
     if curves.is_empty() {
         return false;
@@ -719,9 +725,9 @@ pub fn funnel_click(app: &mut App, pos: Pos2, shift: bool, ctrl: bool) -> bool {
     true
 }
 
-// ---------------------------------------------------------------- 高亮 part
+// ---------------------------------------------------------------- highlighting parts
 
-/// 屏幕上命中漏斗的线或曲线（原版 part_at）：先线后曲线，取距离最小。
+/// Hit tests a funnel's line or curve on screen (upstream part_at): lines first, then curves, taking the smallest distance.
 fn part_at_screen(
     sh: &Shape,
     to_screen: &dyn Fn(Pt) -> (f32, f32),
@@ -754,13 +760,13 @@ fn part_at_screen(
     best
 }
 
-/// 选中的漏斗里，鼠标下（near 像素内）的线或曲线，用于再次点击时高亮。
+/// The line or curve under the mouse (within near pixels) of the selected funnel, for highlighting on another click.
 pub fn part_at(app: &App, sh: &Shape, p: Pos2, near: f32) -> Option<PartId> {
     let to_screen = |q: Pt| (app.view.x_of(q[0]), app.view.y_of(q[1]));
     part_at_screen(sh, &to_screen, p.x, p.y, near)
 }
 
-/// 点中的 part 会带上的联动曲线（原版 part_group）。
+/// The linked curves the clicked part brings along (upstream part_group).
 pub fn part_group(sh: &Shape, part: PartId) -> BTreeSet<PartId> {
     let mut out = BTreeSet::new();
     out.insert(part);
@@ -772,11 +778,12 @@ pub fn part_group(sh: &Shape, part: PartId) -> BTreeSet<PartId> {
     out
 }
 
-// ---------------------------------------------------------------- 删点
+// ---------------------------------------------------------------- deleting points
 
-/// 右键漏斗的曲线起点 / 锚点 / 手柄（原版 delete_funnel_handle）：
-/// 起点连同它的曲线一起删；锚点删掉；手柄收回锚点（那里变成尖角）；联动曲线同样处理，
-/// Ctrl 时不动它们。`i` 是 [`hit_funnel_handle`] / [`funnel_drag_handle`] 的合并编号。
+/// Right-clicks a funnel's curve start / anchor / handle (upstream delete_funnel_handle):
+/// a start is deleted with its curves; an anchor is deleted; a handle retracts into the anchor
+/// (which becomes a sharp corner); linked curves are treated the same, except with Ctrl.
+/// `i` is the merged index of [`hit_funnel_handle`] / [`funnel_drag_handle`].
 pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
     let Some(sel) = app.sel else {
         return false;
@@ -821,7 +828,7 @@ pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
                 return false;
             };
             if a == 0 || a + 1 == c.pts.len() {
-                return true; // 两端的手柄留着（原版直接返回）
+                return true; // end handles are kept (upstream returns directly)
             }
             let before = c.pts.clone();
             let sharp_before = c.sharp.clone();
@@ -841,7 +848,7 @@ pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
             let na = bezier::anchor_count(&c.pts);
             let ai = pi / 3;
             if ai == 0 || ai + 1 >= na {
-                return true; // 两端的锚点不删（原版直接返回）
+                return true; // end anchors are not deleted (upstream returns directly)
             }
             let clen = c.pts.len();
             if !ctrl {
@@ -868,13 +875,13 @@ pub fn funnel_delete_handle(app: &mut App, i: usize, ctrl: bool) -> bool {
     true
 }
 
-// ---------------------------------------------------------------- 高亮 part 的 App 状态
+// ---------------------------------------------------------------- App state for highlighted parts
 
-/// 高亮的漏斗 part：`(形状下标, 线的编号, 曲线 (起点号, 墙端))`。
+/// A highlighted funnel part: `(shape index, line numbers, curves as (start number, wall end))`.
 pub type FunnelParts = (usize, BTreeSet<usize>, BTreeSet<(usize, usize)>);
 
 impl App {
-    /// 高亮的漏斗线与曲线（原版 funnel_parts）。
+    /// Highlighted funnel lines and curves (upstream funnel_parts).
     pub fn funnel_parts(&self) -> Option<FunnelParts> {
         if self.parts.is_empty() {
             return None;
@@ -905,8 +912,8 @@ impl App {
         }
     }
 
-    /// 高亮这些线 / 曲线（原版 set_parts）：main = 点中的那个，联动的换颜色；
-    /// main 为 None 且 parts 为空时连 main 一起清掉。
+    /// Highlights these lines / curves (upstream set_parts): main = the clicked one, linked
+    /// ones change color; with main None and parts empty, main is cleared too.
     pub fn set_parts(&mut self, parts: BTreeSet<PartId>, main: Option<PartId>) {
         if main.is_some() || parts.is_empty() {
             self.part_main = main;
@@ -916,7 +923,7 @@ impl App {
         }
     }
 
-    /// Ctrl+点击：加上或去掉一个 part（原版 `app.parts ^ {part}`）。
+    /// Ctrl+click: adds or removes one part (upstream `app.parts ^ {part}`).
     pub fn toggle_part(&mut self, part: PartId) {
         let mut parts = self.parts.clone();
         if !parts.remove(&part) {
@@ -928,7 +935,7 @@ impl App {
         }
     }
 
-    /// 高亮内容的文字："2 curves and 1 line"（原版 parts_text）。
+    /// Text for the highlight: "2 curves and 1 line" (upstream parts_text).
     pub fn parts_text(&self) -> String {
         let Some((_, lines, curves)) = self.funnel_parts() else {
             return String::new();
@@ -951,8 +958,8 @@ impl App {
         words.join(" and ")
     }
 
-    /// Delete：删掉高亮的线与曲线；所有线都在时整个漏斗删掉（原版 delete_parts）。
-    /// true = 处理了（Delete 不再删形状）。
+    /// Delete: removes the highlighted lines and curves; when all lines are in, deletes the
+    /// whole funnel (upstream delete_parts). true = handled (Delete no longer deletes the shape).
     pub fn delete_funnel_parts(&mut self) -> bool {
         let Some((sel, lines, curves)) = self.funnel_parts() else {
             return false;
@@ -976,7 +983,7 @@ impl App {
         true
     }
 
-    /// 给高亮的曲线换形状（原版 set_curves）：联动曲线按 link 同形或首尾对调，只换一遍。
+    /// Replaces the shape of the highlighted curves (upstream set_curves): linked curves get the same shape or the end-to-end turn by link, only once.
     pub fn set_funnel_curves(
         &mut self,
         shape_of: &dyn Fn(&FunnelCurve) -> FunnelCurve,
@@ -1021,9 +1028,9 @@ impl App {
     }
 }
 
-// ---------------------------------------------------------------- 绘制
+// ---------------------------------------------------------------- painting
 
-/// 高亮曲线到颜色的映射：点中的那条紫、联动的青（原版 part_colors）。
+/// Mapping from highlighted curves to color: the clicked one purple, linked ones cyan (upstream part_colors).
 fn part_colors(app: &App, curves: &BTreeSet<(usize, usize)>) -> BTreeMap<(usize, usize), Color32> {
     let main = match app.part_main {
         Some(PartId::Curve(k, e)) if curves.contains(&(k, e)) => Some((k, e)),
@@ -1044,7 +1051,7 @@ fn part_colors(app: &App, curves: &BTreeSet<(usize, usize)>) -> BTreeMap<(usize,
         .collect()
 }
 
-/// 画高亮的线与曲线：粗紫 / 青（原版 draw_parts），在把手下面。
+/// Paints the highlighted lines and curves: thick purple / cyan (upstream draw_parts), under the handles.
 pub fn paint_parts(app: &App, painter: &egui::Painter, rect: Rect) {
     let Some((sel, lines, curves)) = app.funnel_parts() else {
         return;
@@ -1073,8 +1080,10 @@ pub fn paint_parts(app: &App, painter: &egui::Painter, rect: Rect) {
     }
 }
 
-/// 画选中漏斗的把手（原版 draw_handles 的 funnel 分支）：把手线白边彩芯、普通点白方块红边、
-/// 起点白菱形蓝边、锚点白圆、手柄实心圆（高亮曲线的手柄用紫 / 青）。
+/// Paints the selected funnel's handles (the funnel branch of upstream draw_handles): handle
+/// lines with a white edge and colored core, ordinary points as white squares with a red edge,
+/// starts as white diamonds with a blue edge, anchors as white circles, handles as filled
+/// circles (handles of highlighted curves are purple / cyan).
 pub fn paint_funnel_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: &Shape) {
     let s = app.scale();
     let at = |p: Pt| {
@@ -1085,7 +1094,7 @@ pub fn paint_funnel_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: 
     };
     let curves = app.funnel_parts().map(|(_, _, c)| c).unwrap_or_default();
     let colors = part_colors(app, &curves);
-    // 把手线：白的先画，高亮的彩芯压在上面
+    // Handle lines: draw the white ones first, then the colored cores of highlighted ones on top
     let mut lines: Vec<(Pt, Pt, Color32)> = funnel::funnel_handle_lines(sh)
         .into_iter()
         .map(|(a, h, c)| (a, h, colors.get(&c).copied().unwrap_or(HANDLE_COLOR)))
@@ -1113,7 +1122,7 @@ pub fn paint_funnel_handles(app: &App, painter: &egui::Painter, rect: Rect, sh: 
     }
     let mut handles = funnel::funnel_handles(sh);
     handles.sort_by_key(|(_, id)| match id {
-        // 高亮曲线的手柄画在最后（压在别的上面）
+        // Handles of highlighted curves are drawn last (on top of the others)
         HandleId::Ctrl(k, e, _) | HandleId::Anchor(k, e, _) => colors.contains_key(&(*k, *e)),
         HandleId::Start(_) => false,
     });
@@ -1158,7 +1167,7 @@ mod tests {
     use super::*;
     use spiderweb_core::shape::FunnelStart;
 
-    /// 一条横线 + 一堵竖墙的漏斗（起点在线上，向墙端 0 张开默认曲线）。
+    /// A funnel with a horizontal line + a vertical wall (start on the line, opening the default curve towards wall end 0).
     fn sample_funnel() -> Shape {
         let mut sh = Shape::new(
             Kind::Funnel,
@@ -1174,16 +1183,16 @@ mod tests {
 
     #[test]
     fn arrange_swaps_when_the_wall_was_drawn_first() {
-        // 先画的竖线其实是墙：换成 [线, 线, 墙, 墙]，线起点在离墙远的一头
+        // The vertical line drawn first is actually the wall: swapped to [line, line, wall, wall], with the line start at the end farther from the wall
         let pts = [[2.0, 64.0], [2.0, 56.0], [0.5, 62.0], [4.0, 62.0]];
-        let arr = arrange_funnel(1.0, 1.0, &pts).expect("墙与线交叉");
+        let arr = arrange_funnel(1.0, 1.0, &pts).expect("wall and line cross");
         assert_eq!(arr, [[4.0, 62.0], [0.5, 62.0], [2.0, 64.0], [2.0, 56.0]]);
     }
 
     #[test]
     fn arrange_keeps_the_line_drawn_first() {
         let pts = [[0.5, 62.0], [4.0, 62.0], [2.0, 64.0], [2.0, 56.0]];
-        let arr = arrange_funnel(1.0, 1.0, &pts).expect("墙与线交叉");
+        let arr = arrange_funnel(1.0, 1.0, &pts).expect("wall and line cross");
         assert_eq!(arr, [[4.0, 62.0], [0.5, 62.0], [2.0, 64.0], [2.0, 56.0]]);
     }
 
@@ -1198,10 +1207,10 @@ mod tests {
     #[test]
     fn ctrl_wall_keeps_both_ends_symmetric() {
         let line = [[0.0, 0.0], [4.0, 0.0]];
-        let mirrored = wall_mirror(line, [2.0, 2.0], [2.0, 0.5]).expect("墙与线交叉");
+        let mirrored = wall_mirror(line, [2.0, 2.0], [2.0, 0.5]).expect("wall and line cross");
         assert!((mirrored[0] - 2.0).abs() < 1e-9);
         assert!((mirrored[1] + 0.5).abs() < 1e-9);
-        // 墙与线平行：没法对称
+        // Wall parallel to the line: cannot mirror
         assert_eq!(wall_mirror(line, [0.0, 1.0], [4.0, 1.0]), None);
     }
 
@@ -1209,17 +1218,17 @@ mod tests {
     fn part_at_hits_line_and_curve() {
         let sh = sample_funnel();
         let project = |p: Pt| ((p[0] * 10.0) as f32, p[1] as f32);
-        // 线上的点（曲线还贴着线走，但近处只有线）
+        // A point on the line (the curve still hugs the line, but only the line is near)
         assert_eq!(
             part_at_screen(&sh, &project, 5.0, 60.0, 6.0),
             Some(PartId::Line(0))
         );
-        // 曲线到墙端 (4, 70)
+        // The curve up to wall end (4, 70)
         assert_eq!(
             part_at_screen(&sh, &project, 40.0, 70.0, 6.0),
             Some(PartId::Curve(0, 0))
         );
-        // 离得太远：什么都没有
+        // Too far away: nothing
         assert_eq!(part_at_screen(&sh, &project, 5.0, 80.0, 6.0), None);
     }
 
@@ -1235,7 +1244,7 @@ mod tests {
             part_group(&sh, PartId::Curve(0, 0)),
             BTreeSet::from([PartId::Curve(0, 0), PartId::Curve(0, 1)])
         );
-        // 线没有联动
+        // Lines have no links
         assert_eq!(
             part_group(&sh, PartId::Line(0)),
             BTreeSet::from([PartId::Line(0)])
