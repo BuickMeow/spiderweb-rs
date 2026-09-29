@@ -81,8 +81,8 @@ Report p50 / p95 / max frame times, not just averages.
 ### 3.1 Generate a bench project
 
 ```bash
-python3 tools/gen_bench_project.py --notes 1000000 -o bench.json      # 1M
-python3 tools/gen_bench_project.py --notes 5000000 -o bench-big.json  # 5M
+cargo xtask bench-project --notes 1000000 -o bench.json      # 1M
+cargo xtask bench-project --notes 5000000 -o bench-big.json  # 5M
 ```
 
 Copy the result next to the executable as `autosave.json`, or open it with

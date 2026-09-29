@@ -42,7 +42,8 @@ SPIDERWEB_SRC=/path/to/upstream/scripts python3 tools/gen_paths_vectors.py
 ```
 
 Performance HUD: `SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app`.
-Bench project: `python3 tools/gen_bench_project.py --notes 1000000 -o bench.json`.
+Bench project: `cargo xtask bench-project --notes 1000000 -o bench.json`.
+i18n catalog check: `cargo xtask i18n-sync --upstream /path/to/upstream/scripts`.
 
 ## Code rules
 

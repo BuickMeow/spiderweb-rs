@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "xtask",
     "crates/spiderweb-core",
     "crates/spiderweb-domino",
     "crates/spiderweb-io",

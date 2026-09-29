@@ -47,7 +47,7 @@ Reproduce locally:
 
 ```bash
 cargo bench -p spiderweb-core --bench engine   # core micro-benchmarks
-python3 tools/gen_bench_project.py --notes 5000000 -o bench.json
+cargo xtask bench-project --notes 5000000 -o bench.json
 SPIDERWEB_PERF=1 cargo run --release -p spiderweb-app   # frame-time HUD
 ```
 

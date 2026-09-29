@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+spiderweb-core = { path = "../crates/spiderweb-core" }
+spiderweb-io = { path = "../crates/spiderweb-io" }
+serde_json = { workspace = true }
