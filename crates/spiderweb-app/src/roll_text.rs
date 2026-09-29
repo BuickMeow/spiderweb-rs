@@ -435,9 +435,7 @@ pub fn set_text(app: &mut App, text: &str, caret: usize) {
         None => {
             let mut sh = app.defaults.clone();
             sh.kind = Kind::Custom;
-            sh.fill = app.custom_defaults.fill;
-            sh.gate = app.custom_defaults.gate;
-            sh.align = app.custom_defaults.align;
+            crate::roll_live::core_custom_defaults(app).apply(&mut sh);
             if text::build(&mut sh, &tx, &font, axes) {
                 let idx = app.shapes.len();
                 let undo_done = app.typing.as_ref().map(|t| t.undo).unwrap_or(false);

@@ -6,7 +6,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use spiderweb_core::Pt;
 use spiderweb_core::engine;
 use spiderweb_core::funnel;
-use spiderweb_core::shape::{Kind, Shape};
+use spiderweb_core::shape::{Fill, Kind, Shape};
 
 use crate::app::{App, PartId, Tool};
 use crate::roll_curve::paint_curve_handles;
@@ -532,19 +532,22 @@ fn hit_shape(app: &App, p: Pos2) -> Option<usize> {
         {
             return Some(i);
         }
-        // Fill / Spam 的形状：轮廓里（一个缺口用直线补上）都算命中
-        if sh.kind == Kind::Custom
-            && matches!(
-                sh.fill,
-                spiderweb_core::shape::Fill::Fill | spiderweb_core::shape::Fill::Spam
-            )
-            && spiderweb_core::custom::fillable(&sh.strokes)
-        {
-            let mut polys = spiderweb_core::custom::custom_strokes(sh);
-            if let Some(gap) = spiderweb_core::custom::gap_line(sh) {
-                polys.push(gap.to_vec());
-            }
-            if crate::roll_live::inside_strokes(&polys, b, q) {
+        // Fill / Spam 的形状：轮廓里（缺口用直线补上）都算命中
+        if sh.kind == Kind::Custom && matches!(sh.fill, Fill::Fill | Fill::Spam) {
+            let polys = if sh.text.is_some() {
+                spiderweb_core::custom::custom_strokes(sh)
+            } else {
+                spiderweb_core::custom::fill_plan(sh).polys
+            };
+            let inside = if sh.union {
+                // 重叠也填上：任意一个环里都算
+                polys
+                    .iter()
+                    .any(|poly| crate::roll_live::inside_strokes(std::slice::from_ref(poly), b, q))
+            } else {
+                crate::roll_live::inside_strokes(&polys, b, q)
+            };
+            if inside {
                 return Some(i);
             }
         }
@@ -1885,6 +1888,19 @@ fn paint_path(
         };
         painter.add(egui::Shape::line(clipped, Stroke::new(width, color)));
         let _ = clip;
+    }
+    // 补轮廓缺口的直线：淡虚线（原版 draw_path 的 gap_lines）
+    if sh.kind == Kind::Custom && matches!(sh.fill, Fill::Fill | Fill::Spam) {
+        for [a, b] in spiderweb_core::custom::gap_lines(sh) {
+            let p0 = Pos2::new(rect.min.x + v.x_of(a[0]), rect.min.y + v.y_of(a[1]));
+            let p1 = Pos2::new(rect.min.x + v.x_of(b[0]), rect.min.y + v.y_of(b[1]));
+            painter.extend(egui::Shape::dashed_line(
+                &[p0, p1],
+                Stroke::new(1.0, color),
+                4.0,
+                3.0,
+            ));
+        }
     }
 }
 

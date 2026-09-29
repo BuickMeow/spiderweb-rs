@@ -10,7 +10,7 @@ use common::*;
 use serde_json::Value;
 use spiderweb_core::Pt;
 use spiderweb_core::custom as C;
-use spiderweb_core::shape::{Align, Fill, Kind, Shape, Stroke, Sym, TextSettings};
+use spiderweb_core::shape::{Align, Ends, Fill, Kind, Shape, Stroke, Sym, TextSettings};
 
 fn close(a: f64, b: f64) -> bool {
     let d = (a - b).abs();
@@ -49,6 +49,30 @@ fn assert_polys_eq(got: &[Vec<Pt>], want: &Value, ctx: &str) {
     assert_paths_eq(got, want, ctx);
 }
 
+fn assert_closers_eq(got: &[[Pt; 2]], want: &Value, ctx: &str) {
+    let w = want.as_array().expect("closers 不是数组");
+    assert_eq!(got.len(), w.len(), "{ctx}: 直线数不同 got={got:?}");
+    for (i, (g, x)) in got.iter().zip(w).enumerate() {
+        assert_pts_eq(g, x, &format!("{ctx}[{i}]"));
+    }
+}
+
+fn ints(v: &Value) -> Vec<i64> {
+    v.as_array().expect("不是数组").iter().map(i).collect()
+}
+
+fn bools(v: &Value) -> Vec<bool> {
+    v.as_array().expect("不是数组").iter().map(b).collect()
+}
+
+fn assert_ids_eq(got: Option<&[i64]>, want: &Value, ctx: &str) {
+    match (got, want.is_null()) {
+        (None, true) => {}
+        (Some(g), false) => assert_eq!(g, ints(want).as_slice(), "{ctx}"),
+        (g, w) => panic!("{ctx}: ids 不同 got={g:?} want_null={w}"),
+    }
+}
+
 fn assert_spans_eq(got: &[[f64; 2]], want: &Value, ctx: &str) {
     let w = want.as_array().expect("spans 不是数组");
     assert_eq!(got.len(), w.len(), "{ctx}: 段数不同");
@@ -84,7 +108,19 @@ fn align_of(s: &str) -> Align {
     match s {
         "auto" => Align::Auto,
         "aligned" => Align::Aligned,
+        "centred" => Align::Centred,
         other => panic!("未知 align {other}"),
+    }
+}
+
+fn ends_of(s: &str) -> Ends {
+    match s {
+        "round" => Ends::Round,
+        "keep" => Ends::Keep,
+        "drop" => Ends::Drop,
+        "min" => Ends::Min,
+        "stretch" => Ends::Stretch,
+        other => panic!("未知 ends {other}"),
     }
 }
 
@@ -153,6 +189,15 @@ fn shape_of(v: &Value) -> Shape {
     }
     if let Some(x) = v.get("align").and_then(Value::as_str) {
         sh.align = align_of(x);
+    }
+    if let Some(x) = v.get("ends").and_then(Value::as_str) {
+        sh.ends = ends_of(x);
+    }
+    if let Some(x) = v.get("union") {
+        sh.union = b(x);
+    }
+    if let Some(x) = v.get("apart") {
+        sh.apart = b(x);
     }
     if let Some(x) = v.get("notes").and_then(Value::as_str) {
         sh.notes = Some(x.to_string());
@@ -257,6 +302,9 @@ fn assert_shape_eq(got: &Shape, want: &Value, ctx: &str) {
             "fill" => assert_eq!(got.fill, fill_of(v.as_str().unwrap()), "{ctx}.fill"),
             "gate" => close_f(got.gate, f(v), &format!("{ctx}.gate")),
             "align" => assert_eq!(got.align, align_of(v.as_str().unwrap()), "{ctx}.align"),
+            "ends" => assert_eq!(got.ends, ends_of(v.as_str().unwrap()), "{ctx}.ends"),
+            "union" => assert_eq!(got.union, b(v), "{ctx}.union"),
+            "apart" => assert_eq!(got.apart, b(v), "{ctx}.apart"),
             "name" => assert_eq!(got.name, v.as_str().unwrap(), "{ctx}.name"),
             "own_vel" => assert_eq!(got.own_vel, b(v), "{ctx}.own_vel"),
             "vel0" => close_f(got.vel0, f(v), &format!("{ctx}.vel0")),
@@ -327,12 +375,24 @@ fn custom_vectors() {
             "fillable" => {
                 assert_eq!(C::fillable(&strokes_of(&args[0])), b(out), "{ctx}");
             }
-            "gap_line" => {
-                let g = C::gap_line(&shape_of(&args[0]));
-                assert_eq!(g.is_some(), !out.is_null(), "{ctx}");
-                if let Some(s) = g {
-                    assert_pts_eq(&s, out, &ctx);
-                }
+            "near_ends" => {
+                let a = floats(&args[0]);
+                let q = floats(&args[1]);
+                assert_eq!(C::near_ends([a[0], a[1]], [q[0], q[1]]), b(out), "{ctx}");
+            }
+            "flat_path" => {
+                assert_eq!(C::flat_path(&pts(&args[0])), b(out), "{ctx}");
+            }
+            "fill_plan" => {
+                let plan = C::fill_plan(&shape_of(&args[0]));
+                assert_polys_eq(&plan.polys, &out["polys"], &format!("{ctx}.polys"));
+                let closers: Vec<[Pt; 2]> = plan.closers.clone();
+                assert_closers_eq(&closers, &out["closers"], &format!("{ctx}.closers"));
+                assert_polys_eq(&plan.flat, &out["flat"], &format!("{ctx}.flat"));
+            }
+            "gap_lines" => {
+                let g = C::gap_lines(&shape_of(&args[0]));
+                assert_closers_eq(&g, out, &ctx);
             }
             "join_strokes" => {
                 let g = C::join_strokes(&strokes_of(&args[0]));
@@ -403,9 +463,17 @@ fn custom_vectors() {
             }
             "add_stroke" => {
                 let mut sh = shape_of(&args[0]);
-                let k = C::add_stroke(&mut sh, &stroke_of(&args[1])).expect("add_stroke");
+                let at = args.get(2).map(|v| i(v) as usize);
+                let k = C::add_stroke(&mut sh, &stroke_of(&args[1]), at).expect("add_stroke");
                 assert_eq!(k as i64, i(&out[0]), "{ctx}.k");
                 assert_shape_eq(&sh, &out[1], &ctx);
+            }
+            "bp_k" => {
+                close_f(C::bp_k(&pts(&args[0]), f(&args[1])), f(out), &ctx);
+            }
+            "stroke_bp" => {
+                let g = C::stroke_bp(&shape_of(&args[0]), i(&args[1]) as usize).expect("stroke_bp");
+                assert_stroke_eq(&g, out, &ctx);
             }
             "new_live_shape" => {
                 let defaults = shape_of(&args[0]);
@@ -413,6 +481,9 @@ fn custom_vectors() {
                     fill: fill_of(args[1]["fill"].as_str().unwrap()),
                     gate: f(&args[1]["gate"]),
                     align: align_of(args[1]["align"].as_str().unwrap()),
+                    ends: ends_of(args[1]["ends"].as_str().unwrap()),
+                    union: args[1].get("union").is_some_and(b),
+                    apart: args[1].get("apart").is_some_and(b),
                 };
                 let g = C::new_live_shape(&defaults, &cd);
                 assert_shape_eq(&g, out, &ctx);
@@ -423,10 +494,64 @@ fn custom_vectors() {
                 let g = C::outline_notes(&shape_of(&args[0]), f(&args[1]));
                 assert_rows3_eq(&g, out, &ctx);
             }
+            "outline_notes_only" => {
+                let only: Vec<usize> = args[2]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| i(x) as usize)
+                    .collect();
+                let g = C::outline_notes_only(&shape_of(&args[0]), f(&args[1]), &only);
+                assert_rows3_eq(&g, out, &ctx);
+            }
+            "stroke_groups" => {
+                assert_eq!(
+                    C::stroke_groups(&shape_of(&args[0])).is_none(),
+                    out.is_null(),
+                    "{ctx}"
+                );
+            }
+            "outline_apart" => {
+                assert_eq!(C::outline_apart(&shape_of(&args[0])), b(out), "{ctx}");
+            }
+            "flat_notes" => {
+                let g = C::flat_notes(&shape_of(&args[0]), f(&args[1]));
+                assert_rows3_eq(&g, out, &ctx);
+            }
             "row_spans" => {
                 let polys: Vec<Vec<Pt>> = args[0].as_array().unwrap().iter().map(pts).collect();
                 let g = C::row_spans(&polys, f(&args[1]));
                 assert_spans_eq(&g, out, &ctx);
+            }
+            "union_spans" => {
+                let polys: Vec<Vec<Pt>> = args[0].as_array().unwrap().iter().map(pts).collect();
+                let g = C::union_spans(&polys, f(&args[1]));
+                assert_spans_eq(&g, out, &ctx);
+            }
+            "merged_by_key" => {
+                let notes = rows3(&args[0]);
+                let (keys, starts, ends) = C::merged_by_key(&notes);
+                assert_eq!(keys, ints(&out[0]), "{ctx}.keys");
+                assert_eq!(starts, ints(&out[1]), "{ctx}.starts");
+                assert_eq!(ends, ints(&out[2]), "{ctx}.ends");
+            }
+            "covered" => {
+                let notes = rows3(&args[0]);
+                let others = rows3(&args[1]);
+                let g = C::covered(&notes, &others);
+                assert_eq!(g, bools(out), "{ctx}");
+            }
+            "cut_out" => {
+                let g = C::cut_out(&rows3(&args[0]), &rows3(&args[1]));
+                assert_rows3_eq(&g, out, &ctx);
+            }
+            "on_edge" => {
+                let g = C::on_edge(&rows3(&args[0]));
+                assert_eq!(g, bools(out), "{ctx}");
+            }
+            "edge_parts" => {
+                let g = C::edge_parts(&rows3(&args[0]));
+                assert_rows3_eq(&g, out, &ctx);
             }
             "inside_spans" => {
                 let g = C::inside_spans(&shape_of(&args[0]), f(&args[1]));
@@ -439,21 +564,26 @@ fn custom_vectors() {
                     "{ctx}"
                 );
             }
-            "spam_starts" => {
-                let sh = shape_of(&args[0]);
-                let (s, n) = C::spam_starts(&sh, i(&args[1]), i(&args[2]), i(&args[3]));
-                assert_eq!(s, i(&out[0]), "{ctx}.s");
-                assert_eq!(n, i(&out[1]), "{ctx}.n");
-            }
             "chop" => {
                 let sh = shape_of(&args[0]);
                 let stretches = rows3(&args[1]);
-                let g = C::chop(&sh, &stretches, i(&args[2]), b(&args[3]));
+                let g = C::chop(&sh, &stretches, i(&args[2]));
                 assert_rows3_eq(&g, out, &ctx);
+            }
+            "chop_count" => {
+                let sh = shape_of(&args[0]);
+                let stretches = rows3(&args[1]);
+                assert_eq!(C::chop_count(&sh, &stretches, i(&args[2])), i(out), "{ctx}");
             }
             "outline_spam" => {
                 let g = C::outline_spam(&shape_of(&args[0]), f(&args[1]));
                 assert_rows3_eq(&g, out, &ctx);
+            }
+            "outline_groups" => {
+                let (notes, ids) =
+                    C::outline_groups(&shape_of(&args[0]), f(&args[1]), args[2].as_bool().unwrap());
+                assert_rows3_eq(&notes, &out[0], &format!("{ctx}.notes"));
+                assert_ids_eq(ids.as_deref(), &out[1], &format!("{ctx}.ids"));
             }
             "custom_note_count" => {
                 let g = C::custom_note_count(&shape_of(&args[0]), f(&args[1]));
@@ -465,6 +595,11 @@ fn custom_vectors() {
             "custom_notes" => {
                 let g = C::custom_notes(&shape_of(&args[0]), f(&args[1]));
                 assert_rows3_eq(&g, out, &ctx);
+            }
+            "custom_notes_groups" => {
+                let (notes, ids) = C::custom_notes_groups(&shape_of(&args[0]), f(&args[1]));
+                assert_rows3_eq(&notes, &out[0], &format!("{ctx}.notes"));
+                assert_ids_eq(ids.as_deref(), &out[1], &format!("{ctx}.ids"));
             }
 
             // ------------------------------------------------------------ 粘贴音符
@@ -504,7 +639,7 @@ fn custom_vectors() {
         }
         checked += 1;
     }
-    assert!(checked >= 120, "用例太少：{checked}");
+    assert!(checked >= 400, "用例太少：{checked}");
 
     // ------------------------------------------------------------ 常量
     assert_eq!(
@@ -512,11 +647,31 @@ fn custom_vectors() {
         [Fill::Empty, Fill::Fill, Fill::Spam, Fill::OutlineSpam]
     );
     assert_eq!(C::SPAM_FILLS, [Fill::Spam, Fill::OutlineSpam]);
-    assert_eq!(C::ALIGNS, [Align::Auto, Align::Aligned]);
+    assert_eq!(C::ALIGNS, [Align::Auto, Align::Aligned, Align::Centred]);
+    assert_eq!(
+        C::ENDS,
+        [
+            Ends::Round,
+            Ends::Keep,
+            Ends::Drop,
+            Ends::Min,
+            Ends::Stretch
+        ]
+    );
+    assert_eq!(C::CUSTOM_FLAGS, ["union", "apart"]);
     assert_eq!(C::CUSTOM_DEFAULTS, C::CustomDefaults::default());
     assert_eq!(C::CUSTOM_DEFAULTS.fill, Fill::Empty);
     assert_eq!(C::CUSTOM_DEFAULTS.gate, 0.0625);
     assert_eq!(C::CUSTOM_DEFAULTS.align, Align::Auto);
+    assert_eq!(C::CUSTOM_DEFAULTS.ends, Ends::Round);
+    assert_eq!(
+        (C::CUSTOM_DEFAULTS.union, C::CUSTOM_DEFAULTS.apart),
+        (false, false)
+    );
+    assert_eq!(C::TOUCH_BEATS, 1.0 / 64.0);
+    assert_eq!(C::TOUCH_KEYS, 1.0);
+    assert_eq!(C::FLAT_KEYS, 0.5);
+    assert_eq!(C::FLAT_BEATS, 1.0 / 64.0);
     assert_eq!(C::ELLIPSE_STEPS, 360);
     assert_eq!(C::CURVE_STEPS, 240);
     assert_eq!(C::TRACKS, "t:");

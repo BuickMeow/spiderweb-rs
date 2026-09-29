@@ -17,14 +17,14 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use spiderweb_core::shape::{
-    Align, Fill, FunnelFill, GateChange, GateFollow, Shape, TextSettings, WallMode,
+    Align, Ends, Fill, FunnelFill, GateChange, GateFollow, Shape, TextSettings, WallMode,
 };
 use spiderweb_core::smooth::{SMOOTH_DEFAULT, clean_level};
 use spiderweb_core::text::clean_text;
 
 use crate::compat::{
-    SHAPE_DEFAULTS, ShapeDefaults, ShapeError, align_str, fill_str, py_bool, py_float, py_int,
-    py_str, shape_from_json, shape_to_json, short_num_f,
+    SHAPE_DEFAULTS, ShapeDefaults, ShapeError, align_str, ends_str, fill_str, py_bool, py_float,
+    py_int, py_str, shape_from_json, shape_to_json, short_num_f,
 };
 use crate::safefile;
 
@@ -84,6 +84,9 @@ pub struct CustomDefaults {
     pub fill: Fill,
     pub gate: f64,
     pub align: Align,
+    pub ends: Ends,
+    pub union: bool,
+    pub apart: bool,
     pub shape: String,
 }
 
@@ -93,6 +96,9 @@ impl Default for CustomDefaults {
             fill: Fill::Empty,
             gate: 0.0625,
             align: Align::Auto,
+            ends: Ends::Round,
+            union: false,
+            apart: false,
             shape: "Circle".to_string(),
         }
     }
@@ -443,12 +449,9 @@ impl Project {
         );
         d.insert(
             "custom_defaults".into(),
-            serde_json::json!({
-                "fill": fill_str(self.custom_defaults.fill),
-                "gate": self.custom_defaults.gate,
-                "align": align_str(self.custom_defaults.align),
-                "shape": self.custom_defaults.shape,
-            }),
+            // 新键只在不是默认值时写（1.2.0 读不到 ends / union / apart 时用 round / false / false，
+            // 省掉默认值也能被 1.2.0 读对，旧版本的工程文件也不多出键）
+            custom_defaults_json(&self.custom_defaults),
         );
         d.insert(
             "funnel_defaults".into(),
@@ -526,6 +529,25 @@ fn defaults_from_json(v: Option<&Value>) -> Result<ShapeDefaults, ProjectError> 
     Ok(out)
 }
 
+/// `custom_defaults` 的 JSON（非默认的新键省略，见 [`Project::to_json`] 的注释）。
+fn custom_defaults_json(cd: &CustomDefaults) -> Value {
+    let mut o = Map::new();
+    o.insert("fill".into(), Value::from(fill_str(cd.fill)));
+    o.insert("gate".into(), Value::from(cd.gate));
+    o.insert("align".into(), Value::from(align_str(cd.align)));
+    if cd.ends != Ends::Round {
+        o.insert("ends".into(), Value::from(ends_str(cd.ends)));
+    }
+    if cd.union {
+        o.insert("union".into(), Value::Bool(true));
+    }
+    if cd.apart {
+        o.insert("apart".into(), Value::Bool(true));
+    }
+    o.insert("shape".into(), Value::from(cd.shape.clone()));
+    Value::Object(o)
+}
+
 fn custom_defaults_from_json(d: &Map<String, Value>) -> CustomDefaults {
     let mut out = CustomDefaults::default();
     match d.get("fill").and_then(Value::as_str) {
@@ -538,8 +560,21 @@ fn custom_defaults_from_json(d: &Map<String, Value>) -> CustomDefaults {
     match d.get("align").and_then(Value::as_str) {
         Some("auto") => out.align = Align::Auto,
         Some("aligned") => out.align = Align::Aligned,
+        Some("centred") => out.align = Align::Centred,
         _ => {}
     }
+    // 原版：`if custom.get("ends") in ENDS`——不认识的值保留旧默认（round）
+    out.ends = match d.get("ends").and_then(Value::as_str) {
+        Some("round") => Ends::Round,
+        Some("keep") => Ends::Keep,
+        Some("drop") => Ends::Drop,
+        Some("min") => Ends::Min,
+        Some("stretch") => Ends::Stretch,
+        _ => out.ends,
+    };
+    // bool(custom.get(key))：缺省 / 0 / 空串都算 false
+    out.union = d.get("union").is_some_and(py_bool);
+    out.apart = d.get("apart").is_some_and(py_bool);
     if let Some(gate) = d.get("gate").and_then(py_float) {
         out.gate = gate.max(1e-6);
     }
@@ -1012,4 +1047,41 @@ fn read_window_file(path: &Path) -> Option<Option<WindowState>> {
     let data: Value = serde_json::from_str(&text).ok()?;
     let win = data.get("window").filter(|v| !v.is_null());
     Some(win.map(|v| WindowState::from_json(Some(v))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 1.2.0 工程 custom_defaults 的新键读得进来（ends 不认识时保留 round；开关按 bool()）。
+    #[test]
+    fn custom_defaults_new_keys_read() {
+        let d = json!({"fill": "spam", "gate": 60, "align": "centred", "ends": "keep",
+                       "union": true, "apart": 1});
+        let m = d.as_object().cloned().unwrap_or_default();
+        let cd = custom_defaults_from_json(&m);
+        assert_eq!(cd.ends, Ends::Keep);
+        assert!(cd.union && cd.apart);
+        let bogus = json!({"ends": "nonsense"});
+        let m = bogus.as_object().cloned().unwrap_or_default();
+        assert_eq!(custom_defaults_from_json(&m).ends, Ends::Round);
+    }
+
+    /// 写出去：默认的新键省略（1.2.0 读不到时用同样的默认值）。
+    #[test]
+    fn custom_defaults_new_keys_write() {
+        let mut cd = CustomDefaults::default();
+        assert_eq!(
+            custom_defaults_json(&cd),
+            json!({"fill": "empty", "gate": 0.0625, "align": "auto", "shape": "Circle"})
+        );
+        cd.ends = Ends::Stretch;
+        cd.union = true;
+        cd.apart = true;
+        let v = custom_defaults_json(&cd);
+        assert_eq!(v["ends"], json!("stretch"));
+        assert_eq!(v["union"], json!(true));
+        assert_eq!(v["apart"], json!(true));
+    }
 }

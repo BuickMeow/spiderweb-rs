@@ -70,6 +70,9 @@ pub fn core_custom_defaults(app: &App) -> CoreCustomDefaults {
         fill: app.custom_defaults.fill,
         gate: app.custom_defaults.gate,
         align: app.custom_defaults.align,
+        ends: app.custom_defaults.ends,
+        union: app.custom_defaults.union,
+        apart: app.custom_defaults.apart,
     }
 }
 
@@ -124,9 +127,7 @@ pub fn box_draft_parts(
     sh.kind = Kind::Custom;
     sh.name = tool.label().to_string();
     sh.strokes = strokes;
-    sh.fill = cd.fill;
-    sh.gate = cd.gate;
-    sh.align = cd.align;
+    cd.apply(&mut sh);
     sh.pts = box_frame(a[0], a[1], b[0], b[1]).to_vec();
     sh
 }
@@ -144,9 +145,7 @@ pub fn new_custom_parts(
     sh.kind = Kind::Custom;
     sh.name = name.to_string();
     sh.strokes = strokes.to_vec();
-    sh.fill = cd.fill;
-    sh.gate = cd.gate;
-    sh.align = cd.align;
+    cd.apply(&mut sh);
     sh.pts = box_frame(a[0], a[1], b[0], b[1]).to_vec();
     sh
 }
@@ -332,7 +331,7 @@ pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
             let defaults = app.defaults.clone();
             let cd = core_custom_defaults(app);
             let mut target = new_live_shape(&defaults, &cd);
-            let Some(k) = add_stroke(&mut target, &st) else {
+            let Some(k) = add_stroke(&mut target, &st, None) else {
                 return true;
             };
             let curve = is_curve_stroke(&target, k);
@@ -345,7 +344,7 @@ pub fn live_commit(app: &mut App, sh: &Shape) -> bool {
             let k = app
                 .shapes
                 .get_mut(i)
-                .and_then(|target| add_stroke(target, &st));
+                .and_then(|target| add_stroke(target, &st, None));
             if let Some(k) = k {
                 let curve = app
                     .shapes
@@ -959,6 +958,9 @@ mod tests {
             fill: spiderweb_core::shape::Fill::Spam,
             gate: 0.125,
             align: spiderweb_core::shape::Align::Aligned,
+            ends: spiderweb_core::shape::Ends::Keep,
+            union: true,
+            apart: true,
         }
     }
 
@@ -970,6 +972,8 @@ mod tests {
         assert_eq!(sh.pts, vec![[1.0, 3.0], [4.0, 3.0], [1.0, 8.0]]);
         assert_eq!(sh.fill, spiderweb_core::shape::Fill::Spam);
         assert_eq!(sh.gate, 0.125);
+        assert_eq!(sh.ends, spiderweb_core::shape::Ends::Keep);
+        assert!(sh.union && sh.apart);
         match &sh.strokes[..] {
             [PathStroke::Poly { pts, .. }] => assert_eq!(pts.as_slice(), &SQUARE),
             other => panic!("期望 poly 笔画，得到 {other:?}"),

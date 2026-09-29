@@ -44,6 +44,24 @@ pub enum Align {
     #[default]
     Auto,
     Aligned,
+    /// 放不下整门限的余量分给两端（custom.py 的 "centred"）。
+    Centred,
+}
+
+/// Spam 收尾（custom.py ENDS）：一段里放不下整门限的零头怎么处理。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Ends {
+    /// 够半个门限算一个整门限，否则丢掉（每段至少一个门限）。
+    Round,
+    /// 零头留成短线。
+    Keep,
+    /// 丢掉；短于一个门限的段原样留一个音符（没有 ends 的旧形状按这个读）。
+    #[default]
+    Drop,
+    /// 同 drop，但音符不短于四分之一门限（不够就居中长出来）。
+    Min,
+    /// 段里的门限拉伸 / 压缩，正好放下整数个。
+    Stretch,
 }
 
 /// 对称曲线的方式（bezier.py Symmetry）。
@@ -278,6 +296,12 @@ pub struct Shape {
     pub fill: Fill,
     pub gate: f64,
     pub align: Align,
+    /// spam 收尾（1.2.0 新增；旧形状读作 drop）。
+    pub ends: Ends,
+    /// 轮廓重叠处也填上（否则重叠互相抵消，even-odd）。
+    pub union: bool,
+    /// Fill / Spam "Outline"：轮廓的音符单独一条通道（1.2.0 新增）。
+    pub apart: bool,
     pub text: Option<TextSettings>,
     /// 粘贴的音符（pack_notes 的文本）。
     pub notes: Option<String>,
@@ -312,6 +336,9 @@ impl Default for Shape {
             fill: Fill::Empty,
             gate: 0.0625,
             align: Align::Auto,
+            ends: Ends::Drop,
+            union: false,
+            apart: false,
             text: None,
             notes: None,
             own_vel: false,
