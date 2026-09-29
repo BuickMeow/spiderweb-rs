@@ -940,9 +940,11 @@ impl App {
                 .copied()
                 .collect()
         };
-        // 256 键：Domino 只有 128 个键，>127 的不复制（原版 project.copy_to_domino）
-        let high = notes.iter().filter(|n| n[2] > 127).count();
-        notes.retain(|n| n[2] <= 127);
+        // 原版是 128 键工程：Domino 只有 128 个键，>127 的不复制（project.copy_to_domino）。
+        // 256 键工程（Domino 256k 版同样用这个剪贴板格式）时全部复制。
+        let max_key = if self.keys >= 256 { 255 } else { 127 };
+        let high = notes.iter().filter(|n| n[2] > max_key).count();
+        notes.retain(|n| n[2] <= max_key);
         if notes.is_empty() {
             self.status = if self.sels.is_empty() || high > 0 {
                 rust_i18n::t!("status.no_notes_to_copy").to_string()
@@ -952,7 +954,7 @@ impl App {
             return;
         }
         let ppq = self.ppq;
-        match spiderweb_domino::clip_data(&notes, self.ppq as u16, self.beats) {
+        match spiderweb_domino::clip_data(&notes, self.ppq as u16, self.beats * self.ppq) {
             Ok(raw) => {
                 if spiderweb_domino::put_on_clipboard(&raw) {
                     let what = if self.sels.is_empty() {
@@ -1001,40 +1003,45 @@ impl App {
             spiderweb_domino::ClipboardGet::NoData => {
                 self.status = rust_i18n::t!("status.no_domino_notes").to_string();
             }
-            spiderweb_domino::ClipboardGet::Data(raw) => match spiderweb_domino::read_notes(&raw) {
-                Ok((rows, their_ppq)) => {
-                    if let Some(mut sh) = notes_shape(&rows, self.ppq as f64, "Pasted notes") {
-                        // 粘贴起点对齐到播放线（原版把复制内容的起点放在播放线）
-                        let t0 =
-                            rows.iter().map(|r| r[0]).min().unwrap_or(0) as f64 / self.ppq as f64;
-                        let shift = self.playhead - t0;
-                        for p in &mut sh.pts {
-                            p[0] += shift;
-                        }
-                        self.add_shape(sh);
-                        let n = rows.len();
-                        let note = match their_ppq {
-                            Some(p) if i64::from(p) != self.ppq => {
-                                rust_i18n::t!("status.domino_ppq", ppq = p.to_string()).to_string()
+            spiderweb_domino::ClipboardGet::Data(raw) => {
+                let max_key = if self.keys >= 256 { 255 } else { 127 };
+                match spiderweb_domino::read_notes_max_key(&raw, max_key) {
+                    Ok((rows, their_ppq)) => {
+                        if let Some(mut sh) = notes_shape(&rows, self.ppq as f64, "Pasted notes") {
+                            // 粘贴起点对齐到播放线（原版把复制内容的起点放在播放线）
+                            let t0 = rows.iter().map(|r| r[0]).min().unwrap_or(0) as f64
+                                / self.ppq as f64;
+                            let shift = self.playhead - t0;
+                            for p in &mut sh.pts {
+                                p[0] += shift;
                             }
-                            _ => String::new(),
-                        };
-                        self.status = rust_i18n::t!(
-                            "status.pasted_domino",
-                            n = n.to_string(),
-                            s = if n == 1 { "" } else { "s" },
-                            note = note
-                        )
-                        .to_string();
-                    } else {
-                        self.status = rust_i18n::t!("status.domino_no_notes").to_string();
+                            self.add_shape(sh);
+                            let n = rows.len();
+                            let note = match their_ppq {
+                                Some(p) if i64::from(p) != self.ppq => {
+                                    rust_i18n::t!("status.domino_ppq", ppq = p.to_string())
+                                        .to_string()
+                                }
+                                _ => String::new(),
+                            };
+                            self.status = rust_i18n::t!(
+                                "status.pasted_domino",
+                                n = n.to_string(),
+                                s = if n == 1 { "" } else { "s" },
+                                note = note
+                            )
+                            .to_string();
+                        } else {
+                            self.status = rust_i18n::t!("status.domino_no_notes").to_string();
+                        }
+                    }
+                    Err(e) => {
+                        self.status =
+                            rust_i18n::t!("status.clipboard_read_error", e = format!("{e:?}"))
+                                .to_string()
                     }
                 }
-                Err(e) => {
-                    self.status = rust_i18n::t!("status.clipboard_read_error", e = format!("{e:?}"))
-                        .to_string()
-                }
-            },
+            }
         }
     }
 

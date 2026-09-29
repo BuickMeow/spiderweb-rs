@@ -2,7 +2,7 @@
 
 use flate2::read::ZlibDecoder;
 use serde_json::Value;
-use spiderweb_domino::{Error, MAGIC, clip_data, read_notes};
+use spiderweb_domino::{Error, MAGIC, clip_data, read_notes, read_notes_max_key};
 use std::io::Read;
 
 fn vectors() -> Value {
@@ -160,4 +160,17 @@ fn clipboard_stub() {
         spiderweb_domino::get_from_clipboard(),
         spiderweb_domino::ClipboardGet::NoData
     );
+}
+
+#[test]
+fn high_keys_round_trip_with_max_key() {
+    // 音符 item 的 key 是 u8：key 200 编码得下；默认读取按原版丢 >127，
+    // 256k 档（max_key = 255）能原样读回。
+    let notes = vec![[0i64, 100, 200, 80, 0, 0]];
+    let raw = clip_data(&notes, 960, 3840).expect("编码");
+    let (rows, _) = read_notes(&raw).expect("读取");
+    assert!(rows.iter().all(|r| r[2] != 200), "默认应丢弃 >127 的键");
+    let (rows, _) = read_notes_max_key(&raw, 255).expect("读取");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][2], 200);
 }

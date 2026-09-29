@@ -432,20 +432,30 @@ pub fn dot_segment_notes(path: &[Pt]) -> Vec<[i64; 3]> {
 
 /// 每行在排序去重后的排名（np.unique(axis=0, return_inverse)）。
 pub fn unique_ranks3(rows: &[[i64; 3]]) -> Vec<usize> {
-    let mut sorted = rows.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    rows.iter()
-        .map(|r| sorted.binary_search(r).unwrap())
-        .collect()
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| rows[i]);
+    let mut ranks = vec![0usize; rows.len()];
+    let mut rank = 0usize;
+    for (k, &i) in order.iter().enumerate() {
+        if k > 0 && rows[i] != rows[order[k - 1]] {
+            rank += 1;
+        }
+        ranks[i] = rank;
+    }
+    ranks
 }
 
 /// (start, key) 对的排名。
 pub fn unique_ranks2(rows: &[(i64, i64)]) -> Vec<usize> {
-    let mut sorted = rows.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    rows.iter()
-        .map(|r| sorted.binary_search(r).unwrap())
-        .collect()
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| rows[i]);
+    let mut ranks = vec![0usize; rows.len()];
+    let mut rank = 0usize;
+    for (k, &i) in order.iter().enumerate() {
+        if k > 0 && rows[i] != rows[order[k - 1]] {
+            rank += 1;
+        }
+        ranks[i] = rank;
+    }
+    ranks
 }

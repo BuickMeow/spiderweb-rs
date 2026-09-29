@@ -165,12 +165,18 @@ pub fn clip_data(notes: &[Note6], ppq: u16, bar: i64) -> Result<Vec<u8>, Error> 
     Ok(out)
 }
 
-/// 原版 `read_notes`：剪贴板字节 -> `(行, ppq)`。
+/// 原版 `read_notes`：剪贴板字节 -> `(行, ppq)`（只保留 0..=127 的键，同原版）。
 ///
 /// 行的布局是 `(tick, gate, key, velocity, track)`，tick 从复制起点算，track 从 0 数；
-/// 只取音符（控制器等其它项跳过），key > 127 的行丢弃，gate 至少 1，velocity 夹到
-/// `1..=127`。没有音符时返回空行。`raw` 不是 Domino 数据或 zlib 损坏时返回错误。
+/// 只取音符（控制器等其它项跳过），gate 至少 1，velocity 夹到 `1..=127`。没有音符时
+/// 返回空行。`raw` 不是 Domino 数据或 zlib 损坏时返回错误。
 pub fn read_notes(raw: &[u8]) -> Result<(Vec<[i64; 5]>, Option<u16>), Error> {
+    read_notes_max_key(raw, 127)
+}
+
+/// 同 [`read_notes`]，但键的上限可调：Domino 256k 版用 `max_key = 255`，
+/// 音符 item 里的 key 本来就是 u8，格式本身不限制。
+pub fn read_notes_max_key(raw: &[u8], max_key: i64) -> Result<(Vec<[i64; 5]>, Option<u16>), Error> {
     if !raw.starts_with(MAGIC) || raw.len() < MAGIC.len() + 4 {
         return Err(Error::NotDomino);
     }
@@ -233,7 +239,7 @@ pub fn read_notes(raw: &[u8]) -> Result<(Vec<[i64; 5]>, Option<u16>), Error> {
         }
     }
     rows.extend(odd);
-    rows.retain(|r| r[2] <= 127);
+    rows.retain(|r| r[2] <= max_key);
     for r in &mut rows {
         r[1] = r[1].max(1);
         r[3] = r[3].clamp(1, 127);
